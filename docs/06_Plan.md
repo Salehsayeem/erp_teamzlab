@@ -50,13 +50,15 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 12. OPEN (design): warning color #B26A00 fails 4.5:1 as text — use dot/border only; controls use text-muted edges (border is decorative); add Noto Sans Bengali fallback (docs/design/ui-direction.md)
 
 ## Phase 3 — Core transactional domains (Wave 2, per domain — order by D-01/D-02)
-- [ ] FINANCE deep: AP/AR close, periods/locks, tax (**D-01**)
-- [ ] INVENTORY deep: valuation, counts, transfers
-- [ ] PROCUREMENT deep: contracts, sourcing
-- [ ] SALES deep: CRM, billing, dunning
-- [ ] ASSETS: projects, service, fixed assets
-- [ ] PEOPLE: workers, time, payroll handoff (**b D-05**)
-- [ ] MFG: planning, production, quality (**b D-02**)
+> Screen counts from the per-module inventory in `02_AppFlow.md` §4 (derived from `spec_snapshot.md` card titles).
+
+- [ ] FINANCE deep: AP/AR close, periods/locks, tax (**D-01**) (20 screens)
+- [ ] INVENTORY deep: valuation, counts, transfers (16 screens)
+- [ ] PROCUREMENT deep: contracts, sourcing (12 screens)
+- [ ] SALES deep: CRM, billing, dunning (14 screens)
+- [ ] ASSETS: projects, service, fixed assets (15 screens)
+- [ ] PEOPLE: workers, time, payroll handoff (**b D-05**) (15 screens)
+- [ ] MFG: planning, production, quality (**b D-02**) (14 screens)
 
 ## Phase 4 — Scale & breadth (Wave 3)
 - [ ] Jurisdiction/language packs (**b D-07**), tenant placements, read models/partitioning (**b D-08**)
