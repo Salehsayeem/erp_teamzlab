@@ -77,6 +77,51 @@ export type Journal = {
   createdBy: string;
   reversalOfId: string | null;
 };
+export type Warehouse = { id: string; code: string; name: string };
+export type StockLocation = { id: string; warehouseId: string; code: string; name: string };
+export type StockRow = {
+  warehouseId: string;
+  warehouseCode: string;
+  locationId: string;
+  locationCode: string;
+  itemSku: string;
+  qtyOnHand: number;
+};
+export type StockTransfer = {
+  id: string;
+  fromLocationId: string;
+  toLocationId: string;
+  itemSku: string;
+  qty: number;
+  status: string;
+  createdAt: string;
+  createdBy: string;
+};
+export type CountLine = { itemSku: string; countedQty: number; systemQty: number };
+export type StockCount = {
+  id: string;
+  locationId: string;
+  status: string;
+  items: CountLine[];
+  createdBy: string;
+  createdAt: string;
+  closedBy: string | null;
+  closedAt: string | null;
+};
+export type StockAdjustment = {
+  id: string;
+  countId: string;
+  itemSku: string;
+  locationId: string;
+  qtyVariance: number;
+  unitCost: number;
+  amount: number;
+  journalId: string;
+  createdAt: string;
+  createdBy: string;
+};
+export type CountCloseResult = { count: StockCount; adjustments: StockAdjustment[] };
+export type ValuationRow = { itemSku: string; qtyOnHand: number; unitCost: number; value: number };
 
 // --- Endpoint helpers ---
 
@@ -116,4 +161,34 @@ export function reverseJournal(token: string, id: string) {
 }
 export function fetchCount(token: string, path: string) {
   return apiFetch<unknown[]>(path, { token });
+}
+
+// --- Inventory ---
+
+export function fetchWarehouses(token: string) {
+  return apiFetch<Warehouse[]>("/api/v1/warehouses", { token });
+}
+export function createWarehouse(token: string, body: { code: string; name: string }) {
+  return apiFetch<Warehouse>("/api/v1/warehouses", { method: "POST", body, token });
+}
+export function fetchLocations(token: string) {
+  return apiFetch<StockLocation[]>("/api/v1/locations", { token });
+}
+export function createLocation(token: string, body: { warehouseId: string; code: string; name: string }) {
+  return apiFetch<StockLocation>("/api/v1/locations", { method: "POST", body, token });
+}
+export function fetchStock(token: string) {
+  return apiFetch<StockRow[]>("/api/v1/stock", { token });
+}
+export function createTransfer(token: string, body: { fromLocationId: string; toLocationId: string; itemSku: string; qty: number }) {
+  return apiFetch<StockTransfer>("/api/v1/stock/transfers", { method: "POST", body, token });
+}
+export function openCount(token: string, body: { locationId: string; items: { itemSku: string; countedQty: number }[] }) {
+  return apiFetch<StockCount>("/api/v1/stock/counts", { method: "POST", body, token });
+}
+export function closeCount(token: string, id: string) {
+  return apiFetch<CountCloseResult>(`/api/v1/stock/counts/${id}/close`, { method: "POST", token });
+}
+export function fetchValuation(token: string) {
+  return apiFetch<ValuationRow[]>("/api/v1/stock/valuation", { token });
 }
