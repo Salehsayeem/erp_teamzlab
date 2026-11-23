@@ -53,9 +53,12 @@ International Multilingual ERP — configurable, multi-entity ERP. Spec baseline
 - TDD for new backend endpoints and core utilities: failing test first, then implement.
 - Every new API endpoint has tests. Posted/posted-like flows (journals, payments, inventory) need approval-path tests too.
 
-## Git & workflow
+## Git & workflow (branch tiers)
+- Default branch: `main` — production-ready snapshots only.
+- Long-running integration branch: `dev-sayeem` — feature work merges here first.
 - One feature/bug per branch: `feat/…`, `fix/…`, `chore/…`. Conventional Commits (`feat:`, `fix:`, `chore:`, `test:`, `refactor:`).
-- Long-running working branch: `dev-sayeem` (all scaffold/current work lives here).
+- Flow (owner instruction, 2026-11-24): feature branch → feature tests green on that branch → merge into `dev-sayeem` → **full site regression** (backend test suite + web build + endpoint smoke) → all green → merge into `main`.
+- Never merge into `main` without a passing dev-sayeem regression.
 
 ## Style plugins (use when producing prose or UI)
 - `/ponytail` — least code that works (active session-wide)
