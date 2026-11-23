@@ -2,6 +2,8 @@
 
 > Status: LIVING FILE — update after EVERY completed step (`[ ]` → `[x]` + date + evidence note). Ordered by dependency.
 
+> ⏸ **PAUSED 2026-11-23 (owner resuming from another PC).** State at pause: Phase 1 + Phase 2 done; INVENTORY deep API done; UI polish applied. ASSETS slice was started and stopped mid-task — partial edits preserved on branch `wip/assets-partial` (NOT merged, tests not verified there). Resume order: (1) pull this branch, `dotnet test` apps/api-tests (expect 17/17) + `npm run build` apps/web; (2) either finish ASSETS slice from `wip/assets-partial` or restart it fresh per the Phase 3 list; (3) then FINANCE deep (D-01) / remaining Phase 3. Read CLAUDE.md + docs 01–05 first.
+
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by decision D-xx
 
 ## Phase 0 — Decisions (before architecture/build freeze)
