@@ -2,7 +2,7 @@
 
 > Status: LIVING FILE — update after EVERY completed step (`[ ]` → `[x]` + date + evidence note). Ordered by dependency.
 
-> ⏸ **PAUSED 2026-11-23 (owner resuming from another PC).** State at pause: Phase 1 + Phase 2 done; INVENTORY deep API done; UI polish applied. ASSETS slice was started and stopped mid-task — partial edits preserved on branch `wip/assets-partial` (NOT merged, tests not verified there). Resume order: (1) pull this branch, `dotnet test` apps/api-tests (expect 17/17) + `npm run build` apps/web; (2) either finish ASSETS slice from `wip/assets-partial` or restart it fresh per the Phase 3 list; (3) then FINANCE deep (D-01) / remaining Phase 3. Read CLAUDE.md + docs 01–05 first.
+> ⏸ **PAUSED 2026-11-24 (owner command: resume tomorrow).** State: Phase 1+2 done. **T1 layered restructure DONE** (efca865, review clean, 17/17 frozen contract). **T2 PostgreSQL persistence COMMITTED** (5a549ee: EF Core+Npgsql 19 tables, repos, migration seed, idempotency table; 18/18 green incl. persistence proof on local PG; review Approved, 1 Important follow-up IN FLIGHT: atomic idempotency fix). **INVENTORY UI DONE** (8275d73+4119c2c on `feat/inventory-ui`, review clean, build 24/24, browser-verified). **T3 live insert/get verification NOT started.** Tree holds uncommitted peer-session dev-env work (CORS/README/.env/2 plan lines) + UNTRACKED duplicate migration `20261123201118_InitialCreate` — DELETE that pair (InitialSchema already committed in 5a549ee). **Resume order:** (1) land + re-review the T2 idempotency fix; (2) settle peer edits, delete the duplicate migration pair; (3) T3 `verify-all-features.sh` vs local PG (superuser postgres/postgres — .env creds are remote-only); (4) merge `feat/backend-core` + `feat/inventory-ui` → `dev-sayeem` → FULL regression (dotnet suite + `npm run build` + endpoint smoke + fix uikit `sr-only` F4) → `main` (branch tiers per CLAUDE.md); (5) T4 ASSETS / T5 FINANCE — briefs ready with rulings in `.superpowers/sdd/06_Plan/task-4|5-brief-draft.md`. Working ledger: `.superpowers/sdd/06_Plan/progress.md`. Read CLAUDE.md + docs 01–05 first.
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by decision D-xx
 
@@ -26,6 +26,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 - [x] i18n scaffold: dictionaries en+bn, locale routing (Dict key-parity; all 6 pages render both locales)
 - [ ] EF Core migration conventions + CI check — blocked on DB (D-10)
 - [x] Telemetry: correlationId middleware end-to-end
+- [x] Strict CORS for the browser client (default `http://localhost:3000`, `CorsOrigins` env override; preflight before auth)
 - [x] Seed: one tenant, one entity, 3 users (admin/procurve/finance), 3 roles
 
 ## Phase 2 — Pilot slice (Wave 1 flows)
@@ -72,3 +73,6 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 | 2026-11-23 | Scaffold: CLAUDE.md, docs 01–06, .env/.gitignore/.cursorrules, snapshot | this file, branch `dev-sayeem` |
 | 2026-11-23 | API foundation + procure-to-receive slice, 3/3 tests green | `apps/api`, `apps/api-tests` — `dotnet test` Passed 3/3 |
 | 2026-11-24 | `apps/api` restructured to layered layout (Dtos/Models/Controllers/Interfaces/Services/Common/Middleware; minimal APIs → `[ApiController]`, `AddErpServices` DI pin), zero behavior change | branch `feat/backend-core` — `dotnet test apps/api-tests` 17/17 green (baseline and final), test files untouched |
+| 2026-11-24 | Dev-env readiness: README full run guide (prereqs, EF migrations bootstrap, `TESTPG*` vs `PG*`, troubleshooting), strict CORS on the API (preflight before auth), `dotnet-ef` tool manifest, documented `.env.example` | branch `feat/backend-core` — this session; see README "Run it" |
+| 2026-11-24 | PostgreSQL persistence via EF Core + Npgsql (19 tables, 8 repos + number-series/idempotency stores, InitialSchema migration w/ seed, per-class throwaway test DBs) | `5a549ee` feat/backend-core — `dotnet test apps/api-tests` 18/18 (17 untouched + 1 persistence proof, RED→GREEN); review Approved (idempotency atomicity follow-up in flight) |
+| 2026-11-24 | INVENTORY UI slice: stock / warehouses+locations / transfers / counts / valuation screens, en+bn (108 keys/locale, compile-checked parity) | `8275d73`+`4119c2c` feat/inventory-ui — clean build 24/24 pages, live browser-verified both locales, review clean after 1 fix round |
