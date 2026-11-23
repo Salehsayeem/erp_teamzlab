@@ -1,0 +1,24 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# .NET
+bin/
+obj/
+*.user
+appsettings.*.Local.json
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# IDE
+.vs/
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
