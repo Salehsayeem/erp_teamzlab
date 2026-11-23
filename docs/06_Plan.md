@@ -71,3 +71,4 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 |---|---|---|
 | 2026-11-23 | Scaffold: CLAUDE.md, docs 01–06, .env/.gitignore/.cursorrules, snapshot | this file, branch `dev-sayeem` |
 | 2026-11-23 | API foundation + procure-to-receive slice, 3/3 tests green | `apps/api`, `apps/api-tests` — `dotnet test` Passed 3/3 |
+| 2026-11-24 | `apps/api` restructured to layered layout (Dtos/Models/Controllers/Interfaces/Services/Common/Middleware; minimal APIs → `[ApiController]`, `AddErpServices` DI pin), zero behavior change | branch `feat/backend-core` — `dotnet test apps/api-tests` 17/17 green (baseline and final), test files untouched |
