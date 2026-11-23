@@ -34,6 +34,18 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 - [x] Audit evidence visible for every step (`GET /api/v1/audit-events`)
 - [x] Flow test (whole-chain coverage) + validation + authz tests
 
+## Backlog — critic review findings (2026-11-23, fix after order-to-fulfill agent lands)
+1. HIGH: tenant+entity scoping missing on every id lookup (Services.cs, Program.cs) — entity context never used
+2. HIGH: over-receipt unbounded — reject received+qty > line.Qty before journal (ERP-PROCUREMENT-057) + test
+3. HIGH: Idempotency-Key absent on create endpoints (dup receipts = dup stock+journals) — store key→response map in Db
+4. MED: journal reversal leaves stock/receipt uncorrected, no outbox event — decrement stock, emit finance.journal.reversed
+5. MED: error codes conflated — 404 *_NOT_FOUND, 400 VALIDATION_ERROR, 409 state conflicts only
+6. MED: /journals needs journals:read; /audit-events admin-only; /outbox gate to * or drop
+7. MED: /submit needs po:write; add po:approve permission (SoD beyond instance maker-checker)
+8. MED: negative-path tests missing (approve-as-finance, reverse-as-proc, receive-on-draft, wrong-SKU, over-receipt)
+9. MED: malformed JSON bodies bypass envelope — binding-failure filter → VALIDATION_ERROR
+10. LOW: /stock,/audit-events,/outbox reads unlocked; decimal.Round → MidpointRounding.AwayFromZero (ERP-FINANCE-010)
+
 ## Phase 3 — Core transactional domains (Wave 2, per domain — order by D-01/D-02)
 - [ ] FINANCE deep: AP/AR close, periods/locks, tax (**D-01**)
 - [ ] INVENTORY deep: valuation, counts, transfers
