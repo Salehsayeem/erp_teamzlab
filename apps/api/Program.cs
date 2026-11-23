@@ -225,7 +225,82 @@ api.MapPost("/journals/{id}/reversals", (HttpContext ctx, string id) =>
     return error is not null ? Envelope.Fail(code!, error, StatusFor(code!)) : Envelope.Ok<object>(rev!, 201);
 });
 
-api.MapGet("/stock", (HttpContext ctx) => Envelope.Ok<object>(Db.I.WithLock(() => Db.I.Stock)));
+// stock grouped by warehouse/location (ERP-INVENTORY-005) — flat rows keyed by location
+api.MapGet("/stock", (HttpContext ctx) => Envelope.Ok<object>(Db.I.WithLock(() => Db.I.Stock.Select(s =>
+{
+    var wh = Db.I.Warehouses.First(w => w.Id == s.WarehouseId);
+    var loc = Db.I.Locations.First(l => l.Id == s.LocationId);
+    return new { warehouseId = wh.Id, warehouseCode = wh.Code, locationId = loc.Id, locationCode = loc.Code, s.ItemSku, s.QtyOnHand };
+}).ToList())));
+
+api.MapGet("/warehouses", (HttpContext ctx) => Envelope.Ok<object>(Db.I.WithLock(() => Db.I.Warehouses)));
+
+api.MapPost("/warehouses", (HttpContext ctx, CreateWarehouseReq req) => Idem.Wrap(ctx, Db.I, () =>
+{
+    var db = Db.I;
+    var u = User(ctx);
+    var err = Guards.Check(req.Code, "Code") ?? Guards.Check(req.Name, "Name");
+    if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
+    if (!u.Has("inventory:write")) return (Envelope.FailBody("FORBIDDEN", "inventory:write permission required."), 403);
+    var (wh, code, error) = db.WithLock(() => InventoryService.CreateWarehouse(db, u, req.Code, req.Name));
+    return error is not null ? (Envelope.FailBody(code!, error), StatusFor(code!)) : (Envelope.OkBody(wh!), 201);
+}));
+
+api.MapGet("/locations", (HttpContext ctx) => Envelope.Ok<object>(Db.I.WithLock(() => Db.I.Locations)));
+
+api.MapPost("/locations", (HttpContext ctx, CreateLocationReq req) => Idem.Wrap(ctx, Db.I, () =>
+{
+    var db = Db.I;
+    var u = User(ctx);
+    var err = Guards.Check(req.Code, "Code") ?? Guards.Check(req.Name, "Name");
+    if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
+    if (!u.Has("inventory:write")) return (Envelope.FailBody("FORBIDDEN", "inventory:write permission required."), 403);
+    var (loc, code, error) = db.WithLock(() => InventoryService.CreateLocation(db, u, req.WarehouseId, req.Code, req.Name));
+    return error is not null ? (Envelope.FailBody(code!, error), StatusFor(code!)) : (Envelope.OkBody(loc!), 201);
+}));
+
+api.MapPost("/stock/transfers", (HttpContext ctx, CreateTransferReq req) => Idem.Wrap(ctx, Db.I, () =>
+{
+    var db = Db.I;
+    var u = User(ctx);
+    var err = Guards.Check(req.FromLocationId, "FromLocationId") ?? Guards.Check(req.ToLocationId, "ToLocationId")
+        ?? Guards.Check(req.ItemSku, "ItemSku")
+        ?? (req.Qty <= 0 ? "Transfer qty must be greater than 0." : null);
+    if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
+    if (!u.Has("inventory:transfer")) return (Envelope.FailBody("FORBIDDEN", "inventory:transfer permission required."), 403);
+    var (transfer, code, error) = db.WithLock(() => InventoryService.Transfer(db, u, req.FromLocationId, req.ToLocationId, req.ItemSku, req.Qty));
+    return error is not null ? (Envelope.FailBody(code!, error), StatusFor(code!)) : (Envelope.OkBody(transfer!), 201);
+}));
+
+api.MapPost("/stock/counts", (HttpContext ctx, CreateCountReq req) => Idem.Wrap(ctx, Db.I, () =>
+{
+    var db = Db.I;
+    var u = User(ctx);
+    var lineErr = Guards.CheckCountItems(req.Items);
+    if (lineErr is not null) return (Envelope.FailBody("VALIDATION_ERROR", lineErr), 400);
+    if (!u.Has("inventory:write")) return (Envelope.FailBody("FORBIDDEN", "inventory:write permission required."), 403);
+    var (count, code, error) = db.WithLock(() => InventoryService.OpenCount(db, u, req.LocationId, req.Items));
+    return error is not null ? (Envelope.FailBody(code!, error), StatusFor(code!)) : (Envelope.OkBody(count!), 201);
+}));
+
+api.MapPost("/stock/counts/{id}/close", (HttpContext ctx, string id) =>
+{
+    var db = Db.I;
+    var u = User(ctx);
+    if (!u.Has("inventory:write")) return Envelope.Fail("FORBIDDEN", "inventory:write permission required.", 403);
+    var (count, adjustments, code, error) = db.WithLock(() => InventoryService.Close(db, u, id));
+    return error is not null
+        ? Envelope.Fail(code!, error, StatusFor(code!))
+        : Envelope.Ok<object>(new { count, adjustments }, 201);
+});
+
+api.MapGet("/stock/valuation", (HttpContext ctx) =>
+{
+    var u = User(ctx);
+    return u.Has("journals:read")
+        ? Envelope.Ok<object>(Db.I.WithLock(() => InventoryService.Valuation(Db.I)))
+        : Envelope.Fail("FORBIDDEN", "journals:read permission required.", 403);
+});
 
 api.MapGet("/audit-events", (HttpContext ctx) =>
 {

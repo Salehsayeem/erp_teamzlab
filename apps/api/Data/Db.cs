@@ -19,7 +19,12 @@ public sealed class Db
     public List<Customer> Customers { get; } = [];
     public List<SalesOrder> SalesOrders { get; } = [];
     public List<Shipment> Shipments { get; } = [];
+    public List<Warehouse> Warehouses { get; } = [];
+    public List<StockLocation> Locations { get; } = [];
     public List<StockLevel> Stock { get; } = [];
+    public List<StockTransfer> Transfers { get; } = [];
+    public List<StockCount> Counts { get; } = [];
+    public List<StockAdjustment> Adjustments { get; } = [];
     public List<Journal> Journals { get; } = [];
     public List<AuditEvent> Audit { get; } = [];
     public List<OutboxMessage> Outbox { get; } = [];
@@ -37,11 +42,14 @@ public sealed class Db
 
     public string NextDoc(string prefix) => WithLock(() => $"{prefix}-{++_seq:D4}");
 
+    // receipts land here (seed order = [A1, B1])
+    public StockLocation DefaultLocation => Locations[0];
+
     private void Seed()
     {
         Roles.AddRange(
             new Role("R-ADMIN", "tenant_admin", ["*"]),
-            new Role("R-PROC", "procurement_officer", ["suppliers:write", "po:write", "receipts:write"]),
+            new Role("R-PROC", "procurement_officer", ["suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer"]),
             new Role("R-FIN", "finance_officer", ["journals:read", "journals:approve", "ap:read", "po:approve"]),
             new Role("R-SALES", "sales_officer", ["customers:write", "so:write", "shipments:write"]));
 
@@ -61,5 +69,10 @@ public sealed class Db
 
         Audit.Add(new AuditEvent("A-0001", Tenant.Id, "system", "seed", "tenant", Tenant.Id,
             DateTimeOffset.UtcNow, "Seeded demo tenant, entity, users, roles"));
+
+        Warehouses.Add(new Warehouse("WH-001", Tenant.Id, Entity.Id, "WH-001", "Main Warehouse"));
+        Locations.AddRange(
+            new StockLocation("LOC-A1", Tenant.Id, Entity.Id, "WH-001", "A1", "Rack A1"),
+            new StockLocation("LOC-B1", Tenant.Id, Entity.Id, "WH-001", "B1", "Rack B1"));
     }
 }

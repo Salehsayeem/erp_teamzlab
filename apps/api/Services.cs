@@ -37,6 +37,63 @@ public static class Guards
         if (lines is null || lines.Count == 0) return "At least one order line is required.";
         return lines.Any(l => l.Qty <= 0 || l.UnitPrice < 0) ? "Line qty must be > 0 and unit price must be >= 0." : null;
     }
+
+    public static string? CheckCountItems(IReadOnlyList<CountItemReq>? items)
+    {
+        if (items is null || items.Count == 0) return "At least one count line is required.";
+        if (items.Any(i => string.IsNullOrWhiteSpace(i.ItemSku))) return "Each count line needs an item SKU.";
+        if (items.Any(i => i.CountedQty < 0)) return "Counted qty must be >= 0.";
+        return items.GroupBy(i => i.ItemSku).Any(g => g.Count() > 1) ? "Duplicate item lines are not allowed in one count." : null;
+    }
+}
+
+// Location-scoped stock balance helpers — every mutation runs inside Db.WithLock at the call site
+public static class Stock
+{
+    public static decimal QtyAt(Db db, string locationId, string itemSku) =>
+        db.Stock.Where(s => s.TenantId == db.Tenant.Id && s.LegalEntityId == db.Entity.Id
+            && s.LocationId == locationId && s.ItemSku == itemSku).Sum(s => s.QtyOnHand);
+
+    public static decimal QtyOf(Db db, string itemSku) =>
+        db.Stock.Where(s => s.TenantId == db.Tenant.Id && s.LegalEntityId == db.Entity.Id && s.ItemSku == itemSku).Sum(s => s.QtyOnHand);
+
+    public static void Apply(Db db, string warehouseId, string locationId, string itemSku, decimal delta)
+    {
+        var idx = db.Stock.FindIndex(s => s.TenantId == db.Tenant.Id && s.LegalEntityId == db.Entity.Id
+            && s.LocationId == locationId && s.ItemSku == itemSku);
+        if (idx >= 0) db.Stock[idx] = db.Stock[idx] with { QtyOnHand = db.Stock[idx].QtyOnHand + delta };
+        else db.Stock.Add(new StockLevel(db.Tenant.Id, db.Entity.Id, warehouseId, locationId, itemSku, delta));
+    }
+
+    // draws qty from the first rows that hold it (default receiving location drains first)
+    public static void Draw(Db db, string itemSku, decimal qty)
+    {
+        var remaining = qty;
+        foreach (var row in db.Stock.Where(s => s.TenantId == db.Tenant.Id && s.LegalEntityId == db.Entity.Id && s.ItemSku == itemSku && s.QtyOnHand > 0).ToList())
+        {
+            var take = Math.Min(row.QtyOnHand, remaining);
+            Apply(db, row.WarehouseId, row.LocationId, itemSku, -take);
+            remaining -= take;
+            if (remaining <= 0) break;
+        }
+    }
+}
+
+public static class Costing
+{
+    // weighted-average receipt cost per unit — single source for COGS and valuation (0 when never received)
+    public static decimal AverageUnitCost(Db db, string itemSku)
+    {
+        var receipts = db.Receipts.Where(r => r.TenantId == db.Tenant.Id && r.LegalEntityId == db.Entity.Id && r.ItemSku == itemSku).ToList();
+        var totalQty = receipts.Sum(r => r.Qty);
+        return totalQty > 0
+            ? decimal.Round(receipts.Sum(r => r.Qty * ReceiptUnitCost(db, r.PurchaseOrderId, itemSku)) / totalQty, 4, MidpointRounding.AwayFromZero)
+            : 0m;
+    }
+
+    private static decimal ReceiptUnitCost(Db db, string poId, string itemSku) =>
+        db.PurchaseOrders.First(p => p.TenantId == db.Tenant.Id && p.LegalEntityId == db.Entity.Id && p.Id == poId)
+            .Lines.First(l => l.ItemSku == itemSku).UnitPrice;
 }
 
 public static class PoService
@@ -90,10 +147,9 @@ public static class ReceiptService
         var receipt = new Receipt(db.NextDoc("RC"), db.Tenant.Id, db.Entity.Id, poId, itemSku, qty, DateTimeOffset.UtcNow, user.Id);
         db.Receipts.Add(receipt);
 
-        // stock upsert
-        var idx = db.Stock.FindIndex(s => s.TenantId == db.Tenant.Id && s.LegalEntityId == db.Entity.Id && s.ItemSku == itemSku);
-        if (idx >= 0) db.Stock[idx] = db.Stock[idx] with { QtyOnHand = db.Stock[idx].QtyOnHand + qty };
-        else db.Stock.Add(new StockLevel(db.Tenant.Id, db.Entity.Id, itemSku, qty));
+        // stock upsert at the default receiving location
+        var loc = db.DefaultLocation;
+        Stock.Apply(db, loc.WarehouseId, loc.Id, itemSku, qty);
 
         var amount = decimal.Round(qty * line.UnitPrice, 2, MidpointRounding.AwayFromZero);
         var journal = new Journal(db.NextDoc("J"), db.Tenant.Id, db.Entity.Id, JournalStatus.Posted,
@@ -150,22 +206,17 @@ public static class SalesService
         if (qty <= 0) return (null, null, "VALIDATION_ERROR", "Shipment qty must be greater than 0.");
         if (so.Lines.FirstOrDefault(l => l.ItemSku == itemSku) is null) return (null, null, "ITEM_NOT_FOUND", $"Item {itemSku} is not on this sales order.");
 
-        var idx = db.Stock.FindIndex(s => s.TenantId == db.Tenant.Id && s.LegalEntityId == db.Entity.Id && s.ItemSku == itemSku);
-        var onHand = idx >= 0 ? db.Stock[idx].QtyOnHand : 0m;
+        var onHand = Stock.QtyOf(db, itemSku);
         if (onHand < qty)
             return (null, null, "INSUFFICIENT_STOCK", $"Insufficient stock for {itemSku}: available {onHand}, requested {qty}.");
 
-        db.Stock[idx] = db.Stock[idx] with { QtyOnHand = onHand - qty };
+        Stock.Draw(db, itemSku, qty);
 
         var shipment = new Shipment(db.NextDoc("SHP"), db.Tenant.Id, db.Entity.Id, soId, itemSku, qty, DateTimeOffset.UtcNow, user.Id);
         db.Shipments.Add(shipment);
 
         // COGS at inventory cost basis — weighted average of receipt PO unit prices (0 when no receipts yet)
-        var receipts = db.Receipts.Where(r => r.TenantId == db.Tenant.Id && r.LegalEntityId == db.Entity.Id && r.ItemSku == itemSku).ToList();
-        var totalQty = receipts.Sum(r => r.Qty);
-        var unitCost = totalQty > 0
-            ? decimal.Round(receipts.Sum(r => r.Qty * CostOf(db, r.PurchaseOrderId, itemSku)) / totalQty, 4, MidpointRounding.AwayFromZero)
-            : 0m;
+        var unitCost = Costing.AverageUnitCost(db, itemSku);
         var amount = decimal.Round(unitCost * qty, 2, MidpointRounding.AwayFromZero);
         var journal = new Journal(db.NextDoc("J"), db.Tenant.Id, db.Entity.Id, JournalStatus.Posted,
             $"COGS for shipment {shipment.Id} (SO {soId})",
@@ -202,10 +253,6 @@ public static class SalesService
         Audit.Emit(db, user, "sales.invoice.posted", new { soId, total, journalId = journal.Id });
         return (journal, null, null);
     }
-
-    private static decimal CostOf(Db db, string poId, string itemSku) =>
-        db.PurchaseOrders.First(p => p.TenantId == db.Tenant.Id && p.LegalEntityId == db.Entity.Id && p.Id == poId)
-            .Lines.First(l => l.ItemSku == itemSku).UnitPrice;
 }
 
 public static class JournalService
@@ -242,4 +289,121 @@ public static class JournalService
         Audit.Log(db, user, "reverse", "journal", rev.Id, $"Journal {j.Id} reversed by {user.Email} (linked provenance){stockNote}");
         return (rev, null, null);
     }
+}
+
+// Inventory deep slice (ERP-INVENTORY-005 locations, -014 atomic movement, -020 negative-stock block)
+public static class InventoryService
+{
+    private static StockLocation? Find(Db db, string locationId) =>
+        db.Locations.FirstOrDefault(l => l.TenantId == db.Tenant.Id && l.LegalEntityId == db.Entity.Id && l.Id == locationId);
+
+    public static (Warehouse? warehouse, string? code, string? error) CreateWarehouse(Db db, CurrentUser user, string code, string name)
+    {
+        if (db.Warehouses.Any(w => w.TenantId == db.Tenant.Id && w.LegalEntityId == db.Entity.Id && w.Code == code))
+            return (null, "WAREHOUSE_EXISTS", $"Warehouse code {code} already exists.");
+        var wh = new Warehouse(db.NextDoc("WH"), db.Tenant.Id, db.Entity.Id, code, name);
+        db.Warehouses.Add(wh);
+        Audit.Log(db, user, "create", "warehouse", wh.Id, $"Warehouse '{code}' created");
+        return (wh, null, null);
+    }
+
+    public static (StockLocation? location, string? code, string? error) CreateLocation(Db db, CurrentUser user, string warehouseId, string code, string name)
+    {
+        var wh = db.Warehouses.FirstOrDefault(w => w.TenantId == db.Tenant.Id && w.LegalEntityId == db.Entity.Id && w.Id == warehouseId);
+        if (wh is null) return (null, "WAREHOUSE_NOT_FOUND", "Warehouse not found.");
+        if (db.Locations.Any(l => l.TenantId == db.Tenant.Id && l.LegalEntityId == db.Entity.Id && l.WarehouseId == warehouseId && l.Code == code))
+            return (null, "LOCATION_EXISTS", $"Location code {code} already exists in warehouse {wh.Code}.");
+        var loc = new StockLocation(db.NextDoc("LOC"), db.Tenant.Id, db.Entity.Id, warehouseId, code, name);
+        db.Locations.Add(loc);
+        Audit.Log(db, user, "create", "stock_location", loc.Id, $"Location '{code}' created in warehouse {wh.Code}");
+        return (loc, null, null);
+    }
+
+    public static (StockTransfer? transfer, string? code, string? error) Transfer(Db db, CurrentUser user, string fromLocationId, string toLocationId, string itemSku, decimal qty)
+    {
+        if (fromLocationId == toLocationId) return (null, "VALIDATION_ERROR", "Source and destination locations must differ.");
+        var from = Find(db, fromLocationId);
+        if (from is null) return (null, "LOCATION_NOT_FOUND", "Source location not found.");
+        var to = Find(db, toLocationId);
+        if (to is null) return (null, "LOCATION_NOT_FOUND", "Destination location not found.");
+
+        // ERP-INVENTORY-020: blocking policy — check inside the caller's WithLock so no oversell slips through
+        var onHand = Stock.QtyAt(db, from.Id, itemSku);
+        if (onHand < qty)
+            return (null, "INSUFFICIENT_STOCK", $"Insufficient stock for {itemSku} at {from.Code}: available {onHand}, requested {qty}.");
+
+        // ERP-INVENTORY-014: both legs commit inside one lock — all or nothing
+        Stock.Apply(db, from.WarehouseId, from.Id, itemSku, -qty);
+        Stock.Apply(db, to.WarehouseId, to.Id, itemSku, qty);
+
+        var transfer = new StockTransfer(db.NextDoc("TRF"), db.Tenant.Id, db.Entity.Id, from.Id, to.Id, itemSku, qty, TransferStatus.Posted, DateTimeOffset.UtcNow, user.Id);
+        db.Transfers.Add(transfer);
+        Audit.Log(db, user, "transfer", "stock_transfer", transfer.Id, $"Transferred {qty} x {itemSku} from {from.Code} to {to.Code}");
+        Audit.Emit(db, user, "inventory.transfer.posted", new { transferId = transfer.Id, fromLocationId = from.Id, toLocationId = to.Id, itemSku, qty });
+        return (transfer, null, null);
+    }
+
+    public static (StockCount? count, string? code, string? error) OpenCount(Db db, CurrentUser user, string locationId, IReadOnlyList<CountItemReq> items)
+    {
+        var loc = Find(db, locationId);
+        if (loc is null) return (null, "LOCATION_NOT_FOUND", "Location not found.");
+
+        // snapshot system qty at open — variance at close is measured against this frozen basis
+        var count = new StockCount(db.NextDoc("CNT"), db.Tenant.Id, db.Entity.Id, loc.Id, CountStatus.Open,
+            items.Select(i => new CountLine(i.ItemSku, i.CountedQty, Stock.QtyAt(db, loc.Id, i.ItemSku))).ToList(),
+            user.Id, DateTimeOffset.UtcNow);
+        db.Counts.Add(count);
+        Audit.Log(db, user, "open", "stock_count", count.Id, $"Count opened at {loc.Code} for {items.Count} item(s)");
+        return (count, null, null);
+    }
+
+    public static (StockCount? count, IReadOnlyList<StockAdjustment>? adjustments, string? code, string? error) Close(Db db, CurrentUser closer, string countId)
+    {
+        var count = db.Counts.FirstOrDefault(c => c.TenantId == db.Tenant.Id && c.LegalEntityId == db.Entity.Id && c.Id == countId);
+        if (count is null) return (null, null, "COUNT_NOT_FOUND", "Stock count not found.");
+        if (count.Status != CountStatus.Open) return (null, null, "COUNT_CLOSE_ERROR", $"Only open counts can be closed (current: {count.Status}).");
+        if (count.CreatedBy == closer.Id) return (null, null, "COUNT_CLOSE_ERROR", "Maker-checker: the counter cannot close their own stock count.");
+        if (!closer.Has("inventory:write")) return (null, null, "FORBIDDEN", "inventory:write permission required.");
+
+        var loc = db.Locations.First(l => l.Id == count.LocationId);
+        var adjustments = new List<StockAdjustment>();
+        foreach (var line in count.Items.Where(l => l.CountedQty != l.SystemQty))
+        {
+            var variance = line.CountedQty - line.SystemQty;
+            var unitCost = Costing.AverageUnitCost(db, line.ItemSku);
+            var amount = decimal.Round(Math.Abs(variance) * unitCost, 2, MidpointRounding.AwayFromZero);
+            Stock.Apply(db, loc.WarehouseId, loc.Id, line.ItemSku, variance);
+
+            // balanced adjustment journal: increase Dr Inventory / Cr Count Adjustment, decrease reversed
+            JournalLine[] lines = variance > 0
+                ? [new JournalLine("1400", "Inventory", amount, 0), new JournalLine("3999", "Count Adjustment", 0, amount)]
+                : [new JournalLine("3999", "Count Adjustment", amount, 0), new JournalLine("1400", "Inventory", 0, amount)];
+            var journal = new Journal(db.NextDoc("J"), db.Tenant.Id, db.Entity.Id, JournalStatus.Posted,
+                $"Stock count {count.Id} adjustment for {line.ItemSku}", lines, DateTimeOffset.UtcNow, closer.Id);
+            db.Journals.Add(journal);
+
+            var adj = new StockAdjustment(db.NextDoc("ADJ"), db.Tenant.Id, db.Entity.Id, count.Id, line.ItemSku, loc.Id,
+                variance, unitCost, amount, journal.Id, DateTimeOffset.UtcNow, closer.Id);
+            db.Adjustments.Add(adj);
+            adjustments.Add(adj);
+            Audit.Emit(db, closer, "inventory.adjustment.posted", new { adjustmentId = adj.Id, countId = count.Id, itemSku = line.ItemSku, qtyVariance = variance, amount, journalId = journal.Id });
+        }
+
+        var closed = count with { Status = CountStatus.Closed, ClosedBy = closer.Id, ClosedAt = DateTimeOffset.UtcNow };
+        db.Counts[db.Counts.IndexOf(count)] = closed;
+        Audit.Log(db, closer, "close", "stock_count", count.Id, $"Count closed by {closer.Email}; {adjustments.Count} adjustment(s) posted");
+        return (closed, adjustments, null, null);
+    }
+
+    // per-item weighted-average valuation: qty on hand across locations × average receipt unit cost
+    public static object Valuation(Db db) =>
+        db.Stock.Where(s => s.TenantId == db.Tenant.Id && s.LegalEntityId == db.Entity.Id)
+            .GroupBy(s => s.ItemSku)
+            .Select(g =>
+            {
+                var qty = g.Sum(s => s.QtyOnHand);
+                var unitCost = Costing.AverageUnitCost(db, g.Key);
+                return new { itemSku = g.Key, qtyOnHand = qty, unitCost, value = decimal.Round(qty * unitCost, 2, MidpointRounding.AwayFromZero) };
+            })
+            .ToList();
 }
