@@ -9,6 +9,13 @@ public enum JournalStatus { Pending, Posted }
 public enum TransferStatus { Posted }
 public enum CountStatus { Open, Closed }
 
+// ASSETS domain slice (ERP-ASSETS-001..024 trimmed pilot)
+public enum ProjectStatus { Planned, Active, OnHold, Closed }
+public enum ProjectTaskStatus { Open, Done }
+public enum CasePriority { Low, Medium, High }
+public enum CaseStatus { Open, InProgress, Resolved, Closed }
+public enum AssetStatus { Draft, Active, Disposed }
+
 public record Tenant(string Id, string Name);
 public record LegalEntity(string Id, string TenantId, string Name, string Jurisdiction, string Currency, string DefaultLocale);
 
@@ -45,6 +52,12 @@ public record StockAdjustment(string Id, string TenantId, string LegalEntityId, 
 public record JournalLine(string AccountCode, string AccountName, decimal Debit, decimal Credit);
 public record Journal(string Id, string TenantId, string LegalEntityId, JournalStatus Status, string Memo, IReadOnlyList<JournalLine> Lines, DateTimeOffset CreatedAt, string CreatedBy, string? ReversalOfId = null);
 
+public record Project(string Id, string TenantId, string LegalEntityId, string Name, ProjectStatus Status, decimal Budget, string? CustomerId, string CreatedBy, DateTimeOffset CreatedAt);
+public record ProjectTask(string Id, string TenantId, string LegalEntityId, string ProjectId, string Name, ProjectTaskStatus Status, decimal HoursEstimate, decimal HoursActual);
+public record ServiceCase(string Id, string TenantId, string LegalEntityId, string Title, CasePriority Priority, CaseStatus Status, string? AssignedTo, string CreatedBy, DateTimeOffset CreatedAt);
+public record FixedAsset(string Id, string TenantId, string LegalEntityId, string Name, string Category, decimal AcquisitionCost, DateTimeOffset AcquisitionDate, AssetStatus Status, string CreatedBy, DateTimeOffset CreatedAt);
+public record DepreciationSchedule(string Id, string TenantId, string LegalEntityId, string AssetId, decimal MonthlyAmount, DateTimeOffset StartDate, int PostedCount);
+
 public record AuditEvent(string Id, string TenantId, string ActorUserId, string Action, string EntityType, string EntityId, DateTimeOffset At, string Summary);
 
 public record OutboxMessage(string Id, string TenantId, string Type, int Version, DateTimeOffset OccurredAt, string ActorUserId, string PayloadJson);
@@ -64,3 +77,9 @@ public record CreateLocationReq(string WarehouseId, string Code, string Name);
 public record CreateTransferReq(string FromLocationId, string ToLocationId, string ItemSku, decimal Qty);
 public record CountItemReq(string ItemSku, decimal CountedQty);
 public record CreateCountReq(string LocationId, IReadOnlyList<CountItemReq> Items);
+public record CreateProjectReq(string Name, decimal Budget, string? CustomerId);
+public record CreateTaskReq(string Name, decimal HoursEstimate);
+public record CompleteTaskReq(decimal HoursActual);
+public record CreateCaseReq(string Title, CasePriority? Priority, string? AssignedTo);
+public record TransitionCaseReq(CaseStatus Status);
+public record CreateAssetReq(string Name, string Category, decimal AcquisitionCost, DateTimeOffset AcquisitionDate);

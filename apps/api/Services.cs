@@ -407,3 +407,160 @@ public static class InventoryService
             })
             .ToList();
 }
+
+// ASSETS domain slice — projects, service cases, fixed assets (ERP-ASSETS-002, -019, -024)
+public static class ProjectService
+{
+    public static Project Create(Db db, CurrentUser user, string name, decimal budget, string? customerId)
+    {
+        var p = new Project(db.NextDoc("PRJ"), db.Tenant.Id, db.Entity.Id, name, ProjectStatus.Planned, budget, customerId, user.Id, DateTimeOffset.UtcNow);
+        db.Projects.Add(p);
+        Audit.Log(db, user, "create", "project", p.Id, $"Project '{name}' created with budget {budget}");
+        return p;
+    }
+
+    public static (ProjectTask? task, string? code, string? error) AddTask(Db db, CurrentUser user, string projectId, string name, decimal hoursEstimate)
+    {
+        var p = db.Projects.FirstOrDefault(x => x.TenantId == db.Tenant.Id && x.LegalEntityId == db.Entity.Id && x.Id == projectId);
+        if (p is null) return (null, "PROJECT_NOT_FOUND", "Project not found.");
+        // ERP-ASSETS-002 AC3: a closed project rejects new postings
+        if (p.Status == ProjectStatus.Closed) return (null, "PROJECT_STATE_ERROR", "A closed project rejects new postings.");
+        var t = new ProjectTask(db.NextDoc("TSK"), db.Tenant.Id, db.Entity.Id, p.Id, name, ProjectTaskStatus.Open, hoursEstimate, 0);
+        db.ProjectTasks.Add(t);
+        Audit.Log(db, user, "create", "project_task", t.Id, $"Task '{name}' added to project {p.Id} (estimate {hoursEstimate}h)");
+        return (t, null, null);
+    }
+
+    public static (ProjectTask? task, string? code, string? error) CompleteTask(Db db, CurrentUser user, string projectId, string taskId, decimal hoursActual)
+    {
+        var t = db.ProjectTasks.FirstOrDefault(x => x.TenantId == db.Tenant.Id && x.LegalEntityId == db.Entity.Id && x.Id == taskId && x.ProjectId == projectId);
+        if (t is null) return (null, "TASK_NOT_FOUND", "Project task not found.");
+        if (t.Status == ProjectTaskStatus.Done) return (null, "TASK_STATE_ERROR", "Task is already done.");
+        var done = t with { Status = ProjectTaskStatus.Done, HoursActual = hoursActual };
+        db.ProjectTasks[db.ProjectTasks.IndexOf(t)] = done;
+        Audit.Log(db, user, "complete", "project_task", t.Id, $"Task {t.Id} done with {hoursActual}h actual");
+        return (done, null, null);
+    }
+
+    // ERP-ASSETS-019: closure gate — no open tasks may remain
+    public static (Project? project, string? code, string? error) Close(Db db, CurrentUser user, string projectId)
+    {
+        var p = db.Projects.FirstOrDefault(x => x.TenantId == db.Tenant.Id && x.LegalEntityId == db.Entity.Id && x.Id == projectId);
+        if (p is null) return (null, "PROJECT_NOT_FOUND", "Project not found.");
+        if (p.Status == ProjectStatus.Closed) return (null, "PROJECT_STATE_ERROR", "Project is already closed.");
+        var open = db.ProjectTasks.Where(t => t.TenantId == db.Tenant.Id && t.ProjectId == p.Id && t.Status != ProjectTaskStatus.Done).ToList();
+        if (open.Count > 0)
+            return (null, "PROJECT_CLOSE_ERROR", $"All tasks must be Done before closing; {open.Count} open task(s) remain ({string.Join(", ", open.Select(t => t.Id))}).");
+
+        var closed = p with { Status = ProjectStatus.Closed };
+        db.Projects[db.Projects.IndexOf(p)] = closed;
+        Audit.Log(db, user, "close", "project", p.Id, $"Project {p.Id} closed by {user.Email}");
+        Audit.Emit(db, user, "assets.project.closed", new { projectId = p.Id });
+        return (closed, null, null);
+    }
+}
+
+public static class ServiceCaseService
+{
+    // ERP-ASSETS-024 AC1: forward flow plus reopen from Resolved; Closed is terminal
+    private static readonly Dictionary<CaseStatus, CaseStatus[]> Legal = new()
+    {
+        [CaseStatus.Open] = [CaseStatus.InProgress],
+        [CaseStatus.InProgress] = [CaseStatus.Resolved],
+        [CaseStatus.Resolved] = [CaseStatus.Closed, CaseStatus.Open],
+        [CaseStatus.Closed] = [],
+    };
+
+    public static ServiceCase Create(Db db, CurrentUser user, string title, CasePriority priority, string? assignedTo)
+    {
+        var c = new ServiceCase(db.NextDoc("CASE"), db.Tenant.Id, db.Entity.Id, title, priority, CaseStatus.Open, assignedTo, user.Id, DateTimeOffset.UtcNow);
+        db.ServiceCases.Add(c);
+        Audit.Log(db, user, "create", "service_case", c.Id, $"Service case '{title}' opened with {priority} priority");
+        return c;
+    }
+
+    public static (ServiceCase? sc, string? code, string? error) Transition(Db db, CurrentUser user, string caseId, CaseStatus to)
+    {
+        var c = db.ServiceCases.FirstOrDefault(x => x.TenantId == db.Tenant.Id && x.LegalEntityId == db.Entity.Id && x.Id == caseId);
+        if (c is null) return (null, "CASE_NOT_FOUND", "Service case not found.");
+        if (!Legal[c.Status].Contains(to))
+            return (null, "CASE_TRANSITION_ERROR", $"Illegal transition {c.Status} → {to}.");
+
+        var moved = c with { Status = to };
+        db.ServiceCases[db.ServiceCases.IndexOf(c)] = moved;
+        Audit.Log(db, user, "transition", "service_case", c.Id, $"Case {c.Id}: {c.Status} → {to} by {user.Email}");
+        return (moved, null, null);
+    }
+}
+
+public static class AssetService
+{
+    public const int DepreciationMonths = 60; // 5-year straight line
+
+    public static FixedAsset Create(Db db, CurrentUser user, string name, string category, decimal cost, DateTimeOffset acquisitionDate)
+    {
+        var a = new FixedAsset(db.NextDoc("FA"), db.Tenant.Id, db.Entity.Id, name, category, cost, acquisitionDate, AssetStatus.Draft, user.Id, DateTimeOffset.UtcNow);
+        db.Assets.Add(a);
+        Audit.Log(db, user, "create", "fixed_asset", a.Id, $"Fixed asset '{name}' created at cost {cost}");
+        return a;
+    }
+
+    public static (FixedAsset? asset, DepreciationSchedule? schedule, string? code, string? error) Activate(Db db, CurrentUser user, string assetId)
+    {
+        var a = db.Assets.FirstOrDefault(x => x.TenantId == db.Tenant.Id && x.LegalEntityId == db.Entity.Id && x.Id == assetId);
+        if (a is null) return (null, null, "ASSET_NOT_FOUND", "Fixed asset not found.");
+        if (a.Status != AssetStatus.Draft) return (null, null, "ASSET_STATE_ERROR", $"Only draft assets can be activated (current: {a.Status}).");
+
+        // shortcut: 5-year straight line, zero salvage — MonthlyAmount = cost/60; upgrade when a residual/policy engine lands
+        var monthly = decimal.Round(a.AcquisitionCost / DepreciationMonths, 2, MidpointRounding.AwayFromZero);
+        var schedule = new DepreciationSchedule(db.NextDoc("DEP"), db.Tenant.Id, db.Entity.Id, a.Id, monthly, DateTimeOffset.UtcNow, 0);
+        db.DepreciationSchedules.Add(schedule);
+        var active = a with { Status = AssetStatus.Active };
+        db.Assets[db.Assets.IndexOf(a)] = active;
+
+        Audit.Log(db, user, "activate", "fixed_asset", a.Id, $"Asset {a.Id} activated; schedule {schedule.Id} at {monthly}/month over {DepreciationMonths} months");
+        return (active, schedule, null, null);
+    }
+
+    // one-way: a disposed asset never returns to Active and stops depreciating
+    public static (FixedAsset? asset, string? code, string? error) Dispose(Db db, CurrentUser user, string assetId)
+    {
+        var a = db.Assets.FirstOrDefault(x => x.TenantId == db.Tenant.Id && x.LegalEntityId == db.Entity.Id && x.Id == assetId);
+        if (a is null) return (null, "ASSET_NOT_FOUND", "Fixed asset not found.");
+        if (a.Status != AssetStatus.Active) return (null, "ASSET_STATE_ERROR", $"Only active assets can be disposed (current: {a.Status}).");
+
+        var disposed = a with { Status = AssetStatus.Disposed };
+        db.Assets[db.Assets.IndexOf(a)] = disposed;
+        Audit.Log(db, user, "dispose", "fixed_asset", a.Id, $"Asset {a.Id} disposed (one-way); depreciation stops");
+        return (disposed, null, null);
+    }
+}
+
+// system-run depreciation — no maker-checker (not a human approval), but audited + outboxed
+public static class DepreciationService
+{
+    public static (Journal? journal, DepreciationSchedule? schedule, string? code, string? error) Run(Db db, CurrentUser user, string assetId)
+    {
+        var a = db.Assets.FirstOrDefault(x => x.TenantId == db.Tenant.Id && x.LegalEntityId == db.Entity.Id && x.Id == assetId);
+        if (a is null) return (null, null, "ASSET_NOT_FOUND", "Fixed asset not found.");
+        if (a.Status != AssetStatus.Active)
+            return (null, null, "ASSET_STATE_ERROR", $"Depreciation runs only on active assets (current: {a.Status}).");
+        var s = db.DepreciationSchedules.FirstOrDefault(x => x.TenantId == db.Tenant.Id && x.LegalEntityId == db.Entity.Id && x.AssetId == assetId);
+        if (s is null) return (null, null, "ASSET_STATE_ERROR", "No depreciation schedule exists for this asset.");
+        if (s.PostedCount >= AssetService.DepreciationMonths)
+            return (null, null, "DEPRECIATION_COMPLETE", $"Schedule {s.Id} is fully posted ({s.PostedCount}/{AssetService.DepreciationMonths} periods).");
+
+        var journal = new Journal(db.NextDoc("J"), db.Tenant.Id, db.Entity.Id, JournalStatus.Posted,
+            $"Depreciation period {s.PostedCount + 1}/{AssetService.DepreciationMonths} for asset {a.Id}",
+            [new JournalLine("6400", "Depreciation Expense", s.MonthlyAmount, 0), new JournalLine("1500", "Accumulated Depreciation", 0, s.MonthlyAmount)],
+            DateTimeOffset.UtcNow, user.Id);
+        db.Journals.Add(journal);
+
+        var updated = s with { PostedCount = s.PostedCount + 1 };
+        db.DepreciationSchedules[db.DepreciationSchedules.IndexOf(s)] = updated;
+
+        Audit.Log(db, user, "post", "depreciation", a.Id, $"Depreciation {s.MonthlyAmount} posted for asset {a.Id} (period {s.PostedCount + 1}/{AssetService.DepreciationMonths}); journal {journal.Id}");
+        Audit.Emit(db, user, "assets.depreciation.posted", new { assetId = a.Id, scheduleId = s.Id, period = s.PostedCount + 1, amount = s.MonthlyAmount, journalId = journal.Id });
+        return (journal, updated, null, null);
+    }
+}

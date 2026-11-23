@@ -26,6 +26,11 @@ public sealed class Db
     public List<StockCount> Counts { get; } = [];
     public List<StockAdjustment> Adjustments { get; } = [];
     public List<Journal> Journals { get; } = [];
+    public List<Project> Projects { get; } = [];
+    public List<ProjectTask> ProjectTasks { get; } = [];
+    public List<ServiceCase> ServiceCases { get; } = [];
+    public List<FixedAsset> Assets { get; } = [];
+    public List<DepreciationSchedule> DepreciationSchedules { get; } = [];
     public List<AuditEvent> Audit { get; } = [];
     public List<OutboxMessage> Outbox { get; } = [];
 
@@ -51,19 +56,22 @@ public sealed class Db
             new Role("R-ADMIN", "tenant_admin", ["*"]),
             new Role("R-PROC", "procurement_officer", ["suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer"]),
             new Role("R-FIN", "finance_officer", ["journals:read", "journals:approve", "ap:read", "po:approve"]),
-            new Role("R-SALES", "sales_officer", ["customers:write", "so:write", "shipments:write"]));
+            new Role("R-SALES", "sales_officer", ["customers:write", "so:write", "shipments:write"]),
+            new Role("R-ASSETS", "assets_officer", ["assets:write"]));
 
         Users.AddRange(
             new User("U-001", "admin@teamzlab.dev", "Tenant Admin", true),
             new User("U-002", "procurve@teamzlab.dev", "Procure Officer", true),
             new User("U-003", "finance@teamzlab.dev", "Finance Officer", true),
-            new User("U-004", "sales@teamzlab.dev", "Sales Officer", true));
+            new User("U-004", "sales@teamzlab.dev", "Sales Officer", true),
+            new User("U-005", "assets@teamzlab.dev", "Assets Officer", true));
 
         Memberships.AddRange(Users.Select(u => new Membership(u.Id, Tenant.Id, Entity.Id, u.Id switch
         {
             "U-001" => "R-ADMIN",
             "U-002" => "R-PROC",
             "U-004" => "R-SALES",
+            "U-005" => "R-ASSETS",
             _ => "R-FIN",
         })));
 
