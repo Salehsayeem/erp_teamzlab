@@ -80,8 +80,10 @@ public class PilotFlowTests : IClassFixture<WebApplicationFactory<Program>>
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
         Assert.NotNull((await Json(res)).GetProperty("data").GetProperty("reversalOfId").GetString());
 
-        // audit evidence exists for the whole chain
-        var audit = await Json(await client.GetAsync("/api/v1/audit-events"));
+        // audit evidence exists for the whole chain (audit-events is admin-only per finding 6)
+        var adminClient = _factory.CreateClient();
+        adminClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {admin}");
+        var audit = await Json(await adminClient.GetAsync("/api/v1/audit-events"));
         Assert.True(audit.GetProperty("data").GetArrayLength() >= 6);
     }
 

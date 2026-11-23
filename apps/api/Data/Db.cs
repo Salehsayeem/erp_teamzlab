@@ -24,6 +24,9 @@ public sealed class Db
     public List<AuditEvent> Audit { get; } = [];
     public List<OutboxMessage> Outbox { get; } = [];
 
+    // finding 3: Idempotency-Key → stored response (tenant+entity scoped) replayed verbatim on repeat
+    public Dictionary<string, (int Status, string Body)> Idempotency { get; } = [];
+
     private readonly object _lock = new();
     private int _seq;
 
@@ -39,7 +42,7 @@ public sealed class Db
         Roles.AddRange(
             new Role("R-ADMIN", "tenant_admin", ["*"]),
             new Role("R-PROC", "procurement_officer", ["suppliers:write", "po:write", "receipts:write"]),
-            new Role("R-FIN", "finance_officer", ["journals:read", "journals:approve", "ap:read"]),
+            new Role("R-FIN", "finance_officer", ["journals:read", "journals:approve", "ap:read", "po:approve"]),
             new Role("R-SALES", "sales_officer", ["customers:write", "so:write", "shipments:write"]));
 
         Users.AddRange(
