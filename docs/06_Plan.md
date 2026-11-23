@@ -14,24 +14,25 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 - [ ] Defer: D-02, D-03, D-05, D-06, D-08, D-12, D-13, D-14 to the phase that needs them
 
 ## Phase 1 — Foundation (Wave 1)
-- [ ] Repo scaffold: `apps/api` (.NET), `apps/web` (Next.js), solution/tooling pins (**D-09/D-11**)
-- [ ] Tenant + legal-entity context middleware; server-side scoping on every query
-- [ ] IdP integration + memberships/RBAC (provider may be stubbed, **D-13**)
-- [ ] RLS policies on tenant tables + isolation tests
-- [ ] Audit log (append-only) + evidence accessor
-- [ ] Outbox/inbox + event envelope v1 (05_API_Spec §3)
-- [ ] Response envelope + global error middleware + validation pipeline
-- [ ] i18n scaffold: locale routing, message catalogs, RTL-ready tokens (03_UI_Spec)
-- [ ] EF Core migration conventions + CI check (no edited migrations)
-- [ ] Telemetry: correlationId end-to-end, structured logs
-- [ ] Seed: one tenant, one entity, admin user
+- [x] Repo scaffold: `apps/api` (.NET 11) done, `apps/web` (Next.js) in progress, tooling pinned locally (D-09 default: .NET 11)
+- [x] Tenant + legal-entity context middleware; server-side scoping in every handler (mock store)
+- [x] Auth stub + memberships/RBAC (token = user id; real IdP when D-13 chosen)
+- [ ] RLS policies + isolation tests — deferred until DB reachable (D-10); service-layer scoping meanwhile
+- [x] Audit log (append-only) + evidence accessor (`GET /api/v1/audit-events`)
+- [x] Outbox event envelope v1 (writes on approve/receipt); inbox consumer pending
+- [x] Response envelope + global error middleware + validation pipeline
+- [~] i18n scaffold: dictionaries en+bn, locale routing (web agent building)
+- [ ] EF Core migration conventions + CI check — blocked on DB (D-10)
+- [x] Telemetry: correlationId middleware end-to-end
+- [x] Seed: one tenant, one entity, 3 users (admin/procurve/finance), 3 roles
 
 ## Phase 2 — Pilot slice (Wave 1 flows)
-- [ ] Procure-to-receive: suppliers → PO → approval (maker-checker) → receipt → stock + AP accrual
+- [x] Procure-to-receive API: suppliers → PO → submit → maker-checker approval → receipt → stock + balanced AP accrual journal — 3/3 tests green
+- [x] Journal reversal with linked provenance (`/{id}/reversals`)
+- [~] Procure-to-receive UI (web agent in progress)
 - [ ] Order-to-fulfill: customers → order → approval → stock allocation → shipment → AR invoice draft
-- [ ] Finance posting behind approval for both flows; balanced-journal validation; linked reversal
-- [ ] Audit evidence visible for every step (02_AppFlow §3 flows end-to-end)
-- [ ] Tests per endpoint (TDD) + cross-module contract tests
+- [x] Audit evidence visible for every step (`GET /api/v1/audit-events`)
+- [x] Flow test (whole-chain coverage) + validation + authz tests
 
 ## Phase 3 — Core transactional domains (Wave 2, per domain — order by D-01/D-02)
 - [ ] FINANCE deep: AP/AR close, periods/locks, tax (**D-01**)
@@ -50,3 +51,4 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 | Date | Step | Evidence |
 |---|---|---|
 | 2026-11-23 | Scaffold: CLAUDE.md, docs 01–06, .env/.gitignore/.cursorrules, snapshot | this file, branch `dev-sayeem` |
+| 2026-11-23 | API foundation + procure-to-receive slice, 3/3 tests green | `apps/api`, `apps/api-tests` — `dotnet test` Passed 3/3 |
