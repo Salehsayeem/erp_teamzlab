@@ -9,10 +9,10 @@ namespace Erp.Api.Tests;
 // Procure-to-receive pilot flow (02_AppFlow §3.1) + envelope/validation/security checks.
 // shortcut: shared WebApplicationFactory per class — in-memory store resets between test classes only
 
-public class PilotFlowTests : IClassFixture<WebApplicationFactory<Program>>
+public class PilotFlowTests : IClassFixture<TestApiFactory>
 {
-    private readonly WebApplicationFactory<Program> _factory;
-    public PilotFlowTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    private readonly TestApiFactory _factory;
+    public PilotFlowTests(TestApiFactory factory) => _factory = factory;
 
     private async Task<HttpResponseMessage> PostAsync(string path, object body, string? token)
     {

@@ -1,4 +1,3 @@
-using Erp.Api.Data;
 using Erp.Api.Dtos;
 using Erp.Api.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -13,7 +12,7 @@ public sealed class CustomersController(ICustomerService customers) : Controller
     public IResult List() => Envelope.Ok<object>(customers.List());
 
     [HttpPost]
-    public IResult Create(CreateCustomerRequest request) => Idem.Wrap(HttpContext, Db.I, () =>
+    public IResult Create(CreateCustomerRequest request) => Idem.Wrap(HttpContext, () =>
     {
         var err = Guards.Check(request.Name, "Name") ?? Guards.Check(request.TaxId, "TaxId") ?? Guards.CheckEmail(request.Email);
         if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);

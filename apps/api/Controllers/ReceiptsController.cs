@@ -1,4 +1,3 @@
-using Erp.Api.Data;
 using Erp.Api.Dtos;
 using Erp.Api.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -10,7 +9,7 @@ namespace Erp.Api.Controllers;
 public sealed class ReceiptsController(IReceiptService receipts) : ControllerBase
 {
     [HttpPost]
-    public IResult Create(CreateReceiptRequest request) => Idem.Wrap(HttpContext, Db.I, () =>
+    public IResult Create(CreateReceiptRequest request) => Idem.Wrap(HttpContext, () =>
     {
         var u = CurrentUser.From(HttpContext);
         if (!u.Has("receipts:write")) return (Envelope.FailBody("FORBIDDEN", "receipts:write permission required."), 403);

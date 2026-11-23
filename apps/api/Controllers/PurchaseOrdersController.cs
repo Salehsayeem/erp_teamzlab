@@ -1,4 +1,3 @@
-using Erp.Api.Data;
 using Erp.Api.Dtos;
 using Erp.Api.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -13,7 +12,7 @@ public sealed class PurchaseOrdersController(IPurchaseOrderService orders) : Con
     public IResult List() => Envelope.Ok<object>(orders.List());
 
     [HttpPost]
-    public IResult Create(CreatePoRequest request) => Idem.Wrap(HttpContext, Db.I, () =>
+    public IResult Create(CreatePoRequest request) => Idem.Wrap(HttpContext, () =>
     {
         var u = CurrentUser.From(HttpContext);
         if (!u.Has("po:write")) return (Envelope.FailBody("FORBIDDEN", "po:write permission required."), 403);

@@ -12,10 +12,10 @@ namespace Erp.Api.Tests;
 // Order-to-fulfill pilot flow (02_AppFlow §3.2) — SO lifecycle, shipment COGS, AR invoice.
 // shortcut: shared WebApplicationFactory per class — in-memory store resets between test classes only
 
-public class OrderToFulfillTests : IClassFixture<WebApplicationFactory<Program>>
+public class OrderToFulfillTests : IClassFixture<TestApiFactory>
 {
-    private readonly WebApplicationFactory<Program> _factory;
-    public OrderToFulfillTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    private readonly TestApiFactory _factory;
+    public OrderToFulfillTests(TestApiFactory factory) => _factory = factory;
 
     private async Task<HttpResponseMessage> PostAsync(string path, object body, string? token)
     {

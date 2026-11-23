@@ -11,10 +11,10 @@ using Xunit;
 
 namespace Erp.Api.Tests;
 
-public class ReviewFixTests : IClassFixture<WebApplicationFactory<Program>>
+public class ReviewFixTests : IClassFixture<TestApiFactory>
 {
-    private readonly WebApplicationFactory<Program> _factory;
-    public ReviewFixTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    private readonly TestApiFactory _factory;
+    public ReviewFixTests(TestApiFactory factory) => _factory = factory;
 
     private async Task<HttpResponseMessage> PostAsync(string path, object body, string? token, string? idemKey = null)
     {

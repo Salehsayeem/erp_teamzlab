@@ -1,4 +1,3 @@
-using Erp.Api.Data;
 using Erp.Api.Dtos;
 using Erp.Api.Interfaces;
 using Microsoft.AspNetCore.Mvc;
@@ -17,7 +16,7 @@ public sealed class InventoryController(IInventoryService inventory) : Controlle
     public IResult ListWarehouses() => Envelope.Ok<object>(inventory.ListWarehouses());
 
     [HttpPost("warehouses")]
-    public IResult CreateWarehouse(CreateWarehouseRequest request) => Idem.Wrap(HttpContext, Db.I, () =>
+    public IResult CreateWarehouse(CreateWarehouseRequest request) => Idem.Wrap(HttpContext, () =>
     {
         var err = Guards.Check(request.Code, "Code") ?? Guards.Check(request.Name, "Name");
         if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
@@ -31,7 +30,7 @@ public sealed class InventoryController(IInventoryService inventory) : Controlle
     public IResult ListLocations() => Envelope.Ok<object>(inventory.ListLocations());
 
     [HttpPost("locations")]
-    public IResult CreateLocation(CreateLocationRequest request) => Idem.Wrap(HttpContext, Db.I, () =>
+    public IResult CreateLocation(CreateLocationRequest request) => Idem.Wrap(HttpContext, () =>
     {
         var err = Guards.Check(request.Code, "Code") ?? Guards.Check(request.Name, "Name");
         if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
@@ -42,7 +41,7 @@ public sealed class InventoryController(IInventoryService inventory) : Controlle
     });
 
     [HttpPost("stock/transfers")]
-    public IResult Transfer(CreateTransferRequest request) => Idem.Wrap(HttpContext, Db.I, () =>
+    public IResult Transfer(CreateTransferRequest request) => Idem.Wrap(HttpContext, () =>
     {
         var err = Guards.Check(request.FromLocationId, "FromLocationId") ?? Guards.Check(request.ToLocationId, "ToLocationId")
             ?? Guards.Check(request.ItemSku, "ItemSku")
@@ -55,7 +54,7 @@ public sealed class InventoryController(IInventoryService inventory) : Controlle
     });
 
     [HttpPost("stock/counts")]
-    public IResult OpenCount(CreateCountRequest request) => Idem.Wrap(HttpContext, Db.I, () =>
+    public IResult OpenCount(CreateCountRequest request) => Idem.Wrap(HttpContext, () =>
     {
         var lineErr = Guards.CheckCountItems(request.Items);
         if (lineErr is not null) return (Envelope.FailBody("VALIDATION_ERROR", lineErr), 400);

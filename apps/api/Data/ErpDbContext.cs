@@ -1,0 +1,345 @@
+using System.Text.RegularExpressions;
+using Erp.Api.Interfaces;
+using Microsoft.EntityFrameworkCore;
+
+namespace Erp.Api.Data;
+
+// Task-2 §2: PostgreSQL store — one DbContext for every aggregate. Domain records map as EF
+// entities (lines are owned collections in their own tables: po_lines, so_lines, count_lines,
+// journal_lines). Doc numbering runs on PG sequences per prefix so ids keep the SUP-0007 format.
+// Every table carries tenant_id + legal_entity_id (real or shadow columns) and every FK and
+// tenant-scoped query column is indexed (CLAUDE.md).
+public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(options)
+{
+    public DbSet<Supplier> Suppliers => Set<Supplier>();
+    public DbSet<PurchaseOrder> PurchaseOrders => Set<PurchaseOrder>();
+    public DbSet<Receipt> Receipts => Set<Receipt>();
+    public DbSet<Customer> Customers => Set<Customer>();
+    public DbSet<SalesOrder> SalesOrders => Set<SalesOrder>();
+    public DbSet<Shipment> Shipments => Set<Shipment>();
+    public DbSet<Warehouse> Warehouses => Set<Warehouse>();
+    public DbSet<StockLocation> Locations => Set<StockLocation>();
+    public DbSet<StockLevel> Stock => Set<StockLevel>();
+    public DbSet<StockTransfer> Transfers => Set<StockTransfer>();
+    public DbSet<StockCount> Counts => Set<StockCount>();
+    public DbSet<StockAdjustment> Adjustments => Set<StockAdjustment>();
+    public DbSet<Journal> Journals => Set<Journal>();
+    public DbSet<User> Users => Set<User>();
+    public DbSet<Role> Roles => Set<Role>();
+    public DbSet<Membership> Memberships => Set<Membership>();
+    public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<IdempotencyRecord> Idempotency => Set<IdempotencyRecord>();
+
+    protected override void OnModelCreating(ModelBuilder mb)
+    {
+        ConfigureProcurement(mb);
+        ConfigureSales(mb);
+        ConfigureInventory(mb);
+        ConfigureFinance(mb);
+        ConfigureIdentity(mb);
+        ConfigurePlatform(mb);
+        ConfigureSequences(mb);
+        SnakeCaseAllColumns(mb);
+        Seed(mb);
+    }
+
+    private static void ConfigureProcurement(ModelBuilder mb)
+    {
+        mb.Entity<Supplier>(e =>
+        {
+            e.ToTable("suppliers");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+        });
+
+        mb.Entity<PurchaseOrder>(e =>
+        {
+            e.ToTable("purchase_orders");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.SupplierId);
+            e.HasOne<Supplier>().WithMany().HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                // PoLine.Id stays a plain nullable column (clients never send line ids — responses
+                // keep "id": null); the PK is a generated shadow line number (task-2 §2)
+                l.ToTable("po_lines");
+                l.WithOwner().HasForeignKey("PoId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("PoId", "LineNo");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("PoId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<Receipt>(e =>
+        {
+            e.ToTable("receipts");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PurchaseOrderId, x.ItemSku });
+            e.HasIndex(x => x.PurchaseOrderId);
+            e.HasOne<PurchaseOrder>().WithMany().HasForeignKey(x => x.PurchaseOrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    private static void ConfigureSales(ModelBuilder mb)
+    {
+        mb.Entity<Customer>(e =>
+        {
+            e.ToTable("customers");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+        });
+
+        mb.Entity<SalesOrder>(e =>
+        {
+            e.ToTable("sales_orders");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.CustomerId);
+            e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                // see po_lines — SoLine.Id is a nullable column, the PK is a generated shadow line number
+                l.ToTable("so_lines");
+                l.WithOwner().HasForeignKey("SoId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("SoId", "LineNo");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("SoId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<Shipment>(e =>
+        {
+            e.ToTable("shipments");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.SalesOrderId);
+            e.HasOne<SalesOrder>().WithMany().HasForeignKey(x => x.SalesOrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    private static void ConfigureInventory(ModelBuilder mb)
+    {
+        mb.Entity<Warehouse>(e =>
+        {
+            e.ToTable("warehouses");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+        });
+
+        mb.Entity<StockLocation>(e =>
+        {
+            e.ToTable("locations");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.WarehouseId);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.WarehouseId, x.Code }).IsUnique();
+            e.HasOne<Warehouse>().WithMany().HasForeignKey(x => x.WarehouseId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<StockLevel>(e =>
+        {
+            e.ToTable("stock_levels");
+            e.HasKey(x => new { x.TenantId, x.LegalEntityId, x.WarehouseId, x.LocationId, x.ItemSku });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ItemSku });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.LocationId });
+        });
+
+        mb.Entity<StockTransfer>(e =>
+        {
+            e.ToTable("transfers");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.FromLocationId);
+            e.HasIndex(x => x.ToLocationId);
+            e.HasOne<StockLocation>().WithMany().HasForeignKey(x => x.FromLocationId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<StockLocation>().WithMany().HasForeignKey(x => x.ToLocationId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<StockCount>(e =>
+        {
+            e.ToTable("counts");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.LocationId);
+            e.HasOne<StockLocation>().WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Items, l =>
+            {
+                l.ToTable("count_lines");
+                l.WithOwner().HasForeignKey("CountId");
+                l.Property<int>("Id").ValueGeneratedOnAdd();
+                l.HasKey("CountId", "Id");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("CountId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<StockAdjustment>(e =>
+        {
+            e.ToTable("adjustments");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.CountId);
+            e.HasIndex(x => x.JournalId);
+            e.HasOne<StockCount>().WithMany().HasForeignKey(x => x.CountId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Journal>().WithMany().HasForeignKey(x => x.JournalId).OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    private static void ConfigureFinance(ModelBuilder mb)
+    {
+        mb.Entity<Journal>(e =>
+        {
+            e.ToTable("journals");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.ReversalOfId);
+            e.HasOne<Journal>().WithMany().HasForeignKey(x => x.ReversalOfId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("journal_lines");
+                l.WithOwner().HasForeignKey("JournalId");
+                l.Property<int>("Id").ValueGeneratedOnAdd();
+                l.HasKey("JournalId", "Id");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("JournalId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+    }
+
+    private static void ConfigureIdentity(ModelBuilder mb)
+    {
+        // users and roles keep their record shape — tenant scope is shadow columns (task-2 §2:
+        // every table carries tenant_id + legal_entity_id)
+        mb.Entity<User>(e =>
+        {
+            e.ToTable("users");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => x.Email);
+            e.Property<string>("TenantId");
+            e.Property<string>("LegalEntityId");
+            e.HasIndex("TenantId", "LegalEntityId");
+        });
+
+        mb.Entity<Role>(e =>
+        {
+            e.ToTable("roles");
+            e.HasKey(x => x.Id);
+            e.Property<string>("TenantId");
+            e.Property<string>("LegalEntityId");
+            e.HasIndex("TenantId", "LegalEntityId");
+        });
+
+        mb.Entity<Membership>(e =>
+        {
+            e.ToTable("memberships");
+            e.HasKey(x => new { x.UserId, x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.RoleId);
+            e.HasOne<Role>().WithMany().HasForeignKey(x => x.RoleId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    private static void ConfigurePlatform(ModelBuilder mb)
+    {
+        // audit/outbox carry legal_entity_id as a shadow column (the records hold TenantId only)
+        mb.Entity<AuditEvent>(e =>
+        {
+            e.ToTable("audit_events");
+            e.HasKey(x => x.Id);
+            e.Property<string>("LegalEntityId"); // shadow column — the record holds TenantId only
+            e.HasIndex("TenantId", "LegalEntityId");
+        });
+
+        mb.Entity<OutboxMessage>(e =>
+        {
+            e.ToTable("outbox_messages");
+            e.HasKey(x => x.Id);
+            e.Property<string>("LegalEntityId");
+            e.HasIndex("TenantId", "LegalEntityId");
+        });
+
+        mb.Entity<IdempotencyRecord>(e =>
+        {
+            e.ToTable("idempotency");
+            e.HasKey(x => new { x.TenantId, x.LegalEntityId, x.Key }); // unique (tenant, entity, key) — task-2 §2
+        });
+    }
+
+    private static void ConfigureSequences(ModelBuilder mb)
+    {
+        // doc numbering: one sequence per prefix (task-2 §2) — A starts at 2 because A-0001 is
+        // the seeded opening audit event; all other ids start at 1
+        foreach (var prefix in new[] { "sup", "po", "rc", "cus", "so", "shp", "wh", "loc", "trf", "cnt", "adj", "j", "e" })
+            mb.HasSequence<long>($"doc_{prefix}");
+        mb.HasSequence<long>("doc_a", s => s.StartsAt(2));
+    }
+
+    private static void SnakeCaseAllColumns(ModelBuilder mb)
+    {
+        // physical columns are snake_case (tenant_id, legal_entity_id, …); table names are set
+        // explicitly per aggregate above, so only column names are renamed here
+        foreach (var entity in mb.Model.GetEntityTypes())
+            foreach (var property in entity.GetProperties())
+                property.SetColumnName(ToSnake(property.Name));
+    }
+
+    private static string ToSnake(string name) =>
+        Regex.Replace(name, "([a-z0-9])([A-Z])", "$1_$2").ToLowerInvariant();
+
+    // Task-2 §6: migration-seeded reference data — ids byte-identical to the Task-1 in-memory seed
+    private static void Seed(ModelBuilder mb)
+    {
+        var t = EntityContext.SeedTenantId;
+        var le = EntityContext.SeedEntityId;
+
+        mb.Entity<Role>().HasData(
+            new { Id = "R-ADMIN", Name = "tenant_admin", Permissions = new[] { "*" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-PROC", Name = "procurement_officer", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "ap:read", "po:approve" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write" }, TenantId = t, LegalEntityId = le });
+
+        mb.Entity<User>().HasData(
+            new { Id = "U-001", Email = "admin@teamzlab.dev", DisplayName = "Tenant Admin", Active = true, TenantId = t, LegalEntityId = le },
+            new { Id = "U-002", Email = "procurve@teamzlab.dev", DisplayName = "Procure Officer", Active = true, TenantId = t, LegalEntityId = le },
+            new { Id = "U-003", Email = "finance@teamzlab.dev", DisplayName = "Finance Officer", Active = true, TenantId = t, LegalEntityId = le },
+            new { Id = "U-004", Email = "sales@teamzlab.dev", DisplayName = "Sales Officer", Active = true, TenantId = t, LegalEntityId = le });
+
+        mb.Entity<Membership>().HasData(
+            new Membership("U-001", t, le, "R-ADMIN"),
+            new Membership("U-002", t, le, "R-PROC"),
+            new Membership("U-003", t, le, "R-FIN"),
+            new Membership("U-004", t, le, "R-SALES"));
+
+        mb.Entity<AuditEvent>().HasData(new
+        {
+            Id = "A-0001",
+            TenantId = t,
+            LegalEntityId = le,
+            ActorUserId = "system",
+            Action = "seed",
+            EntityType = "tenant",
+            EntityId = t,
+            At = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            Summary = "Seeded demo tenant, entity, users, roles",
+        });
+
+        mb.Entity<Warehouse>().HasData(new Warehouse("WH-001", t, le, "WH-001", "Main Warehouse"));
+        mb.Entity<StockLocation>().HasData(
+            new StockLocation("LOC-A1", t, le, "WH-001", "A1", "Rack A1"),
+            new StockLocation("LOC-B1", t, le, "WH-001", "B1", "Rack B1"));
+    }
+}

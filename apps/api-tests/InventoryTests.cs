@@ -9,10 +9,10 @@ using Xunit;
 
 namespace Erp.Api.Tests;
 
-public class InventoryTests : IClassFixture<WebApplicationFactory<Program>>
+public class InventoryTests : IClassFixture<TestApiFactory>
 {
-    private readonly WebApplicationFactory<Program> _factory;
-    public InventoryTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    private readonly TestApiFactory _factory;
+    public InventoryTests(TestApiFactory factory) => _factory = factory;
 
     private async Task<HttpResponseMessage> PostAsync(string path, object body, string? token)
     {

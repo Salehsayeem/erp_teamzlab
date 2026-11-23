@@ -1,9 +1,20 @@
 using System.Text.Json.Serialization;
+using Erp.Api;
+using Erp.Api.Data;
 using Erp.Api.Middleware;
 using Erp.Api.Services;
+using Microsoft.EntityFrameworkCore;
+
+EnvLoader.Load(); // .env (resolved upward from cwd) → process env; missing file = no-op (task-2 §1)
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Services.AddErpServices(); // Db.I + all IX → X pairs (singletons)
+// connection string name Default — assembled from PG* env vars unless a fixture/test supplies an
+// explicit ConnectionStrings:Default override. Npgsql connects lazily: the API boots with no DB touched.
+var connectionString = builder.Configuration.GetConnectionString("Default") is { Length: > 0 } explicitCs
+    ? explicitCs
+    : DbConfig.Assemble(key => builder.Configuration[key!]);
+builder.Services.AddDbContext<ErpDbContext>(o => o.UseNpgsql(connectionString));
+builder.Services.AddErpServices(); // scoped repos + services behind the Task-1 interfaces
 // Envelope.Ok/Fail and Idem.Wrap still respond via Results.Json, which reads Http.Json options —
 // keep the enum-string converter here so response bodies stay byte-identical
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));

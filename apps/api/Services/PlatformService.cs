@@ -1,11 +1,10 @@
 using Erp.Api.Interfaces;
-using Erp.Api.Data;
 
 namespace Erp.Api.Services;
 
-public sealed class PlatformService(Db db) : IPlatformService
+public sealed class PlatformService(IAuditRepository audit) : IPlatformService
 {
-    public object AuditEvents() => db.WithLock(() => db.Audit);
+    public object AuditEvents() => audit.AllEvents();
 
-    public object Outbox() => db.WithLock(() => db.Outbox); // dev visibility only
+    public object Outbox() => audit.AllOutbox(); // dev visibility only
 }
