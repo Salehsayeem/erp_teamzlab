@@ -118,6 +118,13 @@
   }
 }
 
+/* focus — global, keyboard-only, never removed (ui-direction §5.1).
+   :where() keeps specificity at 0 so component rules below still win. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
 /* type scale */
 .t-display { margin: 0; font-size: var(--fs-display); line-height: var(--lh-display); font-weight: 600; }
 .t-title { margin: 0; font-size: var(--fs-title); line-height: var(--lh-title); font-weight: 600; }
@@ -142,6 +149,10 @@
 .tiles { display: grid; grid-template-columns: 1fr; gap: var(--sp-3); }
 .tile__label { margin: 0; color: var(--text-muted); }
 .tile__value { margin: 0; font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Menlo, monospace; font-size: var(--fs-display); line-height: var(--lh-display); color: var(--text); }
+/* delta = color + ▲/▼ + words in markup; markup keeps the words, CSS only tints (ui-direction §3.3) */
+.tile__delta { margin: 0; font-size: var(--fs-caption); line-height: var(--lh-caption); color: var(--text-muted); }
+.tile__delta[data-dir="up"] { color: var(--success); }
+.tile__delta[data-dir="down"] { color: var(--danger); }
 
 /* empty / error states + alert banner */
 .state { padding: var(--sp-6) var(--sp-4); text-align: center; }
@@ -157,7 +168,7 @@
 .field--error .input { border-color: var(--input-border-error); }
 .field__error { margin: 0; color: var(--danger); font-size: var(--fs-caption); line-height: var(--lh-caption); }
 .input { width: 100%; max-width: 320px; padding: var(--sp-2) var(--sp-3); background: var(--input-bg); border: 1px solid var(--input-border); border-radius: 6px; color: var(--text); font-size: var(--fs-body); line-height: var(--lh-body); }
-.input:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); border-color: var(--input-border-focus); }
+.input:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: 0; border-color: var(--input-border-focus); }
 .input:disabled, .input[readonly] { background: var(--input-bg-readonly); cursor: not-allowed; opacity: 0.7; }
 .form-grid { display: grid; grid-template-columns: 1fr; gap: var(--sp-3); }
 
@@ -166,7 +177,7 @@
 .btn:hover { background: var(--button-bg-hover); }
 .btn:active { background: var(--button-bg-active); }
 .btn:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
-.btn:disabled { background: var(--button-bg-disabled); border-color: var(--button-border-disabled); color: var(--button-fg-disabled); cursor: not-allowed; }
+.btn:disabled, .btn[aria-disabled="true"] { background: var(--button-bg-disabled); border-color: var(--button-border-disabled); color: var(--button-fg-disabled); cursor: not-allowed; }
 .btn--secondary { background: var(--bg); border-color: var(--border); color: var(--text); }
 .btn--secondary:hover { background: var(--surface); }
 .btn--secondary:disabled { background: var(--surface); }
@@ -191,6 +202,9 @@
 .table td { padding: var(--sp-3); border-block-end: 1px solid var(--border); vertical-align: top; }
 .table td.mono { font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Menlo, monospace; font-size: var(--fs-mono); line-height: var(--lh-mono); }
 .table td:has(> .row-actions) { text-align: end; }
+/* zebra + row hover (ui-direction §5.2): surface fill reads on both, inset ring shows the row edge */
+.table tbody tr:nth-child(even) { background: var(--surface); }
+.table tbody tr:hover { background: var(--surface); outline: 1px solid var(--text-muted); outline-offset: -1px; }
 .row-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); justify-content: flex-end; align-items: center; }
 .table--lines { margin-block-start: var(--sp-2); }
 .table--lines th { background: var(--bg); }
@@ -198,7 +212,7 @@
 
 /* skeleton + reduced motion */
 .skeleton { display: flex; flex-direction: column; gap: var(--sp-2); }
-.skeleton__row { height: 16px; border-radius: 4px; background: linear-gradient(90deg, var(--surface) 25%, var(--badge-warning-bg) 45%, var(--surface) 65%); background-size: 200% 100%; animation: shimmer 1.4s ease infinite; }
+.skeleton__row { height: 16px; border-radius: 4px; background: linear-gradient(90deg, var(--surface) 25%, var(--border) 50%, var(--surface) 65%); background-size: 200% 100%; animation: shimmer 1.4s ease infinite; }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) {
   .skeleton__row, .btn__spinner { animation: none; }
