@@ -45,6 +45,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 8. MED: negative-path tests missing (approve-as-finance, reverse-as-proc, receive-on-draft, wrong-SKU, over-receipt)
 9. MED: malformed JSON bodies bypass envelope — binding-failure filter → VALIDATION_ERROR
 10. LOW: /stock,/audit-events,/outbox reads unlocked; decimal.Round → MidpointRounding.AwayFromZero (ERP-FINANCE-010)
+11. OPEN: PO "send" step (approved→sent) has no endpoint/button (02_AppFlow §3.1) — decide if pilot needs it; Receive already accepts Approved|Sent
+12. OPEN (design): warning color #B26A00 fails 4.5:1 as text — use dot/border only; controls use text-muted edges (border is decorative); add Noto Sans Bengali fallback (docs/design/ui-direction.md)
 
 ## Phase 3 — Core transactional domains (Wave 2, per domain — order by D-01/D-02)
 - [ ] FINANCE deep: AP/AR close, periods/locks, tax (**D-01**)
