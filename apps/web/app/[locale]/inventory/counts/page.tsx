@@ -44,6 +44,9 @@ export default function StockCountsPage() {
 
   const locations = data ?? [];
   const locCode = useMemo(() => new Map(locations.map((l) => [l.id, l.code])), [locations]);
+  // Maker-checker: only a *confirmed* maker (meId resolved) replaces the button with the note;
+  // while meId is unresolved the button stays visible but disabled (no doomed request).
+  const isMaker = openCountData !== null && meId !== null && openCountData.createdBy === meId;
 
   function setLine(i: number, patch: Partial<LineForm>) {
     setLines((prev) => prev.map((ln, idx) => (idx === i ? { ...ln, ...patch } : ln)));
@@ -173,7 +176,6 @@ export default function StockCountsPage() {
                     error={qtyError}
                   />
                   <div className="field">
-                    <span className="sr-only">{`${t.inventory.counts.removeLine} ${i + 1}`}</span>
                     <Button
                       type="button"
                       variant="secondary"
@@ -205,11 +207,11 @@ export default function StockCountsPage() {
             </Badge>
           </h2>
           <Table columns={countColumns} rows={openCountData.items} caption={t.inventory.counts.title} />
-          {openCountData.createdBy === meId && meId !== null ? (
+          {isMaker ? (
             <p className="banner" role="status">{t.inventory.counts.makerChecker}</p>
-          ) : closeError ? null : (
+          ) : (
             <div className="row-actions" style={{ justifyContent: "flex-start" }}>
-              <Button loading={closing} onClick={() => void submitClose()}>{t.inventory.counts.close}</Button>
+              <Button loading={closing} disabled={meId === null} onClick={() => void submitClose()}>{t.inventory.counts.close}</Button>
             </div>
           )}
         </section>

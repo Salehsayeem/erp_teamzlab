@@ -25,62 +25,53 @@ export default function WarehousesPage() {
 
   const [whForm, setWhForm] = useState<WhForm>({ code: "", name: "" });
   const [locForm, setLocForm] = useState<LocForm>({ warehouseId: "", code: "", name: "" });
-  const [errors, setErrors] = useState<FormErrors>({});
+  const [whErrors, setWhErrors] = useState<FormErrors>({});
+  const [locErrors, setLocErrors] = useState<FormErrors>({});
   const [createError, setCreateError] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [whCreating, setWhCreating] = useState(false);
+  const [locCreating, setLocCreating] = useState(false);
 
   const warehouses = wh.data ?? [];
   const locations = locs.data ?? [];
   const whCode = useMemo(() => new Map(warehouses.map((w) => [w.id, w.code])), [warehouses]);
 
-  async function submit(create: () => Promise<{ ok: boolean; message: string; code: string }>, reset: () => void) {
-    if (!token) return;
-    setCreating(true);
-    setCreateError(null);
-    const res = await create();
-    setCreating(false);
-    if (!res.ok) {
-      setCreateError(res.code === "NETWORK" ? t.common.networkError : res.message);
-      return;
-    }
-    reset();
-  }
-
-  function submitWarehouse(e: FormEvent) {
+  async function submitWarehouse(e: FormEvent) {
     e.preventDefault();
     const errs: FormErrors = {};
     if (!whForm.code.trim()) errs.code = t.inventory.warehouses.errors.codeRequired;
     if (!whForm.name.trim()) errs.name = t.inventory.warehouses.errors.nameRequired;
-    setErrors(errs);
+    setWhErrors(errs);
     if (errs.code || errs.name || !token) return;
-    void submit(
-      async () => {
-        const res = await createWarehouse(token, { code: whForm.code.trim(), name: whForm.name.trim() });
-        if (!res.ok) return { ok: false, code: res.code, message: `${t.inventory.warehouses.createWhFailed} ${res.message}` };
-        wh.setData((prev) => [res.data, ...(prev ?? [])]);
-        return { ok: true, code: "", message: "" };
-      },
-      () => setWhForm({ code: "", name: "" }),
-    );
+    setWhCreating(true);
+    setCreateError(null);
+    const res = await createWarehouse(token, { code: whForm.code.trim(), name: whForm.name.trim() });
+    setWhCreating(false);
+    if (!res.ok) {
+      setCreateError(res.code === "NETWORK" ? t.common.networkError : `${t.inventory.warehouses.createWhFailed} ${res.message}`);
+      return;
+    }
+    wh.setData((prev) => [res.data, ...(prev ?? [])]);
+    setWhForm({ code: "", name: "" });
   }
 
-  function submitLocation(e: FormEvent) {
+  async function submitLocation(e: FormEvent) {
     e.preventDefault();
     const errs: FormErrors = {};
     if (!locForm.warehouseId) errs.warehouseId = t.inventory.warehouses.errors.warehouseRequired;
     if (!locForm.code.trim()) errs.code = t.inventory.warehouses.errors.codeRequired;
     if (!locForm.name.trim()) errs.name = t.inventory.warehouses.errors.nameRequired;
-    setErrors(errs);
+    setLocErrors(errs);
     if (errs.warehouseId || errs.code || errs.name || !token) return;
-    void submit(
-      async () => {
-        const res = await createLocation(token, { warehouseId: locForm.warehouseId, code: locForm.code.trim(), name: locForm.name.trim() });
-        if (!res.ok) return { ok: false, code: res.code, message: `${t.inventory.warehouses.createLocFailed} ${res.message}` };
-        locs.setData((prev) => [res.data, ...(prev ?? [])]);
-        return { ok: true, code: "", message: "" };
-      },
-      () => setLocForm({ warehouseId: locForm.warehouseId, code: "", name: "" }),
-    );
+    setLocCreating(true);
+    setCreateError(null);
+    const res = await createLocation(token, { warehouseId: locForm.warehouseId, code: locForm.code.trim(), name: locForm.name.trim() });
+    setLocCreating(false);
+    if (!res.ok) {
+      setCreateError(res.code === "NETWORK" ? t.common.networkError : `${t.inventory.warehouses.createLocFailed} ${res.message}`);
+      return;
+    }
+    locs.setData((prev) => [res.data, ...(prev ?? [])]);
+    setLocForm({ warehouseId: locForm.warehouseId, code: "", name: "" });
   }
 
   function retryAll() {
@@ -119,13 +110,13 @@ export default function WarehousesPage() {
         ) : (
           <Table<Warehouse> columns={whColumns} rows={warehouses} caption={t.inventory.warehouses.whSection} />
         )}
-        <form onSubmit={(e) => submitWarehouse(e)}>
+        <form onSubmit={(e) => void submitWarehouse(e)}>
           <h3 className="t-body-strong">{t.inventory.warehouses.addWhTitle}</h3>
           <div className="form-grid">
-            <Input id="wh-code" label={t.inventory.warehouses.code} value={whForm.code} onChange={(e) => setWhForm({ ...whForm, code: e.target.value })} error={errors.code} />
-            <Input id="wh-name" label={t.inventory.warehouses.name} value={whForm.name} onChange={(e) => setWhForm({ ...whForm, name: e.target.value })} error={errors.name} />
+            <Input id="wh-code" label={t.inventory.warehouses.code} value={whForm.code} onChange={(e) => setWhForm({ ...whForm, code: e.target.value })} error={whErrors.code} />
+            <Input id="wh-name" label={t.inventory.warehouses.name} value={whForm.name} onChange={(e) => setWhForm({ ...whForm, name: e.target.value })} error={whErrors.name} />
           </div>
-          <p><Button type="submit" loading={creating}>{t.inventory.warehouses.create}</Button></p>
+          <p><Button type="submit" loading={whCreating}>{t.inventory.warehouses.create}</Button></p>
         </form>
       </section>
 
@@ -136,7 +127,7 @@ export default function WarehousesPage() {
         ) : (
           <Table<StockLocation> columns={locColumns} rows={locations} caption={t.inventory.warehouses.locSection} />
         )}
-        <form onSubmit={(e) => submitLocation(e)}>
+        <form onSubmit={(e) => void submitLocation(e)}>
           <h3 className="t-body-strong">{t.inventory.warehouses.addLocTitle}</h3>
           <div className="form-grid">
             <Select
@@ -146,12 +137,12 @@ export default function WarehousesPage() {
               options={warehouses.map((w) => ({ value: w.id, label: `${w.code} — ${w.name}` }))}
               value={locForm.warehouseId}
               onChange={(e) => setLocForm({ ...locForm, warehouseId: e.target.value })}
-              error={errors.warehouseId}
+              error={locErrors.warehouseId}
             />
-            <Input id="loc-code" label={t.inventory.warehouses.code} value={locForm.code} onChange={(e) => setLocForm({ ...locForm, code: e.target.value })} error={errors.code} />
-            <Input id="loc-name" label={t.inventory.warehouses.name} value={locForm.name} onChange={(e) => setLocForm({ ...locForm, name: e.target.value })} error={errors.name} />
+            <Input id="loc-code" label={t.inventory.warehouses.code} value={locForm.code} onChange={(e) => setLocForm({ ...locForm, code: e.target.value })} error={locErrors.code} />
+            <Input id="loc-name" label={t.inventory.warehouses.name} value={locForm.name} onChange={(e) => setLocForm({ ...locForm, name: e.target.value })} error={locErrors.name} />
           </div>
-          <p><Button type="submit" loading={creating}>{t.inventory.warehouses.create}</Button></p>
+          <p><Button type="submit" loading={locCreating}>{t.inventory.warehouses.create}</Button></p>
         </form>
       </section>
     </div>
