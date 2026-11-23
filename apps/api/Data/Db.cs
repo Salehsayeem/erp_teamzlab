@@ -1,6 +1,6 @@
 namespace Erp.Api.Data;
 
-// In-memory singleton store + seed (tenant T-001, entity LE-001, 3 users, pilot reference data).
+// In-memory singleton store + seed (tenant T-001, entity LE-001, 4 users, pilot reference data).
 // shortcut: whole store is volatile, upgrade path = EF Core repositories behind the same services
 
 public sealed class Db
@@ -16,6 +16,9 @@ public sealed class Db
     public List<Supplier> Suppliers { get; } = [];
     public List<PurchaseOrder> PurchaseOrders { get; } = [];
     public List<Receipt> Receipts { get; } = [];
+    public List<Customer> Customers { get; } = [];
+    public List<SalesOrder> SalesOrders { get; } = [];
+    public List<Shipment> Shipments { get; } = [];
     public List<StockLevel> Stock { get; } = [];
     public List<Journal> Journals { get; } = [];
     public List<AuditEvent> Audit { get; } = [];
@@ -36,17 +39,20 @@ public sealed class Db
         Roles.AddRange(
             new Role("R-ADMIN", "tenant_admin", ["*"]),
             new Role("R-PROC", "procurement_officer", ["suppliers:write", "po:write", "receipts:write"]),
-            new Role("R-FIN", "finance_officer", ["journals:read", "journals:approve", "ap:read"]));
+            new Role("R-FIN", "finance_officer", ["journals:read", "journals:approve", "ap:read"]),
+            new Role("R-SALES", "sales_officer", ["customers:write", "so:write", "shipments:write"]));
 
         Users.AddRange(
             new User("U-001", "admin@teamzlab.dev", "Tenant Admin", true),
             new User("U-002", "procurve@teamzlab.dev", "Procure Officer", true),
-            new User("U-003", "finance@teamzlab.dev", "Finance Officer", true));
+            new User("U-003", "finance@teamzlab.dev", "Finance Officer", true),
+            new User("U-004", "sales@teamzlab.dev", "Sales Officer", true));
 
         Memberships.AddRange(Users.Select(u => new Membership(u.Id, Tenant.Id, Entity.Id, u.Id switch
         {
             "U-001" => "R-ADMIN",
             "U-002" => "R-PROC",
+            "U-004" => "R-SALES",
             _ => "R-FIN",
         })));
 

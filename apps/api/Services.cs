@@ -31,6 +31,12 @@ public static class Guards
         if (lines is null || lines.Count == 0) return "At least one order line is required.";
         return lines.Any(l => l.Qty <= 0 || l.UnitPrice < 0) ? "Line qty must be > 0 and unit price must be >= 0." : null;
     }
+
+    public static string? CheckLines(IReadOnlyList<SoLine>? lines)
+    {
+        if (lines is null || lines.Count == 0) return "At least one order line is required.";
+        return lines.Any(l => l.Qty <= 0 || l.UnitPrice < 0) ? "Line qty must be > 0 and unit price must be >= 0." : null;
+    }
 }
 
 public static class PoService
@@ -98,6 +104,100 @@ public static class ReceiptService
         Audit.Emit(db, user, "procurement.receipt.posted", new { receiptId = receipt.Id, poId, itemSku, qty, journalId = journal.Id });
         return (receipt, journal, null);
     }
+}
+
+public static class SalesService
+{
+    public static SalesOrder Create(Db db, CurrentUser user, string customerId, IReadOnlyList<SoLine> lines)
+    {
+        var so = new SalesOrder(db.NextDoc("SO"), db.Tenant.Id, db.Entity.Id, customerId, SoStatus.Draft, lines, user.Id, DateTimeOffset.UtcNow);
+        db.SalesOrders.Add(so);
+        Audit.Log(db, user, "create", "sales_order", so.Id, $"SO created for customer {customerId} with {lines.Count} line(s)");
+        return so;
+    }
+
+    public static (SalesOrder? so, string? error) Approve(Db db, CurrentUser approver, string soId, string? reason)
+    {
+        var so = db.SalesOrders.FirstOrDefault(s => s.Id == soId);
+        if (so is null) return (null, "Sales order not found.");
+        if (!approver.Has("so:write") && !approver.Has("*")) return (null, "You are not allowed to approve sales orders.");
+        if (so.Status != SoStatus.PendingApproval) return (null, $"Only pending sales orders can be approved (current: {so.Status}).");
+        if (so.CreatedBy == approver.Id) return (null, "Maker-checker: the creator cannot approve their own sales order.");
+
+        var approved = reason is null
+            ? so with { Status = SoStatus.Confirmed, ApprovedBy = approver.Id, ApprovedAt = DateTimeOffset.UtcNow }
+            : so with { Status = SoStatus.Rejected, ApprovedBy = approver.Id, ApprovedAt = DateTimeOffset.UtcNow, RejectionReason = reason };
+        db.SalesOrders[db.SalesOrders.IndexOf(so)] = approved;
+        Audit.Log(db, approver, reason is null ? "approve" : "reject", "sales_order", so.Id,
+            reason is null ? $"SO approved by {approver.Email}" : $"SO rejected: {reason}");
+        if (reason is null) Audit.Emit(db, approver, "sales.so.approved", new { soId = so.Id, approver = approver.Id });
+        return (approved, null);
+    }
+
+    public static (Shipment? shipment, Journal? journal, string? code, string? error) Ship(
+        Db db, CurrentUser user, string soId, string itemSku, decimal qty)
+    {
+        var so = db.SalesOrders.FirstOrDefault(s => s.Id == soId);
+        if (so is null) return (null, null, "SHIPMENT_ERROR", "Sales order not found.");
+        if (so.Status != SoStatus.Confirmed) return (null, null, "SHIPMENT_ERROR", $"Only confirmed sales orders can be shipped (current: {so.Status}).");
+        if (qty <= 0) return (null, null, "SHIPMENT_ERROR", "Shipment qty must be greater than 0.");
+        if (so.Lines.FirstOrDefault(l => l.ItemSku == itemSku) is null) return (null, null, "SHIPMENT_ERROR", $"Item {itemSku} is not on this sales order.");
+
+        var idx = db.Stock.FindIndex(s => s.TenantId == db.Tenant.Id && s.LegalEntityId == db.Entity.Id && s.ItemSku == itemSku);
+        var onHand = idx >= 0 ? db.Stock[idx].QtyOnHand : 0m;
+        if (onHand < qty)
+            return (null, null, "INSUFFICIENT_STOCK", $"Insufficient stock for {itemSku}: available {onHand}, requested {qty}.");
+
+        db.Stock[idx] = db.Stock[idx] with { QtyOnHand = onHand - qty };
+
+        var shipment = new Shipment(db.NextDoc("SHP"), db.Tenant.Id, db.Entity.Id, soId, itemSku, qty, DateTimeOffset.UtcNow, user.Id);
+        db.Shipments.Add(shipment);
+
+        // COGS at inventory cost basis — weighted average of receipt PO unit prices (0 when no receipts yet)
+        var receipts = db.Receipts.Where(r => r.ItemSku == itemSku).ToList();
+        var totalQty = receipts.Sum(r => r.Qty);
+        var unitCost = totalQty > 0
+            ? decimal.Round(receipts.Sum(r => r.Qty * CostOf(db, r.PurchaseOrderId, itemSku)) / totalQty, 4)
+            : 0m;
+        var amount = decimal.Round(unitCost * qty, 2);
+        var journal = new Journal(db.NextDoc("J"), db.Tenant.Id, db.Entity.Id, JournalStatus.Posted,
+            $"COGS for shipment {shipment.Id} (SO {soId})",
+            [new JournalLine("5100", "Cost of Goods Sold", amount, 0), new JournalLine("1400", "Inventory", 0, amount)],
+            DateTimeOffset.UtcNow, user.Id);
+        db.Journals.Add(journal);
+
+        // all lines shipped? flip SO status
+        var shippedBySku = db.Shipments.Where(sh => sh.SalesOrderId == soId).GroupBy(sh => sh.ItemSku).ToDictionary(g => g.Key, g => g.Sum(x => x.Qty));
+        if (so.Lines.All(l => shippedBySku.TryGetValue(l.ItemSku, out var got) && got >= l.Qty))
+            db.SalesOrders[db.SalesOrders.IndexOf(so)] = so with { Status = SoStatus.Shipped };
+
+        Audit.Log(db, user, "ship", "shipment", shipment.Id, $"Shipped {qty} x {itemSku} against {soId}; journal {journal.Id} posted");
+        Audit.Emit(db, user, "sales.shipment.posted", new { shipmentId = shipment.Id, soId, itemSku, qty, journalId = journal.Id });
+        return (shipment, journal, null, null);
+    }
+
+    // shortcut: approval gate = SO approval; separate invoice approval when spec card demands it
+    public static (Journal? journal, string? error) Invoice(Db db, CurrentUser user, string soId)
+    {
+        var so = db.SalesOrders.FirstOrDefault(s => s.Id == soId);
+        if (so is null) return (null, "Sales order not found.");
+        if (so.Status != SoStatus.Shipped) return (null, $"Only shipped sales orders can be invoiced (current: {so.Status}).");
+
+        var total = so.Lines.Sum(l => decimal.Round(l.Qty * l.UnitPrice, 2));
+        var journal = new Journal(db.NextDoc("J"), db.Tenant.Id, db.Entity.Id, JournalStatus.Posted,
+            $"AR invoice for SO {soId}",
+            [new JournalLine("1200", "Accounts Receivable", total, 0), new JournalLine("4000", "Sales Revenue", 0, total)],
+            DateTimeOffset.UtcNow, user.Id);
+        db.Journals.Add(journal);
+        db.SalesOrders[db.SalesOrders.IndexOf(so)] = so with { Status = SoStatus.Invoiced };
+
+        Audit.Log(db, user, "invoice", "sales_order", so.Id, $"SO invoiced for {total}; journal {journal.Id} posted");
+        Audit.Emit(db, user, "sales.invoice.posted", new { soId, total, journalId = journal.Id });
+        return (journal, null);
+    }
+
+    private static decimal CostOf(Db db, string poId, string itemSku) =>
+        db.PurchaseOrders.First(p => p.Id == poId).Lines.First(l => l.ItemSku == itemSku).UnitPrice;
 }
 
 public static class JournalService

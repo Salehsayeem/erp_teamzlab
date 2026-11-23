@@ -4,6 +4,7 @@ namespace Erp.Api;
 // shortcut: no persistence, swaps to EF Core + PostgreSQL when DB is reachable (D-10)
 
 public enum PoStatus { Draft, PendingApproval, Approved, Sent, Received, Rejected }
+public enum SoStatus { Draft, PendingApproval, Confirmed, Shipped, Invoiced, Rejected }
 public enum JournalStatus { Pending, Posted }
 
 public record Tenant(string Id, string Name);
@@ -14,6 +15,11 @@ public record Membership(string UserId, string TenantId, string LegalEntityId, s
 public record User(string Id, string Email, string DisplayName, bool Active);
 
 public record Supplier(string Id, string TenantId, string LegalEntityId, string Name, string TaxId, string Email, DateTimeOffset CreatedAt, string CreatedBy);
+
+public record Customer(string Id, string TenantId, string LegalEntityId, string Name, string TaxId, string Email, DateTimeOffset CreatedAt, string CreatedBy);
+public record SoLine(string Id, string ItemSku, string Description, decimal Qty, decimal UnitPrice);
+public record SalesOrder(string Id, string TenantId, string LegalEntityId, string CustomerId, SoStatus Status, IReadOnlyList<SoLine> Lines, string CreatedBy, DateTimeOffset CreatedAt, string? ApprovedBy = null, DateTimeOffset? ApprovedAt = null, string? RejectionReason = null);
+public record Shipment(string Id, string TenantId, string LegalEntityId, string SalesOrderId, string ItemSku, decimal Qty, DateTimeOffset ShippedAt, string ShippedBy);
 
 public record PoLine(string Id, string ItemSku, string Description, decimal Qty, decimal UnitPrice);
 public record PurchaseOrder(
@@ -37,4 +43,8 @@ public record CreateSupplierReq(string Name, string TaxId, string Email);
 public record CreatePoReq(string SupplierId, IReadOnlyList<PoLine> Lines);
 public record ApprovePoReq(string? Reason);
 public record CreateReceiptReq(string PurchaseOrderId, string ItemSku, decimal Qty);
+public record CreateCustomerReq(string Name, string TaxId, string Email);
+public record CreateSoReq(string CustomerId, IReadOnlyList<SoLine> Lines);
+public record ApproveSoReq(string? Reason);
+public record ShipReq(string ItemSku, decimal Qty);
 public record TokenExchangeReq(string Email);
