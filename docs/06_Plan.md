@@ -14,14 +14,14 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 - [ ] Defer: D-02, D-03, D-05, D-06, D-08, D-12, D-13, D-14 to the phase that needs them
 
 ## Phase 1 — Foundation (Wave 1)
-- [x] Repo scaffold: `apps/api` (.NET 11) done, `apps/web` (Next.js) in progress, tooling pinned locally (D-09 default: .NET 11)
+- [x] Repo scaffold: `apps/api` (.NET 11) done, `apps/web` (Next.js) done — build passes (Next 16.4.6), tooling pinned locally (D-09 default: .NET 11)
 - [x] Tenant + legal-entity context middleware; server-side scoping in every handler (mock store)
 - [x] Auth stub + memberships/RBAC (token = user id; real IdP when D-13 chosen)
 - [ ] RLS policies + isolation tests — deferred until DB reachable (D-10); service-layer scoping meanwhile
 - [x] Audit log (append-only) + evidence accessor (`GET /api/v1/audit-events`)
 - [x] Outbox event envelope v1 (writes on approve/receipt); inbox consumer pending
 - [x] Response envelope + global error middleware + validation pipeline
-- [~] i18n scaffold: dictionaries en+bn, locale routing (web agent building)
+- [x] i18n scaffold: dictionaries en+bn, locale routing (Dict key-parity; all 6 pages render both locales)
 - [ ] EF Core migration conventions + CI check — blocked on DB (D-10)
 - [x] Telemetry: correlationId middleware end-to-end
 - [x] Seed: one tenant, one entity, 3 users (admin/procurve/finance), 3 roles
@@ -29,7 +29,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 ## Phase 2 — Pilot slice (Wave 1 flows)
 - [x] Procure-to-receive API: suppliers → PO → submit → maker-checker approval → receipt → stock + balanced AP accrual journal — 3/3 tests green
 - [x] Journal reversal with linked provenance (`/{id}/reversals`)
-- [~] Procure-to-receive UI (web agent in progress)
+- [x] Procure-to-receive UI: suppliers + PO screens w/ per-status actions (4-user picker + demo credentials hint on login)
 - [ ] Order-to-fulfill: customers → order → approval → stock allocation → shipment → AR invoice draft
 - [x] Audit evidence visible for every step (`GET /api/v1/audit-events`)
 - [x] Flow test (whole-chain coverage) + validation + authz tests
@@ -53,7 +53,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 > Screen counts from the per-module inventory in `02_AppFlow.md` §4 (derived from `spec_snapshot.md` card titles).
 
 - [ ] FINANCE deep: AP/AR close, periods/locks, tax (**D-01**) (20 screens)
-- [ ] INVENTORY deep: valuation, counts, transfers (16 screens)
+- [~] INVENTORY deep: valuation, counts, transfers (16 screens) — API slice DONE (locations, transfers, counts+maker-checker, valuation; 17/17 tests, commit ec4fcb4); UI pending
 - [ ] PROCUREMENT deep: contracts, sourcing (12 screens)
 - [ ] SALES deep: CRM, billing, dunning (14 screens)
 - [ ] ASSETS: projects, service, fixed assets (15 screens)
