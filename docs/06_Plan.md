@@ -34,7 +34,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 - [x] Audit evidence visible for every step (`GET /api/v1/audit-events`)
 - [x] Flow test (whole-chain coverage) + validation + authz tests
 
-## Backlog — critic review findings (2026-11-23, fix after order-to-fulfill agent lands)
+## Backlog — critic review findings (2026-11-23) — ✅ ALL FIXED commit `732d9fe`, 13/13 tests green
+> Known limits: no negative scoping test possible on mock store (single tenant/entity); idempotency replays cached error responses too (semantically correct).
 1. HIGH: tenant+entity scoping missing on every id lookup (Services.cs, Program.cs) — entity context never used
 2. HIGH: over-receipt unbounded — reject received+qty > line.Qty before journal (ERP-PROCUREMENT-057) + test
 3. HIGH: Idempotency-Key absent on create endpoints (dup receipts = dup stock+journals) — store key→response map in Db
