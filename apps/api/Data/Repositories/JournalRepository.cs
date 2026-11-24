@@ -26,5 +26,19 @@ public sealed class JournalRepository(ErpDbContext db, EntityContext ec) : IJour
         }
     }
 
+    // approval: append tax control lines (shadow tenant columns set — they are new owned rows)
+    // and flip Pending → Posted on the tracked entity
+    public void MarkPosted(Journal journal, IReadOnlyList<JournalLine>? additionalLines = null)
+    {
+        if (additionalLines is not null)
+            foreach (var line in additionalLines)
+            {
+                db.Entry(line).Property("TenantId").CurrentValue = ec.TenantId;
+                db.Entry(line).Property("LegalEntityId").CurrentValue = ec.EntityId;
+                journal.Lines.Add(line);
+            }
+        db.Entry(journal).Property(nameof(Journal.Status)).CurrentValue = JournalStatus.Posted;
+    }
+
     public int Save() => db.SaveChanges();
 }
