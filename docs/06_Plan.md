@@ -2,7 +2,7 @@
 
 > Status: LIVING FILE — update after EVERY completed step (`[ ]` → `[x]` + date + evidence note). Ordered by dependency.
 
-> ⏸ **PAUSED 2026-11-24 (owner command: resume tomorrow).** State: Phase 1+2 done. **T1 layered restructure DONE** (efca865, review clean, 17/17 frozen contract). **T2 PostgreSQL persistence COMMITTED** (5a549ee: EF Core+Npgsql 19 tables, repos, migration seed, idempotency table; 18/18 green incl. persistence proof on local PG; review Approved, 1 Important follow-up IN FLIGHT: atomic idempotency fix). **INVENTORY UI DONE** (8275d73+4119c2c on `feat/inventory-ui`, review clean, build 24/24, browser-verified). **T3 live insert/get verification NOT started.** Tree holds uncommitted peer-session dev-env work (CORS/README/.env/2 plan lines) + UNTRACKED duplicate migration `20261123201118_InitialCreate` — DELETE that pair (InitialSchema already committed in 5a549ee). **Resume order:** (1) land + re-review the T2 idempotency fix; (2) settle peer edits, delete the duplicate migration pair; (3) T3 `verify-all-features.sh` vs local PG (superuser postgres/postgres — .env creds are remote-only); (4) merge `feat/backend-core` + `feat/inventory-ui` → `dev-sayeem` → FULL regression (dotnet suite + `npm run build` + endpoint smoke + fix uikit `sr-only` F4) → `main` (branch tiers per CLAUDE.md); (5) T4 ASSETS / T5 FINANCE — briefs ready with rulings in `.superpowers/sdd/06_Plan/task-4|5-brief-draft.md`. Working ledger: `.superpowers/sdd/06_Plan/progress.md`. Read CLAUDE.md + docs 01–05 first.
+> ▶ **ACTIVE 2026-11-24 (post-pause session, owner driving via fan-out).** Resume steps (1)–(4) from the old banner are DONE. **C1 atomic idempotency landed** (`3414aae`, RED→GREEN, fresh review: no Critical/Important). **Peer edits settled** (`668e959` strict CORS, `942032d` docs); the duplicate `20261123201118_InitialCreate` pair is gone (backup kept in the SDD workspace). **T3 done**: `scripts/verify-all-features.sh`, 45/45 vs local PG :5433 — it surfaced two real bugs, both fixed RED→GREEN: status flips double-counted committed rows (`3c69dcd`, PO at 9/10 flipped Received) and the receiving dock drifted to the first-created location (InventoryRepository, pinned to seeded `LOC-A1`). **Merge wave DONE**: `feat/backend-core` + `feat/assets-api` (T4: 31 pass + 1 honest Skip / 32) + `fix/cors-origins` + `fix/web-sr-only` + `feat/inventory-ui` merged clean into `dev-sayeem`; regression on the merge: suite 38 pass + 1 skip / 39, `npm run build` green, smoke 45/45, `sr-only` in place. **In flight:** T5 FINANCE (agent, `feat/finance-api`), T4 review (opus). **To reach `main`:** T5 review + merge (resolve snapshot/DI overlap with T4), un-stub T4's `PERIOD_LOCKED` test on T5's periods, re-run the regression, then `dev-sayeem` → `main`. Working ledger: `.superpowers/sdd/06_Plan/progress.md`.
 
 Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by decision D-xx
 
@@ -33,7 +33,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 - [x] Procure-to-receive API: suppliers → PO → submit → maker-checker approval → receipt → stock + balanced AP accrual journal — 3/3 tests green
 - [x] Journal reversal with linked provenance (`/{id}/reversals`)
 - [x] Procure-to-receive UI: suppliers + PO screens w/ per-status actions (4-user picker + demo credentials hint on login)
-- [ ] Order-to-fulfill: customers → order → approval → stock allocation → shipment → AR invoice draft
+- [x] Order-to-fulfill: customers → order → approval → stock allocation → shipment → AR invoice draft (2026-11-24, smoke-proven end-to-end by T3; maker-checker + COGS/AR journals)
 - [x] Audit evidence visible for every step (`GET /api/v1/audit-events`)
 - [x] Flow test (whole-chain coverage) + validation + authz tests
 
@@ -56,7 +56,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 > Screen counts from the per-module inventory in `02_AppFlow.md` §4 (derived from `spec_snapshot.md` card titles).
 
 - [ ] FINANCE deep: AP/AR close, periods/locks, tax (**D-01**) (20 screens)
-- [~] INVENTORY deep: valuation, counts, transfers (16 screens) — API slice DONE (locations, transfers, counts+maker-checker, valuation; 17/17 tests, commit ec4fcb4); UI pending
+- [x] INVENTORY deep: valuation, counts, transfers (16 screens) — API slice DONE (17/17 tests, commit ec4fcb4) + UI DONE (8275d73+4119c2c, build 24/24, browser-verified en+bn)
 - [ ] PROCUREMENT deep: contracts, sourcing (12 screens)
 - [ ] SALES deep: CRM, billing, dunning (14 screens)
 - [ ] ASSETS: projects, service, fixed assets (15 screens)
@@ -76,3 +76,8 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 | 2026-11-24 | Dev-env readiness: README full run guide (prereqs, EF migrations bootstrap, `TESTPG*` vs `PG*`, troubleshooting), strict CORS on the API (preflight before auth), `dotnet-ef` tool manifest, documented `.env.example` | branch `feat/backend-core` — this session; see README "Run it" |
 | 2026-11-24 | PostgreSQL persistence via EF Core + Npgsql (19 tables, 8 repos + number-series/idempotency stores, InitialSchema migration w/ seed, per-class throwaway test DBs) | `5a549ee` feat/backend-core — `dotnet test apps/api-tests` 18/18 (17 untouched + 1 persistence proof, RED→GREEN); review Approved (idempotency atomicity follow-up in flight) |
 | 2026-11-24 | INVENTORY UI slice: stock / warehouses+locations / transfers / counts / valuation screens, en+bn (108 keys/locale, compile-checked parity) | `8275d73`+`4119c2c` feat/inventory-ui — clean build 24/24 pages, live browser-verified both locales, review clean after 1 fix round |
+| 2026-11-24 | C1 fix: atomic idempotency — reserve/complete in one transaction; concurrent same-key resolves to winner replay (was: raw 500s + duplicate writes) | `3414aae` feat/backend-core — RED 9/10 concurrent 500s → GREEN; suite 20/20; fresh review clean (no Critical/Important) |
+| 2026-11-24 | T3 live verification: `scripts/verify-all-features.sh` (45 assertions) vs dev PG :5433 — found + fixed 2 real bugs: status flips double-counted committed rows (PO Received at 9/10 → state-blocked forever); receiving dock drifted to first-created location | `3c69dcd` + InventoryRepository fix on feat/backend-core — both RED→GREEN in-suite; final smoke 45/45 |
+| 2026-11-24 | T4 ASSETS slice: fixed assets (capitalization/depreciation/transfer/impairment/disposal), projects (gated closure), service cases (SLA/breach), AddAssetsSeed migration, R-ASSETS + U-005 | `aa7474c`+`99e7a63` feat/assets-api — 31 pass + 1 honest Skip (PERIOD_LOCKED pending T5) / 32; review in flight |
+| 2026-11-24 | Review-minor fixes: CorsOrigins empty-string + trailing-slash fallback (TDD), README table count 19→23, `.sr-only` utility (F4) | `fix/cors-origins` (135739c..4b0c646, branch suite 26/26), `fix/web-sr-only` (1c194bc, build green) |
+| 2026-11-24 | Merge wave → `dev-sayeem` (backend-core + assets + cors + sr-only + inventory-ui, all clean) + FULL regression | suite 38 pass + 1 skip / 39, `npm run build` green, smoke 45/45 on merged binary; `main` merge held pending T4 review verdict + T5 |

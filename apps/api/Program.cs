@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Microsoft.OpenApi;
 using Erp.Api;
 using Erp.Api.Data;
 using Erp.Api.Middleware;
@@ -36,6 +37,28 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
     .WithOrigins(corsOrigins)
     .AllowAnyHeader()
     .AllowAnyMethod()));
+// Swagger UI (owner-approved Swashbuckle): typed *Request records give accurate request schemas;
+// the Bearer scheme presets the Authorize button with the stub-auth token (= seeded user id).
+// Served in every environment for now — revisit when a hardened prod profile exists.
+builder.Services.AddSwaggerGen(o =>
+{
+    o.SwaggerDoc("v1", new Microsoft.OpenApi.OpenApiInfo
+    {
+        Title = "erp_teamzlab API",
+        Version = "v1",
+        Description = "Envelope everywhere: { success: true, data } | { success: false, error: { code, message } }.",
+    });
+    o.AddSecurityDefinition("Bearer", new Microsoft.OpenApi.OpenApiSecurityScheme
+    {
+        Type = Microsoft.OpenApi.SecuritySchemeType.Http,
+        Scheme = "bearer",
+        Description = "Stub auth: POST /api/v1/auth/token-exchange, or use a seeded id directly — U-001 admin, U-002 procurement, U-003 finance, U-004 sales.",
+    });
+    o.AddSecurityRequirement(doc => new Microsoft.OpenApi.OpenApiSecurityRequirement
+    {
+        [new Microsoft.OpenApi.OpenApiSecuritySchemeReference("Bearer", doc)] = [],
+    });
+});
 var app = builder.Build();
 
 app.UseMiddleware<CorrelationMiddleware>();
@@ -43,6 +66,8 @@ app.UseMiddleware<ErrorMiddleware>();
 app.UseMiddleware<BindingEnvelopeMiddleware>();
 app.UseCors(); // before AuthMiddleware — browser preflight OPTIONS carries no Authorization header
 app.UseMiddleware<AuthMiddleware>();
+app.UseSwagger();
+app.UseSwaggerUI(o => o.DocumentTitle = "erp_teamzlab API");
 app.MapControllers();
 
 app.Run();
