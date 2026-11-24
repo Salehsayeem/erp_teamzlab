@@ -810,6 +810,51 @@ public class SalesDeepTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
     }
 
+    // ---- fix 72931d8 semantics on the new memo path: Zero basis publishes a 0 component -----
+
+    [Fact]
+    public async Task Adjustment_With_Zero_Rated_Code_Publishes_Zero_Tax_And_No_Vat_Control_Line()
+    {
+        var (invoiceId, _) = await SeedPostedInvoice(2m, 50m);
+
+        // publish a zero-rated code (rate 0 + reason, per the 032 edge rule)
+        var res = await PostAsync("/api/v1/tax-codes", new
+        {
+            code = $"VAT-ZERO-{Tag("Z")}",
+            ratePct = 0m,
+            basis = "Zero",
+            recoverable = true,
+            effectiveFrom = new DateOnly(2020, 1, 1),
+            effectiveTo = (DateOnly?)null,
+            reason = "zero-rated export",
+        }, Admin);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var zeroCode = (await Json(res)).GetProperty("data").GetProperty("code").GetString()!;
+
+        res = await PostAsync("/api/v1/adjustments", new
+        {
+            kind = "Credit",
+            invoiceId,
+            reason = "Zero-rated export return",
+            lines = new[] { new { itemSku = "EXP-1", qty = 1m, unitPrice = 40m, taxCodeId = zeroCode } },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var adjustmentId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+
+        res = await PostAsync($"/api/v1/adjustments/{adjustmentId}/approvals", new { reason = (string?)null }, Fin);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var approved = (await Json(res)).GetProperty("data");
+        Assert.Equal(40.00m, approved.GetProperty("total").GetDecimal()); // net only — no tax component
+
+        // the reversing journal carries no 2200 control line: Dr 4000 net / Cr 1200 net
+        var journals = await GetAsync("/api/v1/journals", Admin);
+        var journal = journals.GetProperty("data").EnumerateArray()
+            .First(j => j.GetProperty("id").GetString() == approved.GetProperty("journalId").GetString());
+        var accounts = journal.GetProperty("lines").EnumerateArray().Select(l => l.GetProperty("accountCode").GetString()).ToList();
+        Assert.DoesNotContain("2200", accounts);
+        Assert.Equal(2, accounts.Count);
+    }
+
     // ---- helper ------------------------------------------------------------------------
 
     private async Task<string> CreateOpportunity(string? customerId)
