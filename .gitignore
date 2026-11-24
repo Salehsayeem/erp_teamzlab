@@ -25,3 +25,6 @@ Thumbs.db
 
 # Tooling artifacts
 .playwright-mcp/
+
+# Agent worktrees live INSIDE the repo (owner rule 2026-11-24)
+.worktrees/
