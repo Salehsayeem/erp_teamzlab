@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
+using Erp.Api.Data;
 using Erp.Api.Dtos;
 using Erp.Api.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace Erp.Api.Services;
 
@@ -11,7 +13,7 @@ namespace Erp.Api.Services;
 // posted anywhere in this service (R-T6d/R-T6f — commitment records only).
 public sealed class SourcingService(
     ISourcingRepository sourcing, ISupplierRepository suppliers, IIdentityRepository identities,
-    INumberSeries numbers, IAuditRepository audit, EntityContext ec) : ISourcingService
+    INumberSeries numbers, IAuditRepository audit, EntityContext ec, ErpDbContext db) : ISourcingService
 {
     private const string FormulaVersion = "1"; // 032 AC1 — bumped only when the normalization changes
 
@@ -89,16 +91,24 @@ public sealed class SourcingService(
         if (evt.Status is not (SourcingEventStatus.Draft or SourcingEventStatus.Published))
             return (null, "EVENT_STATE_ERROR", $"Event {eventId} no longer accepts invitations (current: {evt.Status}).");
 
-        var invited = new List<object>();
+        // FIX 7: validate EVERY supplier before tracking anything — a mid-list failure must not
+        // flush earlier items (the idempotency store shares this scoped context)
+        var prepared = new List<(string SupplierId, string? Warnings)>();
         foreach (var supplierId in request.SupplierIds)
         {
-            var supplier = suppliers.Find(supplierId);
-            if (supplier is null) return (null, "SUPPLIER_NOT_FOUND", $"Supplier {supplierId} not found.");
+            if (suppliers.Find(supplierId) is null)
+                return (null, "SUPPLIER_NOT_FOUND", $"Supplier {supplierId} not found.");
             if (sourcing.FindInvitation(eventId, supplierId) is not null)
                 return (null, "INVITATION_EXISTS", $"Supplier {supplierId} is already invited to {eventId}.");
             var (eligible, reason, warnings) = EvaluateEligibility(supplierId);
             if (!eligible)
                 return (null, "SUPPLIER_INELIGIBLE", $"Supplier {supplierId} failed the eligibility gate: {reason}.");
+            prepared.Add((supplierId, warnings));
+        }
+
+        var invited = new List<object>();
+        foreach (var (supplierId, warnings) in prepared)
+        {
             var invitation = new EventInvitation($"{eventId}:{supplierId}", ec.TenantId, ec.EntityId, eventId,
                 supplierId, InvitationStatus.Sent, "manual", DateTimeOffset.UtcNow, null, warnings);
             sourcing.AddInvitation(invitation);
@@ -132,7 +142,7 @@ public sealed class SourcingService(
         }
         audit.Log(user, "answer", "event_qa", qa.Id,
             $"Q&A logged on {eventId} ({request.Scope}{(request.SupplierId is null ? "" : $", {request.SupplierId}")}), {(request.Publish ? "published" : "draft")}"
-            + (bumped ? $"; event version bumped to {evt.Version + 1}" : ""));
+            + (bumped ? $"; event version bumped to {evt.Version}" : ""));
         sourcing.Save();
         return (ProjQa(qa), null, null);
     }
@@ -171,7 +181,7 @@ public sealed class SourcingService(
             sourcing.AddBidLine(new BidLine($"{bid.Id}:{line.LotId}", ec.TenantId, ec.EntityId, bid.Id,
                 line.LotId, line.Qty, line.UnitPrice, line.DiscountPct));
         audit.Log(user, "record", "bid", bid.Id,
-            $"Bid {bid.Id} recorded for supplier {request.SupplierId} on {eventId} (event v{evt.Version}, digest {digest[..12]}…)");
+            $"Bid {bid.Id} recorded for supplier {request.SupplierId} on {eventId} (event v{evt.Version})"); // no digest fragment: audit must not leak sealed content (FIX 1)
         sourcing.Save();
         return (new { bidId = bid.Id, eventVersion = evt.Version, submittedAt = bid.SubmittedAt, contentDigest = digest }, null, null);
     }
@@ -210,9 +220,13 @@ public sealed class SourcingService(
             return (null, "FORBIDDEN", "Only assigned evaluators can view bids of this event.");
         var isApprover = user.Has("sourcing:approve");
         var bids = sourcing.BidsForEvent(eventId)
-            .Select(b => ProjBid(b, sourcing.LinesForBid(b.Id)
-                // sealed prices stay stripped until the opening is recorded (or for approvers)
-                .Select(l => ProjLine(l, isApprover || b.OpenedAt is not null)).ToList()))
+            .Select(b =>
+            {
+                var unsealed = isApprover || b.OpenedAt is not null;
+                // FIX 1: prices AND the content digest stay stripped while sealed — a SHA-256 of a
+                // fixed-shape payload plus visible qty lets an evaluator grid-search price×discount
+                return ProjBid(b, sourcing.LinesForBid(b.Id).Select(l => ProjLine(l, unsealed)).ToList(), unsealed);
+            })
             .ToList();
         return (bids, null, null);
     }
@@ -221,13 +235,18 @@ public sealed class SourcingService(
     {
         var evt = sourcing.FindEvent(eventId);
         if (evt is null) return (null, "EVENT_NOT_FOUND", "Sourcing event not found.");
-        var assigned = new List<object>();
+        // FIX 7: validate every user first — mid-list failures persist nothing
         foreach (var userId in request.UserIds)
         {
             if (identities.FindActiveUserById(userId) is null)
                 return (null, "USER_NOT_FOUND", $"User {userId} not found or inactive.");
             if (userId == evt.CreatedBy)
                 return (null, "EVALUATOR_CREATOR_CONFLICT", $"User {userId} created event {eventId} and cannot evaluate it (016 AC2).");
+        }
+
+        var assigned = new List<object>();
+        foreach (var userId in request.UserIds)
+        {
             var assignment = sourcing.FindAssignment(eventId, userId);
             if (assignment is null)
             {
@@ -294,6 +313,10 @@ public sealed class SourcingService(
 
         var criteria = sourcing.CriteriaForEvent(eventId);
         var scores = sourcing.ScoresForEvent(eventId);
+        // FIX 2: evaluators see only their OWN trace rows before any release stage (031 AC1) —
+        // other evaluators' ids, comments and aggregate totals/ranks leak their input. Buyers and
+        // sourcing:approve callers get the full trace.
+        var fullTrace = CanSeeEverything(user);
         var rows = sourcing.BidsForEvent(eventId).Select(bid =>
         {
             var trace = criteria.Select(c =>
@@ -318,6 +341,18 @@ public sealed class SourcingService(
                     score?.Comment,
                 };
             }).ToList();
+            if (!fullTrace)
+                return new
+                {
+                    bidId = bid.Id,
+                    supplierId = bid.SupplierId,
+                    bidStatus = bid.Status,
+                    criteriaVersion = evt.Version,
+                    ownRowsOnly = true,
+                    disqualified = (bool?)null,
+                    total = (decimal?)null,
+                    rows = (IReadOnlyList<object>)trace.Where(t => t.EvaluatorUserId == user.Id).ToList(),
+                };
             var disqualified = trace.Any(t => t.passFail == false);
             return new
             {
@@ -325,13 +360,26 @@ public sealed class SourcingService(
                 supplierId = bid.SupplierId,
                 bidStatus = bid.Status,
                 criteriaVersion = evt.Version,
-                disqualified,
-                total = decimal.Round(trace.Sum(t => t.contribution), 2, MidpointRounding.AwayFromZero),
-                rows = trace,
+                ownRowsOnly = false,
+                disqualified = (bool?)disqualified,
+                total = (decimal?)decimal.Round(trace.Sum(t => t.contribution), 2, MidpointRounding.AwayFromZero),
+                rows = (IReadOnlyList<object>)trace,
             };
         }).ToList();
 
-        var ranked = rows.OrderBy(r => r.disqualified ? 1 : 0)
+        if (!fullTrace)
+            return (new
+            {
+                eventId,
+                formulaVersion = FormulaVersion,
+                criteria = criteria.Select(ProjCriterion).ToList(),
+                bids = rows.Select(r => new
+                {
+                    r.bidId, r.supplierId, r.bidStatus, r.criteriaVersion, r.ownRowsOnly, rows = r.rows,
+                }).ToList(),
+            }, null, null);
+
+        var ranked = rows.OrderBy(r => r.disqualified == true ? 1 : 0)
             .ThenByDescending(r => r.total)
             .ThenBy(r => r.bidId)
             .Select((r, i) => (row: r, rank: i + 1))
@@ -344,7 +392,7 @@ public sealed class SourcingService(
             criteria = criteria.Select(ProjCriterion).ToList(),
             bids = ranked.Select(x => new
             {
-                x.row.bidId, x.row.supplierId, x.row.bidStatus, x.row.criteriaVersion,
+                x.row.bidId, x.row.supplierId, x.row.bidStatus, x.row.criteriaVersion, x.row.ownRowsOnly,
                 x.row.disqualified, x.row.total, rank = x.rank, rows = x.row.rows,
             }).ToList(),
         };
@@ -406,19 +454,29 @@ public sealed class SourcingService(
         if (!approver.Has("sourcing:approve"))
             return (null, "FORBIDDEN", "sourcing:approve permission required.");
 
-        var (eligible, reason, _) = EvaluateEligibility(award.SupplierId);
-        if (!eligible)
-            return (null, "SUPPLIER_INELIGIBLE", $"Supplier {award.SupplierId} failed the eligibility re-check: {reason}.");
+        // FIX 4: serialize per sourcing event — the ceiling re-check and the commit happen inside
+        // one transaction holding the event row (SELECT … FOR UPDATE), so two concurrent same-lot
+        // approvals cannot both read stale approved-qty and over-award. Error returns before
+        // commit dispose the transaction and roll back (nothing is written on a rejection path).
+        using var tx = db.Database.BeginTransaction();
+        LockSourcingEventRow(award.EventId);
 
         var at = DateTimeOffset.UtcNow;
         if (!string.IsNullOrWhiteSpace(request.Reason))
         {
+            // FIX 3: rejection IS the disposition for an ineligible supplier — the re-check runs
+            // only on the approve disposition, so a checker rejecting "supplier suspended" lands
             sourcing.SetAwardRejected(award, request.Reason, approver.Id, at);
             sourcing.SetEventStatus(evt, RemainingAwardables(award.EventId) ? SourcingEventStatus.Closed : SourcingEventStatus.NoAward);
             audit.Log(approver, "reject", "award", awardId, $"Award {awardId} rejected by {approver.Email}: {request.Reason}; event {evt.Id} → {evt.Status}");
             sourcing.Save();
+            tx.Commit();
             return (new { award = ProjAward(award), @event = ProjEvent(evt) }, null, null);
         }
+
+        var (eligible, reason, _) = EvaluateEligibility(award.SupplierId);
+        if (!eligible)
+            return (null, "SUPPLIER_INELIGIBLE", $"Supplier {award.SupplierId} failed the eligibility re-check: {reason}.");
 
         var lot = sourcing.FindLot(award.EventId, award.LotId);
         var target = lot?.TargetQty;
@@ -437,6 +495,7 @@ public sealed class SourcingService(
             qty = award.Qty, unitPrice = award.UnitPrice, approvedBy = approver.Id,
         });
         sourcing.Save();
+        tx.Commit();
         return (new
         {
             award = ProjAward(award),
@@ -483,13 +542,19 @@ public sealed class SourcingService(
         if (hard is { } failing && !(failing.ExceptionUntil is { } until && until > now))
             return (false, $"hard gate '{failing.GateCode}' is in force (effective {failing.EffectiveFrom:yyyy-MM-dd})", null);
 
-        var warnings = gates.Where(g => g.Severity == GateSeverity.Warning && g.EffectiveFrom <= today)
+        var warnings = gates.Where(g => g.Severity == GateSeverity.Warning && g.EffectiveFrom <= today
+                && (g.EffectiveTo is null || g.EffectiveTo >= today)) // minor (a): expired gates stop decorating
             .Select(g => g.GateCode)
             .Concat(gates.Where(g => g.Severity == GateSeverity.Hard && g.ExceptionUntil is { } u && u > now)
                 .Select(g => $"{g.GateCode}(excepted)"))
             .Distinct().ToList();
         return (true, null, warnings.Count == 0 ? null : string.Join(",", warnings));
     }
+
+    // FIX 4: row lock serializing award decisions per sourcing event — the table name is fixed in
+    // the SQL literal (identifiers cannot be parameters) while the id stays parameterized
+    private void LockSourcingEventRow(string eventId) =>
+        db.Database.SqlQuery<string>($"SELECT id AS \"Value\" FROM sourcing_events WHERE id = {eventId} FOR UPDATE").Single();
 
     private bool BidDisqualified(Bid bid) =>
         sourcing.ScoresForEvent(bid.EventId).Any(s => s.BidId == bid.Id && s.PassFail == false);
@@ -523,11 +588,9 @@ public sealed class SourcingService(
         q.Id, q.EventId, q.SupplierId, q.Question, q.Answer, q.Scope, q.Published, q.PublishedAt, q.AnsweredBy,
     };
 
-    private static object ProjBid(Bid b, List<object> lines) => new
-    {
-        bidId = b.Id, b.EventId, b.SupplierId, b.EventVersion, b.Status, b.ContentDigest,
-        b.SubmittedAt, b.OpenedBy, b.OpenedAt, lines,
-    };
+    private static object ProjBid(Bid b, List<object> lines, bool unsealed) => unsealed
+        ? new { bidId = b.Id, b.EventId, b.SupplierId, b.EventVersion, b.Status, b.ContentDigest, b.SubmittedAt, b.OpenedBy, b.OpenedAt, lines }
+        : (object)new { bidId = b.Id, b.EventId, b.SupplierId, b.EventVersion, b.Status, b.SubmittedAt, b.OpenedBy, b.OpenedAt, lines };
 
     private static object ProjLine(BidLine l, bool reveal) => reveal
         ? new { l.LotId, l.Qty, l.UnitPrice, l.DiscountPct, lineTotal = l.LineTotal } as object

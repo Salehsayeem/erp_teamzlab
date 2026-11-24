@@ -1,5 +1,8 @@
+using Erp.Api.Data;
 using Erp.Api.Dtos;
+using Npgsql;
 using Erp.Api.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace Erp.Api.Services;
 
@@ -10,9 +13,11 @@ namespace Erp.Api.Services;
 // expiringWithinDays flag plus manual exercise (R-T6g — no scheduler).
 public sealed class ContractsService(
     IContractsRepository contracts, ISourcingRepository sourcing, ISupplierRepository suppliers,
-    INumberSeries numbers, IAuditRepository audit, EntityContext ec) : IContractsService
+    INumberSeries numbers, IAuditRepository audit, EntityContext ec, ErpDbContext db) : IContractsService
 {
-    private static readonly DateOnly Today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
+    // FIX 5: computed per call — a process-start snapshot silently rots overdue/expiring/notice
+    // windows in a long-lived process
+    private static DateOnly Today => DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
 
     public object List(ContractStatus? status, int? expiringWithinDays)
     {
@@ -76,7 +81,10 @@ public sealed class ContractsService(
     }
 
     // 037: versions are strictly server-assigned and append-only; new price lines may not overlap
-    // any existing range for the same SKU (AC3)
+    // any existing range for the same SKU (AC3). FIX 6b: the whole read-check-write runs inside one
+    // transaction holding the contract row (SELECT ... FOR UPDATE), so concurrent amendments cannot
+    // double-assign a version or interleave overlap checks; the (contract_id, version) unique
+    // index (FixContractAmendmentGuards) is the backstop for any path that bypasses the lock.
     public (object? data, string? code, string? message) AddAmendment(CurrentUser user, string contractId, AddAmendmentRequest request)
     {
         var contract = contracts.FindContract(contractId);
@@ -84,10 +92,17 @@ public sealed class ContractsService(
         if (contract.Status is not (ContractStatus.Draft or ContractStatus.Active))
             return (null, "CONTRACT_STATE_ERROR", $"A {contract.Status} contract takes no amendments.");
 
+        // request-internal overlap needs no lock
+        foreach (var line in request.PriceLines)
+            if (request.PriceLines.Any(o => !ReferenceEquals(o, line) && o.ItemSku == line.ItemSku && LineOverlaps(o, line.EffectiveFrom, line.EffectiveTo)))
+                return (null, "CONTRACT_PRICE_OVERLAP",
+                    $"Price line {line.ItemSku} {line.EffectiveFrom:yyyy-MM-dd}..{line.EffectiveTo?.ToString("yyyy-MM-dd") ?? "open"} overlaps an active range (037 AC3).");
+
+        using var tx = db.Database.BeginTransaction();
+        LockContractRow(contractId);
         var existing = contracts.PriceLinesForContract(contractId).ToList();
         foreach (var line in request.PriceLines)
-            if (existing.Any(e => e.ItemSku == line.ItemSku && Overlaps(e, line.EffectiveFrom, line.EffectiveTo))
-                || request.PriceLines.Any(o => o != line && o.ItemSku == line.ItemSku && LineOverlaps(o, line.EffectiveFrom, line.EffectiveTo)))
+            if (existing.Any(e => e.ItemSku == line.ItemSku && Overlaps(e, line.EffectiveFrom, line.EffectiveTo)))
                 return (null, "CONTRACT_PRICE_OVERLAP",
                     $"Price line {line.ItemSku} {line.EffectiveFrom:yyyy-MM-dd}..{line.EffectiveTo?.ToString("yyyy-MM-dd") ?? "open"} overlaps an active range (037 AC3).");
 
@@ -101,7 +116,17 @@ public sealed class ContractsService(
         contracts.SetContractVersion(contract, version);
         audit.Log(user, "amend", "contract", contractId,
             $"Amendment v{version} recorded: {request.Summary} ({request.PriceLines.Count} price line(s))");
-        contracts.Save();
+        try
+        {
+            contracts.Save();
+            tx.Commit();
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is NpgsqlException { SqlState: "23505" })
+        {
+            // transaction rolls back on dispose; a version or natural-key collision is a conflict
+            return (null, "CONTRACT_AMENDMENT_CONFLICT",
+                "Amendment conflicts with an existing amendment version or price-line identity; re-read the contract and retry.");
+        }
         return (new { amendment = ProjAmendment(amendment), contract = ProjContract(contract, version - 1, 0) }, null, null);
     }
 
@@ -197,6 +222,9 @@ public sealed class ContractsService(
 
     // ==================== helpers ====================
 
+    private void LockContractRow(string contractId) =>
+        db.Database.SqlQuery<string>($"SELECT id AS \"Value\" FROM contracts WHERE id = {contractId} FOR UPDATE").Single();
+
     private (ContractObligation? obligation, string? code, string? message) LoadObligation(string contractId, string obligationId)
     {
         var obligation = contracts.FindObligation(contractId, obligationId);
@@ -208,7 +236,7 @@ public sealed class ContractsService(
     private static bool Overdue(ContractObligation o) =>
         o.Status is ObligationStatus.Open or ObligationStatus.EvidenceSubmitted && o.DueDate < Today;
 
-    private static Func<Contract, bool> ExpiringWithin(int days) => c => c.EffectiveTo <= Today.AddDays(days);
+    private static Func<Contract, bool> ExpiringWithin(int days) => c => c.EffectiveTo >= Today && c.EffectiveTo <= Today.AddDays(days);
 
     private static bool Overlaps(ContractPriceLine e, DateOnly from, DateOnly? to) =>
         (e.EffectiveTo is null || from <= e.EffectiveTo) && (to is null || e.EffectiveFrom <= to);
