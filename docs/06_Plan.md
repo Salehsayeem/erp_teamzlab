@@ -50,7 +50,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 9. MED: malformed JSON bodies bypass envelope — binding-failure filter → VALIDATION_ERROR
 10. LOW: /stock,/audit-events,/outbox reads unlocked; decimal.Round → MidpointRounding.AwayFromZero (ERP-FINANCE-010)
 11. OPEN: PO "send" step (approved→sent) has no endpoint/button (02_AppFlow §3.1) — decide if pilot needs it; Receive already accepts Approved|Sent
-12. OPEN (design): warning color #B26A00 fails 4.5:1 as text — use dot/border only; controls use text-muted edges (border is decorative); add Noto Sans Bengali fallback (docs/design/ui-direction.md)
+12. PARTIAL (design): warning color #B26A00 fails 4.5:1 as text — badges now ship the dot/border treatment in the uikit (feat/web-uikit, `.badge::before` + `--badge-accent`, `.badge--warning-strong` removed); still open: control edges `text-muted` swap (`.input`/`.btn--secondary` still use `--border`) and Noto Sans Bengali fallback (D-07)
 
 ## Phase 3 — Core transactional domains (Wave 2, per domain — order by D-01/D-02)
 > Screen counts from the per-module inventory in `02_AppFlow.md` §4 (derived from `spec_snapshot.md` card titles).
@@ -81,3 +81,4 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 | 2026-11-24 | T4 ASSETS slice: fixed assets (capitalization/depreciation/transfer/impairment/disposal), projects (gated closure), service cases (SLA/breach), AddAssetsSeed migration, R-ASSETS + U-005 | `aa7474c`+`99e7a63` feat/assets-api — 31 pass + 1 honest Skip (PERIOD_LOCKED pending T5) / 32; review in flight |
 | 2026-11-24 | Review-minor fixes: CorsOrigins empty-string + trailing-slash fallback (TDD), README table count 19→23, `.sr-only` utility (F4) | `fix/cors-origins` (135739c..4b0c646, branch suite 26/26), `fix/web-sr-only` (1c194bc, build green) |
 | 2026-11-24 | Merge wave → `dev-sayeem` (backend-core + assets + cors + sr-only + inventory-ui, all clean) + FULL regression | suite 38 pass + 1 skip / 39, `npm run build` green, smoke 45/45 on merged binary; `main` merge held pending T4 review verdict + T5 |
+| 2026-11-24 | Reusable web UI kit: Field/Input/Textarea/Select (forwardRef, aria wiring), Card, AA dot/border Badge (finding 12), Modal (focus trap/Esc/focus return), ToastRegion (aria-live, 5s auto-dismiss w/ hover-focus pause, errors manual), Tabs (roving/RTL arrows), Pagination, EmptyState/ErrorState/Skeleton polish; `/design` showcase en+bn (~70 new dict keys, compile-checked parity) | feat/web-uikit — `npm run build` green (26 routes incl. /en|bn/design), browser-verified: modal trap/Esc/focus-return, toast roles+dismiss, tab roving+arrows, pagination aria-current; screenshots in `.superpowers/sdd/06_Plan/uikit-*.png` |
