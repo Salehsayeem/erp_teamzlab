@@ -53,6 +53,14 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<ProjectTask> ProjectTasks => Set<ProjectTask>();
     public DbSet<ServiceCase> ServiceCases => Set<ServiceCase>();
+    public DbSet<Employment> Employments => Set<Employment>();
+    public DbSet<CompensationEvent> CompensationEvents => Set<CompensationEvent>();
+    public DbSet<TimeEntry> TimeEntries => Set<TimeEntry>();
+    public DbSet<TimeCorrection> TimeCorrections => Set<TimeCorrection>();
+    public DbSet<PayGroup> PayGroups => Set<PayGroup>();
+    public DbSet<WorkerPayGroup> WorkerPayGroups => Set<WorkerPayGroup>();
+    public DbSet<EarningDeductionCode> EarningDeductionCodes => Set<EarningDeductionCode>();
+    public DbSet<PayRun> PayRuns => Set<PayRun>();
     public DbSet<FiscalPeriod> FiscalPeriods => Set<FiscalPeriod>();
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<TaxCode> TaxCodes => Set<TaxCode>();
@@ -69,6 +77,7 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         ConfigureProcurement(mb);
         ConfigureSales(mb);
         ConfigureInventory(mb);
+        ConfigurePeople(mb);
         ConfigureFinance(mb);
         ConfigureAssets(mb);
         ConfigureIdentity(mb);
@@ -525,6 +534,116 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         });
     }
 
+    // PEOPLE deep (workers/time/payroll, rulings R-PEO1..11) — tenant+entity scope on every
+    // table from day one (R14 gate), every FK indexed, ids from the shared doc_ sequences.
+    private static void ConfigurePeople(ModelBuilder mb)
+    {
+        mb.Entity<Employment>(e =>
+        {
+            e.ToTable("employments");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status }); // register status filter
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.WorkerNo }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.NationalId }); // rehire duplicate scan (004)
+            // review-1a mechanism: a stale second lifecycle transition updates zero rows
+            e.Property(x => x.Status).IsConcurrencyToken();
+        });
+
+        mb.Entity<CompensationEvent>(e =>
+        {
+            e.ToTable("compensation_events");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId, x.EffectiveFrom }); // as-of resolution (024)
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<TimeEntry>(e =>
+        {
+            e.ToTable("time_entries");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId, x.WorkDate, x.Status }); // run input pull (034)
+            // 026 AC2: replay-safety backstop — one payable row per idempotency key
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.IdemKey }).IsUnique();
+            e.HasIndex(x => x.EmploymentId);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<TimeCorrection>(e =>
+        {
+            e.ToTable("time_corrections");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.TimeEntryId);
+            // review-1a mechanism: a stale second decision updates zero rows, not double-apply
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasOne<TimeEntry>().WithMany().HasForeignKey(x => x.TimeEntryId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<PayGroup>(e =>
+        {
+            e.ToTable("pay_groups");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+        });
+
+        mb.Entity<WorkerPayGroup>(e =>
+        {
+            e.ToTable("worker_pay_groups");
+            e.HasKey(x => x.Id); // natural key {employmentId}:{payGroupId}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.EmploymentId);
+            e.HasIndex(x => x.PayGroupId);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<PayGroup>().WithMany().HasForeignKey(x => x.PayGroupId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<EarningDeductionCode>(e =>
+        {
+            e.ToTable("earning_deduction_codes");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Kind });
+        });
+
+        mb.Entity<PayRun>(e =>
+        {
+            e.ToTable("pay_runs");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+            // 049: the run key IS this unique index — one live run per group+period; REVERSED rows
+            // are excluded (partial index, invoice source-event pattern) because a reversal run is
+            // a NEW id sharing the original's group+period via reversal_of_run_id
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PayGroupId, x.PeriodId }).IsUnique()
+                .HasFilter($"status <> {(int)PayRunStatus.Reversed}");
+            // review-1a mechanism: a stale second approval/post/reversal updates ZERO rows instead
+            // of double-posting journals
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasIndex(x => x.PeriodId);
+            e.HasIndex(x => x.ReversalOfRunId);
+            e.HasOne<PayGroup>().WithMany().HasForeignKey(x => x.PayGroupId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<FiscalPeriod>().WithMany().HasForeignKey(x => x.PeriodId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<PayRun>().WithMany().HasForeignKey(x => x.ReversalOfRunId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                // pay_run_lines is an owned table — shadow line-number PK, no client ids (see po_lines)
+                l.ToTable("pay_run_lines");
+                l.WithOwner().HasForeignKey("PayRunId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("PayRunId", "LineNo");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("PayRunId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+    }
+
     private static void ConfigureFinance(ModelBuilder mb)
     {
         mb.Entity<Journal>(e =>
@@ -716,7 +835,11 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                      "lead", "int", "cc", "opp", "inv", "crd", "dbt", "rem", "dsp",
                      // task-6 procurement deep prefixes (brief R-T6 list) — ship with the code that
                      // calls them in AddProcurementDeepSeed, since NumberSeries.Next throws if missing
-                     "ev", "lot", "qa", "bid", "awd", "ctr", "amd", "obl" })
+                     "ev", "lot", "qa", "bid", "awd", "ctr", "amd", "obl",
+                     // PEOPLE deep prefixes (AddPeopleDeepSeed). doc_per is reserved: R-PEO3 collapsed
+                     // the person entity into the worker register, so nothing consumes it today — the
+                     // sequence stays so a later person split keeps its id-space
+                     "per", "wkr", "cmp", "tme", "tmc", "prn" })
             mb.HasSequence<long>($"doc_{prefix}");
         mb.HasSequence<long>("doc_a", s => s.StartsAt(2));
     }
@@ -741,16 +864,24 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
 
         mb.Entity<Role>().HasData(
             new { Id = "R-ADMIN", Name = "tenant_admin", Permissions = new[] { "*" }, TenantId = t, LegalEntityId = le },
-            // R-PROC/R-FIN/R-SALES = union of the T7 (sales) and T6 (procurement) permission sets
+            // R-PROC/R-FIN/R-SALES = union of the T7 (sales) and T6 (procurement) permission sets;
+            // R-FIN also carries the PEOPLE additions (payroll:approve gates run approval AND
+            // posting, R-PEO9) — the row is the FULL surviving superset (merge lesson: UpdateData
+            // replaces the whole permissions column, so AddPeopleDeepSeed must ship the union of
+            // AddFinanceSeed + AddSalesDeepSeed + AddProcurementDeepSeed + payroll, never a delta)
             new { Id = "R-PROC", Name = "procurement_officer", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer", "sourcing:read", "sourcing:write", "contracts:read", "contracts:write", "suppliers:read" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:approve" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write",
                     "so:approve",
                     "leads:read", "leads:write", "crm:read", "crm:write", "opps:read", "opps:write",
                     "invoices:read", "invoices:write", "collections:read", "collections:write" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-ASSETS", Name = "assets_officer", Permissions = new[] { "assets:read", "assets:write", "assets:approve", "projects:write", "projects:approve", "cases:write", "cases:read" }, TenantId = t, LegalEntityId = le },
             // task-6: independent evaluators (031 AC1) — read + score only, no buyer permissions
-            new { Id = "R-EVAL", Name = "evaluator", Permissions = new[] { "sourcing:read", "sourcing:evaluate" }, TenantId = t, LegalEntityId = le });
+            new { Id = "R-EVAL", Name = "evaluator", Permissions = new[] { "sourcing:read", "sourcing:evaluate" }, TenantId = t, LegalEntityId = le },
+            // PEOPLE deep (R-PEO9): R-HR is the maker — register/time/payroll:calculate plus the
+            // correction-checker permission (time:approve, approver ≠ requester, 027). payroll:approve
+            // stays with R-FIN, so the run's calculator and approver are different people by role.
+            new { Id = "R-HR", Name = "hr_officer", Permissions = new[] { "workers:read", "workers:write", "time:read", "time:write", "time:approve", "payroll:read", "payroll:calculate" }, TenantId = t, LegalEntityId = le });
 
         mb.Entity<User>().HasData(
             new { Id = "U-001", Email = "admin@teamzlab.dev", DisplayName = "Tenant Admin", Active = true, TenantId = t, LegalEntityId = le },
@@ -758,7 +889,8 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new { Id = "U-003", Email = "finance@teamzlab.dev", DisplayName = "Finance Officer", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-004", Email = "sales@teamzlab.dev", DisplayName = "Sales Officer", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-005", Email = "assets@teamzlab.dev", DisplayName = "Assets Officer", Active = true, TenantId = t, LegalEntityId = le },
-            new { Id = "U-006", Email = "evaluator@teamzlab.dev", DisplayName = "Independent Evaluator", Active = true, TenantId = t, LegalEntityId = le });
+            new { Id = "U-006", Email = "evaluator@teamzlab.dev", DisplayName = "Independent Evaluator", Active = true, TenantId = t, LegalEntityId = le },
+            new { Id = "U-007", Email = "hr@teamzlab.dev", DisplayName = "HR Officer", Active = true, TenantId = t, LegalEntityId = le });
 
         mb.Entity<Membership>().HasData(
             new Membership("U-001", t, le, "R-ADMIN"),
@@ -766,7 +898,8 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new Membership("U-003", t, le, "R-FIN"),
             new Membership("U-004", t, le, "R-SALES"),
             new Membership("U-005", t, le, "R-ASSETS"),
-            new Membership("U-006", t, le, "R-EVAL"));
+            new Membership("U-006", t, le, "R-EVAL"),
+            new Membership("U-007", t, le, "R-HR"));
 
         mb.Entity<AuditEvent>().HasData(new
         {
@@ -785,5 +918,22 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         mb.Entity<StockLocation>().HasData(
             new StockLocation("LOC-A1", t, le, "WH-001", "A1", "Rack A1"),
             new StockLocation("LOC-B1", t, le, "WH-001", "B1", "Rack B1"));
+
+        // PEOPLE deep seed: PG-001 pay group (035 trim — the only group in the pilot) and the two
+        // payroll liability accounts. ACC-6100 (salary expense) already exists in AddFinanceSeed
+        // and is REUSED — no second salary expense code (ruling). The gross→net journal posts
+        // Dr 6100 / Cr 2310 deductions / Cr 2300 net.
+        mb.Entity<PayGroup>().HasData(
+            new PayGroup("PG-001", t, le, "PG-001", "Monthly Staff", "Monthly", true));
+
+        mb.Entity<Account>().HasData(
+            new Account("ACC-2300", t, le, "2300", "Salaries Payable", AccountType.Liability, NormalBalance.Credit,
+                true, 1, "system", new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)),
+            new Account("ACC-2310", t, le, "2310", "Payroll Deductions Payable", AccountType.Liability, NormalBalance.Credit,
+                true, 1, "system", new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+
+        // R-PEO2: the overtime multiplier is a finance setting (data, not a constant); default 1.5
+        mb.Entity<FinanceSetting>().HasData(
+            new FinanceSetting("FS-payroll-ot", t, le, "payroll.ot_multiplier", "1.5"));
     }
 }
