@@ -8,61 +8,68 @@ using Xunit;
 // binding: ONE-STEP worker register (no separate person entity — R-PEO3), pay runs anchor to
 // FiscalPeriod rows via PayDate (R-PEO5), the period guard evaluates the run's PayDate
 // (R-PEO11), R-HR makes and R-FIN approves/posts (R-PEO9), BDT only (R-PEO7).
-// The 14 named brief tests + 3 suggested negatives run against one throwaway database; every
-// test seeds its own workers/codes with unique tags. Test 13 closes its own future month so the
-// shared current-month period stays open for every other posting path.
+//
+// The tests are split across four classes ON PURPOSE: every test class gets its own throwaway
+// database (TestApiFactory), and payroll calculations apply every ACTIVE deduction code in the
+// entity — sharing one database would bleed TAX-10 (10%) into the golden posting's totals. The
+// split keeps each database's deduction catalog exactly the set its assertions assume:
+//   - PeopleWorkerTests         register/lifecycle/compensation/membership (no payroll codes)
+//   - PeopleTimeTests           capture idempotency + correction trail
+//   - PeoplePayrollTests        catalog gate, run key, frozen calc, reconciliation, validations,
+//                               maker-checker approval, closed-period guard, payslip scope (TAX-10 only)
+//   - PeoplePayrollPostingTests golden posting + reversal (FLAT-100 only, exact Dr/Cr legs)
 
 namespace Erp.Api.Tests;
 
-public class PeopleTests : IClassFixture<TestApiFactory>
+public abstract class PeopleTestBase : IClassFixture<TestApiFactory>
 {
-    private readonly TestApiFactory _factory;
-    public PeopleTests(TestApiFactory factory) => _factory = factory;
+    protected readonly TestApiFactory Factory;
+    protected PeopleTestBase(TestApiFactory factory) => Factory = factory;
 
-    private const string Admin = "U-001";
-    private const string Fin = "U-003";   // R-FIN — payroll:approve / paycodes:write
-    private const string Hr = "U-007";    // R-HR — workers/time/payroll:calculate
+    protected const string Admin = "U-001";
+    protected const string Fin = "U-003";   // R-FIN — payroll:approve / paycodes:write
+    protected const string Hr = "U-007";    // R-HR — workers/time/payroll:calculate
 
-    private static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
-    private static DateOnly MonthStart(DateOnly d) => new(d.Year, d.Month, 1);
+    protected static DateOnly Today => DateOnly.FromDateTime(DateTime.UtcNow);
+    protected static DateOnly MonthStart(DateOnly d) => new(d.Year, d.Month, 1);
 
-    private async Task<HttpResponseMessage> PostAsync(string path, object body, string? token, string? idemKey = null)
+    protected async Task<HttpResponseMessage> PostAsync(string path, object body, string? token, string? idemKey = null)
     {
-        var client = _factory.CreateClient();
+        var client = Factory.CreateClient();
         if (token is not null) client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
         if (idemKey is not null) client.DefaultRequestHeaders.Add("Idempotency-Key", idemKey);
         return await client.PostAsJsonAsync(path, body);
     }
 
-    private async Task<JsonElement> GetAsync(string path, string token)
+    protected async Task<JsonElement> GetAsync(string path, string token)
     {
-        var client = _factory.CreateClient();
+        var client = Factory.CreateClient();
         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
         return await Json(await client.GetAsync(path));
     }
 
-    private async Task<HttpResponseMessage> GetRawAsync(string path, string token)
+    protected async Task<HttpResponseMessage> GetRawAsync(string path, string token)
     {
-        var client = _factory.CreateClient();
+        var client = Factory.CreateClient();
         client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
         return await client.GetAsync(path);
     }
 
-    private static async Task<JsonElement> Json(HttpResponseMessage res)
+    protected static async Task<JsonElement> Json(HttpResponseMessage res)
     {
         await using var stream = await res.Content.ReadAsStreamAsync();
         using var doc = await JsonDocument.ParseAsync(stream);
         return doc.RootElement.Clone();
     }
 
-    private static string Tag(string prefix) => $"{prefix}{Guid.NewGuid():N}".ToUpperInvariant()[..12];
+    protected static string Tag(string prefix) => $"{prefix}{Guid.NewGuid():N}".ToUpperInvariant()[..12];
 
-    private static string ErrCode(JsonElement body) => body.GetProperty("error").GetProperty("code").GetString()!;
-    private static string ErrMessage(JsonElement body) => body.GetProperty("error").GetProperty("message").GetString()!;
+    protected static string ErrCode(JsonElement body) => body.GetProperty("error").GetProperty("code").GetString()!;
+    protected static string ErrMessage(JsonElement body) => body.GetProperty("error").GetProperty("message").GetString()!;
 
     // ---- shared flow seeds -----------------------------------------------------------
 
-    private async Task<string> SeedPeriodCovering(DateOnly date, string tag)
+    protected async Task<string> SeedPeriodCovering(DateOnly date, string tag)
     {
         var list = await GetAsync("/api/v1/fiscal-periods", Admin);
         var existing = list.GetProperty("data").EnumerateArray().FirstOrDefault(p =>
@@ -82,9 +89,9 @@ public class PeopleTests : IClassFixture<TestApiFactory>
     }
 
     // current-month period, kept OPEN for every posting path (reversals post at today)
-    private Task<string> SeedOpenTodayPeriod(string tag) => SeedPeriodCovering(Today, tag);
+    protected Task<string> SeedOpenTodayPeriod(string tag) => SeedPeriodCovering(Today, tag);
 
-    private async Task<string> SeedWorker(string? nationalId = null, string? managerUserId = null,
+    protected async Task<string> SeedWorker(string? nationalId = null, string? managerUserId = null,
         DateOnly? hireDate = null, decimal weeklyHours = 40m)
     {
         var tag = Tag("W");
@@ -103,7 +110,7 @@ public class PeopleTests : IClassFixture<TestApiFactory>
     }
 
     // compensation + Draft→Prehire→Active so the worker can take time
-    private async Task<string> ActivateWorker(string workerId, decimal amount = 10000m, string payBasis = "Monthly")
+    protected async Task<string> ActivateWorker(string workerId, decimal amount = 10000m, string payBasis = "Monthly")
     {
         var res = await PostAsync($"/api/v1/workers/{workerId}/compensations", new
         {
@@ -118,52 +125,60 @@ public class PeopleTests : IClassFixture<TestApiFactory>
         return workerId;
     }
 
-    private async Task AssignPayGroup(string workerId, string groupId = "PG-001")
+    // each fixture creates its OWN pay group — the run population is group-scoped, so this is
+    // what keeps concurrent tests' workers out of each other's runs
+    protected async Task<string> SeedPayGroup()
+    {
+        var code = Tag("PG");
+        var res = await PostAsync("/api/v1/pay-groups", new { code, name = $"Group {code}", frequency = "Monthly" }, Hr);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        return (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+    }
+
+    protected async Task AssignPayGroup(string workerId, string groupId)
     {
         var res = await PostAsync($"/api/v1/workers/{workerId}/pay-group-memberships",
             new { payGroupId = groupId, effectiveFrom = MonthStart(Today).AddMonths(-1) }, Hr);
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
     }
 
-    private async Task SeedPayCode(string code, string kind, string basis, decimal ratePct,
+    // catalog rows are tenant-wide and immutable in the pilot — a replay of the same code meets
+    // the already-seeded row (409 PAY_CODE_EXISTS), which keeps per-database catalogs deterministic
+    protected async Task SeedPayCode(string code, string kind, string basis, decimal ratePct,
         string debit = "6100", string credit = "2300")
     {
         var res = await PostAsync("/api/v1/pay-codes", new
         { code, kind, name = $"{kind} {code}", calcBasis = basis, ratePct, debitAccount = debit, creditAccount = credit }, Fin);
-        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        Assert.True(res.StatusCode == HttpStatusCode.Created || res.StatusCode == HttpStatusCode.Conflict,
+            $"pay code {code}: unexpected {(int)res.StatusCode}");
     }
 
     // manager-entered time is attested at entry (Source=Manager → Approved); requester-entered
-    // time lands Pending and needs a time:approve decision
-    private async Task<(string entryId, string status)> SeedTime(string workerId, DateOnly workDate,
+    // time lands Pending and needs a time:approve decision. ADMIN plays the manager in fixtures
+    // because R-FIN deliberately holds no time:write (R-PEO9 SoD)
+    protected async Task<(string entryId, string status)> SeedTime(string workerId, DateOnly workDate,
         decimal hours, decimal ot, string? asUser = null)
     {
         var res = await PostAsync("/api/v1/time-entries",
-            new { employmentId = workerId, workDate, hours, overtimeHours = ot, note = (string?)"seed" }, asUser ?? Fin);
+            new { employmentId = workerId, workDate, hours, overtimeHours = ot, note = (string?)"seed" }, asUser ?? Admin);
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
         var data = (await Json(res)).GetProperty("data");
         return (data.GetProperty("id").GetString()!, data.GetProperty("status").GetString()!);
     }
 
-    private async Task<string> ApproveTime(string entryId)
-    {
-        var res = await PostAsync($"/api/v1/time-entries/{entryId}/decisions", new { approve = true }, Admin);
-        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
-        return entryId;
-    }
-
-    // full run: worker in PG-001 + approved time + open period + BASIC/OVERTIME/TAX codes
-    private async Task<(string workerId, string runId, string periodId)> SeedCalculatedRun(
+    // full run: own pay group + approved time + open period + BASIC/OVERTIME/TAX codes
+    protected async Task<(string workerId, string runId, string periodId)> SeedCalculatedRun(
         decimal hours = 10m, decimal ot = 0m, decimal hourlyRate = 100m)
     {
         var periodId = await SeedOpenTodayPeriod(Tag("p"));
-        var worker = await ActivateWorker(await SeedWorker(managerUserId: Fin), amount: hourlyRate, payBasis: "Hourly");
-        await AssignPayGroup(worker);
-        if (hours > 0 || ot > 0) await ApproveTime((await SeedTime(worker, Today, hours, ot)).entryId);
+        var groupId = await SeedPayGroup();
+        var worker = await ActivateWorker(await SeedWorker(managerUserId: Admin), amount: hourlyRate, payBasis: "Hourly");
+        await AssignPayGroup(worker, groupId);
+        if (hours > 0 || ot > 0) await SeedTime(worker, Today, hours, ot); // manager-entered, Approved at entry
         await SeedPayCode("BASIC", "Earning", "Hours", 0);
         await SeedPayCode("OVERTIME", "Earning", "Hours", 0, credit: "2300");
         await SeedPayCode("TAX-10", "Deduction", "Percent", 10);
-        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = "PG-001", periodId, payDate = Today }, Hr);
+        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = groupId, periodId, payDate = Today }, Hr);
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
         var runId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
         Assert.Equal(HttpStatusCode.Created,
@@ -171,25 +186,32 @@ public class PeopleTests : IClassFixture<TestApiFactory>
         return (worker, runId, periodId);
     }
 
-    private async Task<JsonElement> ApproveRun(string runId, string token = Fin)
+    protected async Task<JsonElement> ApproveRun(string runId, string token = Fin)
     {
         var res = await PostAsync($"/api/v1/pay-runs/{runId}/approvals", new { reason = (string?)null }, token);
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         return await Json(res);
     }
 
-    private async Task<JsonElement> PostRun(string runId, string token = Fin, string? idemKey = null)
+    protected async Task<JsonElement> PostRun(string runId, string token = Fin, string? idemKey = null)
     {
         var res = await PostAsync($"/api/v1/pay-runs/{runId}/postings", new { }, token, idemKey);
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         return await Json(res);
     }
 
-    private static JsonElement JournalOf(JsonElement journals, string journalId) =>
+    protected static JsonElement JournalOf(JsonElement journals, string journalId) =>
         journals.GetProperty("data").EnumerateArray().First(j => j.GetProperty("id").GetString() == journalId);
 
-    private static JsonElement LineOf(JsonElement journal, string accountCode) =>
+    protected static JsonElement LineOf(JsonElement journal, string accountCode) =>
         journal.GetProperty("lines").EnumerateArray().First(l => l.GetProperty("accountCode").GetString() == accountCode);
+}
+
+// ---- register, lifecycle, compensation, pay-group membership -------------------------
+
+public class PeopleWorkerTests : PeopleTestBase
+{
+    public PeopleWorkerTests(TestApiFactory factory) : base(factory) { }
 
     // ---- 1. rehire duplicate check (ERP-PEOPLE-004 edge, R-PEO3 one-step register) ----
 
@@ -236,9 +258,10 @@ public class PeopleTests : IClassFixture<TestApiFactory>
             .First(e => DateOnly.Parse(e.GetProperty("effectiveFrom").GetString()!) == futureFrom);
         Assert.Equal(Today, DateOnly.Parse(future.GetProperty("effectiveTo").GetString()!));
 
-        // terminated workers take no new time
+        // terminated workers take no new time (posted as a permission-passing user so the
+        // service-level 409 WORKER_TERMINATED is what fires)
         var res = await PostAsync("/api/v1/time-entries",
-            new { employmentId = worker, workDate = Today, hours = 8m, overtimeHours = 0m }, Fin);
+            new { employmentId = worker, workDate = Today, hours = 8m, overtimeHours = 0m }, Admin);
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         Assert.Equal("WORKER_TERMINATED", ErrCode(await Json(res)));
     }
@@ -263,21 +286,59 @@ public class PeopleTests : IClassFixture<TestApiFactory>
         Assert.Equal(20000m, later.GetProperty("data").GetProperty("asOf").GetProperty("amount").GetDecimal());
     }
 
-    // ---- 4. time capture idempotency (ERP-PEOPLE-026 AC2) ----------------------------
+    // ---- 4. one active pay-group membership (ERP-PEOPLE-035 AC2) ---------------------
+
+    [Fact]
+    public async Task Pay_Run_Duplicate_Active_Group_Membership_Returns_409()
+    {
+        var worker = await SeedWorker();
+        await AssignPayGroup(worker, "PG-001");
+
+        var res = await PostAsync($"/api/v1/workers/{worker}/pay-group-memberships",
+            new { payGroupId = "PG-001", effectiveFrom = Today }, Hr);
+
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("PAY_GROUP_OVERLAP", ErrCode(await Json(res)));
+    }
+
+    // ---- 5. Active requires effective compensation (ERP-PEOPLE-007 AC1) -------------
+
+    [Fact]
+    public async Task Active_Transition_Without_Compensation_Returns_409()
+    {
+        var worker = await SeedWorker();
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/workers/{worker}/transitions",
+            new { status = "Prehire", effectiveDate = Today, reason = "onboarded" }, Hr)).StatusCode);
+
+        var res = await PostAsync($"/api/v1/workers/{worker}/transitions",
+            new { status = "Active", effectiveDate = Today, reason = "started" }, Hr);
+
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("WORKER_NO_COMPENSATION", ErrCode(await Json(res)));
+    }
+}
+
+// ---- time capture + corrections ------------------------------------------------------
+
+public class PeopleTimeTests : PeopleTestBase
+{
+    public PeopleTimeTests(TestApiFactory factory) : base(factory) { }
+
+    // ---- 6. time capture idempotency (ERP-PEOPLE-026 AC2) ----------------------------
 
     [Fact]
     public async Task Time_Entry_Idempotent_Replay_Returns_Original_Not_A_Second_Row()
     {
-        var worker = await ActivateWorker(await SeedWorker(managerUserId: Fin));
+        var worker = await ActivateWorker(await SeedWorker(managerUserId: Admin));
         var key = $"time-{Guid.NewGuid():N}";
 
         var res = await PostAsync("/api/v1/time-entries",
-            new { employmentId = worker, workDate = Today, hours = 8m, overtimeHours = 1m }, Fin, key);
+            new { employmentId = worker, workDate = Today, hours = 8m, overtimeHours = 1m }, Admin, key);
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
         var firstId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
 
         res = await PostAsync("/api/v1/time-entries",
-            new { employmentId = worker, workDate = Today, hours = 8m, overtimeHours = 1m }, Fin, key);
+            new { employmentId = worker, workDate = Today, hours = 8m, overtimeHours = 1m }, Admin, key);
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
         Assert.Equal(firstId, (await Json(res)).GetProperty("data").GetProperty("id").GetString());
 
@@ -285,12 +346,12 @@ public class PeopleTests : IClassFixture<TestApiFactory>
         Assert.Single(rows.GetProperty("data").EnumerateArray());
     }
 
-    // ---- 5. corrections keep the trail + separation of duties (ERP-PEOPLE-027) -------
+    // ---- 7. corrections keep the trail + separation of duties (ERP-PEOPLE-027) -------
 
     [Fact]
     public async Task Time_Correction_Preserves_Original_And_Rejects_Self_Approval()
     {
-        var worker = await ActivateWorker(await SeedWorker(managerUserId: Fin));
+        var worker = await ActivateWorker(await SeedWorker(managerUserId: Admin));
         var entryId = (await SeedTime(worker, Today, 8m, 0m)).entryId;
 
         var res = await PostAsync("/api/v1/time-corrections", new
@@ -317,8 +378,15 @@ public class PeopleTests : IClassFixture<TestApiFactory>
         Assert.Equal(8m, row.GetProperty("previousHours").GetDecimal());
         Assert.Equal(6m, row.GetProperty("proposedHours").GetDecimal());
     }
+}
 
-    // ---- 6. pay code catalog mapping gate (ERP-PEOPLE-037 AC1) -----------------------
+// ---- pay runs: catalog, calculation, validation, approval, payslip scope -------------
+
+public class PeoplePayrollTests : PeopleTestBase
+{
+    public PeoplePayrollTests(TestApiFactory factory) : base(factory) { }
+
+    // ---- 8. pay code catalog mapping gate (ERP-PEOPLE-037 AC1) -----------------------
 
     [Fact]
     public async Task Pay_Code_Without_Account_Mapping_Cannot_Activate()
@@ -331,8 +399,10 @@ public class PeopleTests : IClassFixture<TestApiFactory>
 
         // an unknown account code is a 404, not a silent mapping
         var unknown = await PostAsync("/api/v1/pay-codes", new
-        { code = Tag("UNK"), kind = "Earning", name = "Bad account", calcBasis = "Hours",
-          debitAccount = "6100", creditAccount = "9999" }, Fin);
+        {
+            code = Tag("UNK"), kind = "Earning", name = "Bad account", calcBasis = "Hours",
+            debitAccount = "6100", creditAccount = "9999",
+        }, Fin);
         Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
         Assert.Equal("ACCOUNT_NOT_FOUND", ErrCode(await Json(unknown)));
 
@@ -340,31 +410,7 @@ public class PeopleTests : IClassFixture<TestApiFactory>
         await SeedPayCode(Tag("OK"), "Earning", "Hours", 0);
     }
 
-    // ---- 7. run-key idempotency (ERP-PEOPLE-049 AC1) ---------------------------------
-
-    [Fact]
-    public async Task Pay_Run_Same_Key_Replay_Returns_Same_Run()
-    {
-        var periodId = await SeedOpenTodayPeriod(Tag("p"));
-        var worker = await ActivateWorker(await SeedWorker(managerUserId: Fin));
-        await AssignPayGroup(worker);
-        await ApproveTime((await SeedTime(worker, Today, 8m, 0m)).entryId);
-        await SeedPayCode("BASIC", "Earning", "Hours", 0);
-
-        var key = $"run-{Guid.NewGuid():N}";
-        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = "PG-001", periodId, payDate = Today }, Hr, key);
-        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
-        var runId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
-
-        res = await PostAsync("/api/v1/pay-runs", new { payGroupId = "PG-001", periodId, payDate = Today }, Hr, key);
-        Assert.Equal(runId, (await Json(res)).GetProperty("data").GetProperty("id").GetString());
-
-        // a different key on the same (tenant, entity, group, period) key finds the SAME run
-        res = await PostAsync("/api/v1/pay-runs", new { payGroupId = "PG-001", periodId, payDate = Today }, Hr);
-        Assert.Equal(runId, (await Json(res)).GetProperty("data").GetProperty("id").GetString());
-    }
-
-    // ---- 8. frozen deterministic calculation (ERP-PEOPLE-038 AC1) --------------------
+    // ---- 9. frozen deterministic calculation (ERP-PEOPLE-038 AC1) --------------------
 
     [Fact]
     public async Task Calculation_Rerun_With_Frozen_Inputs_Produces_Identical_Lines()
@@ -382,7 +428,7 @@ public class PeopleTests : IClassFixture<TestApiFactory>
         Assert.Equal(lines1, lines2); // byte-equal lines from identical frozen inputs
     }
 
-    // ---- 9. gross-to-net reconciliation (ERP-PEOPLE-039 AC1/AC2) ---------------------
+    // ---- 10. gross-to-net reconciliation (ERP-PEOPLE-039 AC1/AC2) --------------------
 
     [Fact]
     public async Task Gross_Minus_Deductions_Equals_Net_And_Reconciles_To_Lines()
@@ -391,7 +437,7 @@ public class PeopleTests : IClassFixture<TestApiFactory>
 
         var run = (await GetAsync("/api/v1/pay-runs", Fin)).GetProperty("data").EnumerateArray()
             .First(r => r.GetProperty("id").GetString() == runId);
-        Assert.Equal(1100m, run.GetProperty("grossTotal").GetDecimal());   // 8×100 + 2×150
+        Assert.Equal(1100m, run.GetProperty("grossTotal").GetDecimal());    // 8×100 + 2×150
         Assert.Equal(110m, run.GetProperty("deductionTotal").GetDecimal()); // 10% of gross
         Assert.Equal(990m, run.GetProperty("netTotal").GetDecimal());
         Assert.Equal(run.GetProperty("grossTotal").GetDecimal() - run.GetProperty("deductionTotal").GetDecimal(),
@@ -406,23 +452,49 @@ public class PeopleTests : IClassFixture<TestApiFactory>
             .Sum(l => l.GetProperty("amount").GetDecimal()));
     }
 
-    // ---- 10. preflight validation blocks finalization (ERP-PEOPLE-046 AC1, 034 AC1) --
+    // ---- 11. run-key idempotency (ERP-PEOPLE-049 AC1) --------------------------------
+
+    [Fact]
+    public async Task Pay_Run_Same_Key_Replay_Returns_Same_Run()
+    {
+        var periodId = await SeedOpenTodayPeriod(Tag("p"));
+        var groupId = await SeedPayGroup();
+        var worker = await ActivateWorker(await SeedWorker(managerUserId: Admin));
+        await AssignPayGroup(worker, groupId);
+        await SeedTime(worker, Today, 8m, 0m); // manager-entered, Approved at entry
+        await SeedPayCode("BASIC", "Earning", "Hours", 0);
+
+        var key = $"run-{Guid.NewGuid():N}";
+        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = groupId, periodId, payDate = Today }, Hr, key);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var runId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+
+        res = await PostAsync("/api/v1/pay-runs", new { payGroupId = groupId, periodId, payDate = Today }, Hr, key);
+        Assert.Equal(runId, (await Json(res)).GetProperty("data").GetProperty("id").GetString());
+
+        // a different key on the same (tenant, entity, group, period) key finds the SAME run
+        res = await PostAsync("/api/v1/pay-runs", new { payGroupId = groupId, periodId, payDate = Today }, Hr);
+        Assert.Equal(runId, (await Json(res)).GetProperty("data").GetProperty("id").GetString());
+    }
+
+    // ---- 12. preflight validation blocks finalization (ERP-PEOPLE-046 AC1, 034 AC1) --
 
     [Fact]
     public async Task Run_With_Unapproved_Time_Cannot_Finalize_And_Names_The_Workers()
     {
         var periodId = await SeedOpenTodayPeriod(Tag("p"));
-        var approvedWorker = await ActivateWorker(await SeedWorker(managerUserId: Fin)); // manager-attested
+        var groupId = await SeedPayGroup();
+        var approvedWorker = await ActivateWorker(await SeedWorker(managerUserId: Admin)); // manager-attested
         var pendingWorker = await ActivateWorker(await SeedWorker());                    // self-entered → Pending
-        await AssignPayGroup(approvedWorker);
-        await AssignPayGroup(pendingWorker);
-        await ApproveTime((await SeedTime(approvedWorker, Today, 8m, 0m)).entryId);
+        await AssignPayGroup(approvedWorker, groupId);
+        await AssignPayGroup(pendingWorker, groupId);
+        await SeedTime(approvedWorker, Today, 8m, 0m); // manager-entered, Approved at entry
         var pending = await SeedTime(pendingWorker, Today, 4m, 0m, asUser: Hr);
         Assert.Equal("Pending", pending.status);
         await SeedPayCode("BASIC", "Earning", "Hours", 0);
         await SeedPayCode("TAX-10", "Deduction", "Percent", 10);
 
-        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = "PG-001", periodId, payDate = Today }, Hr);
+        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = groupId, periodId, payDate = Today }, Hr);
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
         var runId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
         Assert.Equal(HttpStatusCode.Created,
@@ -435,27 +507,39 @@ public class PeopleTests : IClassFixture<TestApiFactory>
         Assert.Equal(1, unapproved.GetProperty("workerCount").GetInt32());
         Assert.Contains(pendingWorker, unapproved.GetProperty("message").GetString());
 
-        // approval (finalization gate) is blocked while the validation stands
+        // approval (the finalization gate) is blocked while the validation stands
         var approve = await PostAsync($"/api/v1/pay-runs/{runId}/approvals", new { reason = (string?)null }, Fin);
         Assert.Equal(HttpStatusCode.Conflict, approve.StatusCode);
         Assert.Equal("PAYROLL_VALIDATION_BLOCKED", ErrCode(await Json(approve)));
     }
 
-    // ---- 11. maker-checker on payroll approval (ERP-PEOPLE-048 AC1) ------------------
+    // ---- 13. maker-checker on payroll approval (ERP-PEOPLE-048 AC1) ------------------
 
     [Fact]
     public async Task Payroll_Approval_By_Calculator_Returns_409()
     {
-        var (worker, runId, _) = await SeedCalculatedRun(hours: 8m);
+        var periodId = await SeedOpenTodayPeriod(Tag("p"));
+        var groupId = await SeedPayGroup();
+        var worker = await ActivateWorker(await SeedWorker(managerUserId: Admin));
+        await AssignPayGroup(worker, groupId);
+        await SeedTime(worker, Today, 8m, 0m); // manager-entered, Approved at entry
+        await SeedPayCode("BASIC", "Earning", "Hours", 0);
+        await SeedPayCode("TAX-10", "Deduction", "Percent", 10);
+
+        // ADMIN calculates — the admin role spans both sides of the maker-checker split
+        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = groupId, periodId, payDate = Today }, Admin);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var runId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/pay-runs/{runId}/calculations", new { }, Admin)).StatusCode);
 
         // HR lacks payroll:approve entirely
         var hrAttempt = await PostAsync($"/api/v1/pay-runs/{runId}/approvals", new { reason = (string?)null }, Hr);
         Assert.Equal(HttpStatusCode.Forbidden, hrAttempt.StatusCode);
 
-        // an approver who was the calculator (admin holds both permission sets) → 409
-        var res = await PostAsync($"/api/v1/pay-runs/{runId}/approvals", new { reason = (string?)null }, Admin);
-        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
-        Assert.Equal("PAYROLL_APPROVAL_ERROR", ErrCode(await Json(res)));
+        // the calculator cannot approve their own run (048 AC1)
+        var self = await PostAsync($"/api/v1/pay-runs/{runId}/approvals", new { reason = (string?)null }, Admin);
+        Assert.Equal(HttpStatusCode.Conflict, self.StatusCode);
+        Assert.Equal("PAYROLL_APPROVAL_ERROR", ErrCode(await Json(self)));
 
         // finance approves; a second approval attempt is rejected — no double state change
         Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/pay-runs/{runId}/approvals", new { reason = (string?)null }, Fin)).StatusCode);
@@ -463,19 +547,76 @@ public class PeopleTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
     }
 
-    // ---- 12. golden posting (ERP-PEOPLE-053 AC1 + 049 AC2) ---------------------------
+    // ---- 14. period guard on the run's PayDate (R-PEO11) -----------------------------
+
+    [Fact]
+    public async Task Payroll_Posting_Into_Closed_Period_Returns_409_PERIOD_LOCKED()
+    {
+        var payDate = MonthStart(Today).AddMonths(2).AddDays(10);
+        var periodId = await SeedPeriodCovering(payDate, Tag("c"));
+        var workDate = payDate.AddDays(-1);
+        var groupId = await SeedPayGroup();
+        var worker = await ActivateWorker(await SeedWorker(managerUserId: Admin), amount: 100m, payBasis: "Hourly");
+        await AssignPayGroup(worker, groupId);
+        await SeedTime(worker, workDate, 8m, 0m); // manager-entered, Approved at entry
+        await SeedPayCode("BASIC", "Earning", "Hours", 0);
+
+        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = groupId, periodId, payDate }, Hr);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var runId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/pay-runs/{runId}/calculations", new { }, Hr)).StatusCode);
+        await ApproveRun(runId);
+
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/fiscal-periods/{periodId}/close",
+            new { reason = "month-end lock before payroll posting" }, Admin)).StatusCode);
+
+        var post = await PostAsync($"/api/v1/pay-runs/{runId}/postings", new { }, Fin);
+        Assert.Equal(HttpStatusCode.Conflict, post.StatusCode);
+        Assert.Equal("PERIOD_LOCKED", ErrCode(await Json(post)));
+    }
+
+    // ---- 15. payslip scope filter (ERP-PEOPLE-051 AC2) -------------------------------
+
+    [Fact]
+    public async Task Payslip_Of_Another_Worker_Returns_404()
+    {
+        var (worker, runId, _) = await SeedCalculatedRun(hours: 8m);
+        await ApproveRun(runId);
+
+        var slip = await GetAsync($"/api/v1/pay-runs/{runId}/payslips/{worker}", Fin);
+        Assert.Equal(8m, slip.GetProperty("data").GetProperty("lines").EnumerateArray()
+            .Where(l => l.GetProperty("payCode").GetString() == "BASIC")
+            .Sum(l => l.GetProperty("hours").GetDecimal()));
+        Assert.Equal(800m, slip.GetProperty("data").GetProperty("gross").GetDecimal());
+
+        // a worker outside the run's approved population has no slip in it
+        var outsider = await SeedWorker();
+        var other = await GetRawAsync($"/api/v1/pay-runs/{runId}/payslips/{outsider}", Fin);
+        Assert.Equal(HttpStatusCode.NotFound, other.StatusCode);
+        Assert.Equal("PAYSLIP_NOT_FOUND", ErrCode(await Json(other)));
+    }
+}
+
+// ---- golden posting + reversal: the only deduction code in this database is FLAT-100 --
+
+public class PeoplePayrollPostingTests : PeopleTestBase
+{
+    public PeoplePayrollPostingTests(TestApiFactory factory) : base(factory) { }
+
+    // ---- 16. golden posting (ERP-PEOPLE-053 AC1 + 049 AC2) ---------------------------
 
     [Fact]
     public async Task Payroll_Posting_Golden_Balanced_Dr_6100_Cr_2310_Cr_2300()
     {
         var periodId = await SeedOpenTodayPeriod(Tag("p"));
-        var worker = await ActivateWorker(await SeedWorker(managerUserId: Fin), amount: 100m, payBasis: "Hourly");
-        await AssignPayGroup(worker);
-        await ApproveTime((await SeedTime(worker, Today, 10m, 0m)).entryId);
+        var groupId = await SeedPayGroup();
+        var worker = await ActivateWorker(await SeedWorker(managerUserId: Admin), amount: 100m, payBasis: "Hourly");
+        await AssignPayGroup(worker, groupId);
+        await SeedTime(worker, Today, 10m, 0m); // manager-entered, Approved at entry
         await SeedPayCode("BASIC", "Earning", "Hours", 0);
         await SeedPayCode("FLAT-100", "Deduction", "Amount", 100);
 
-        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = "PG-001", periodId, payDate = Today }, Hr);
+        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = groupId, periodId, payDate = Today }, Hr);
         var runId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
         Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/pay-runs/{runId}/calculations", new { }, Hr)).StatusCode);
         await ApproveRun(runId);
@@ -504,53 +645,29 @@ public class PeopleTests : IClassFixture<TestApiFactory>
         Assert.Equal(1, journals.GetProperty("data").EnumerateArray()
             .Count(j => j.GetProperty("memo").GetString()!.Contains(runId)));
 
-        // outbox v1 carries the FINANCE handoff payload
-        var outbox = await GetAsync("/api/v1/platform/outbox", Admin);
-        var evt = outbox.GetProperty("data").EnumerateArray().First(e => e.GetProperty("type").GetString() == "people.payrun.posted");
+        // outbox v1 carries the FINANCE handoff payload (PlatformController: /api/v1/outbox)
+        var outbox = await GetAsync("/api/v1/outbox", Admin);
+        var evt = outbox.GetProperty("data").EnumerateArray().First(e =>
+            e.GetProperty("type").GetString() == "people.payrun.posted"
+            && e.GetProperty("payloadJson").GetString()!.Contains(runId));
         Assert.Equal(1, evt.GetProperty("version").GetInt32());
         Assert.Contains(runId, evt.GetProperty("payloadJson").GetString());
     }
 
-    // ---- 13. period guard on the run's PayDate (R-PEO11) -----------------------------
-
-    [Fact]
-    public async Task Payroll_Posting_Into_Closed_Period_Returns_409_PERIOD_LOCKED()
-    {
-        var payDate = MonthStart(Today).AddMonths(2).AddDays(10);
-        var periodId = await SeedPeriodCovering(payDate, Tag("c"));
-        var workDate = payDate.AddDays(-1);
-        var worker = await ActivateWorker(await SeedWorker(managerUserId: Fin), amount: 100m, payBasis: "Hourly");
-        await AssignPayGroup(worker);
-        await ApproveTime((await SeedTime(worker, workDate, 8m, 0m)).entryId);
-        await SeedPayCode("BASIC", "Earning", "Hours", 0);
-
-        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = "PG-001", periodId, payDate }, Hr);
-        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
-        var runId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
-        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/pay-runs/{runId}/calculations", new { }, Hr)).StatusCode);
-        await ApproveRun(runId);
-
-        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/fiscal-periods/{periodId}/close",
-            new { reason = "month-end lock before payroll posting" }, Admin)).StatusCode);
-
-        var post = await PostAsync($"/api/v1/pay-runs/{runId}/postings", new { }, Fin);
-        Assert.Equal(HttpStatusCode.Conflict, post.StatusCode);
-        Assert.Equal("PERIOD_LOCKED", ErrCode(await Json(post)));
-    }
-
-    // ---- 14. reversal posts compensating journal under a NEW run id (055 AC1, 049) ---
+    // ---- 17. reversal posts compensating journal under a NEW run id (055 AC1, 049) ---
 
     [Fact]
     public async Task Reversal_Posts_Compensating_Journal_And_Correction_Uses_A_New_Run_Id()
     {
         var periodId = await SeedOpenTodayPeriod(Tag("p"));
-        var worker = await ActivateWorker(await SeedWorker(managerUserId: Fin), amount: 100m, payBasis: "Hourly");
-        await AssignPayGroup(worker);
-        await ApproveTime((await SeedTime(worker, Today, 10m, 0m)).entryId);
+        var groupId = await SeedPayGroup();
+        var worker = await ActivateWorker(await SeedWorker(managerUserId: Admin), amount: 100m, payBasis: "Hourly");
+        await AssignPayGroup(worker, groupId);
+        await SeedTime(worker, Today, 10m, 0m); // manager-entered, Approved at entry
         await SeedPayCode("BASIC", "Earning", "Hours", 0);
         await SeedPayCode("FLAT-100", "Deduction", "Amount", 100);
 
-        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = "PG-001", periodId, payDate = Today }, Hr);
+        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = groupId, periodId, payDate = Today }, Hr);
         var runId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
         Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/pay-runs/{runId}/calculations", new { }, Hr)).StatusCode);
         await ApproveRun(runId);
@@ -587,57 +704,5 @@ public class PeopleTests : IClassFixture<TestApiFactory>
         var again = await PostAsync($"/api/v1/pay-runs/{runId}/reversals",
             new { reason = "double click", fundsReleased = false }, Fin);
         Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
-    }
-
-    // ---- 15. one active pay-group membership (ERP-PEOPLE-035 AC2) --------------------
-
-    [Fact]
-    public async Task Pay_Run_Duplicate_Active_Group_Membership_Returns_409()
-    {
-        var worker = await SeedWorker();
-        await AssignPayGroup(worker);
-
-        var res = await PostAsync($"/api/v1/workers/{worker}/pay-group-memberships",
-            new { payGroupId = "PG-001", effectiveFrom = Today }, Hr);
-
-        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
-        Assert.Equal("PAY_GROUP_OVERLAP", ErrCode(await Json(res)));
-    }
-
-    // ---- 16. payslip scope filter (ERP-PEOPLE-051 AC2) -------------------------------
-
-    [Fact]
-    public async Task Payslip_Of_Another_Worker_Returns_404()
-    {
-        var (worker, runId, _) = await SeedCalculatedRun(hours: 8m);
-        await ApproveRun(runId);
-
-        var slip = await GetAsync($"/api/v1/pay-runs/{runId}/payslips/{worker}", Fin);
-        Assert.Equal(8m, slip.GetProperty("data").GetProperty("lines").EnumerateArray()
-            .Where(l => l.GetProperty("payCode").GetString() == "BASIC")
-            .Sum(l => l.GetProperty("hours").GetDecimal()));
-        Assert.Equal(800m, slip.GetProperty("data").GetProperty("gross").GetDecimal());
-
-        // a worker outside the run's approved population has no slip in it
-        var outsider = await SeedWorker();
-        var other = await GetRawAsync($"/api/v1/pay-runs/{runId}/payslips/{outsider}", Fin);
-        Assert.Equal(HttpStatusCode.NotFound, other.StatusCode);
-        Assert.Equal("PAYSLIP_NOT_FOUND", ErrCode(await Json(other)));
-    }
-
-    // ---- 17. Active requires effective compensation (ERP-PEOPLE-007 AC1) ------------
-
-    [Fact]
-    public async Task Active_Transition_Without_Compensation_Returns_409()
-    {
-        var worker = await SeedWorker();
-        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/workers/{worker}/transitions",
-            new { status = "Prehire", effectiveDate = Today, reason = "onboarded" }, Hr)).StatusCode);
-
-        var res = await PostAsync($"/api/v1/workers/{worker}/transitions",
-            new { status = "Active", effectiveDate = Today, reason = "started" }, Hr);
-
-        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
-        Assert.Equal("WORKER_NO_COMPENSATION", ErrCode(await Json(res)));
     }
 }
