@@ -24,6 +24,12 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     public DbSet<StockCount> Counts => Set<StockCount>();
     public DbSet<StockAdjustment> Adjustments => Set<StockAdjustment>();
     public DbSet<Journal> Journals => Set<Journal>();
+    public DbSet<FixedAsset> Assets => Set<FixedAsset>();
+    public DbSet<AssetEvent> AssetEvents => Set<AssetEvent>();
+    public DbSet<DepreciationRun> DepreciationRuns => Set<DepreciationRun>();
+    public DbSet<Project> Projects => Set<Project>();
+    public DbSet<ProjectTask> ProjectTasks => Set<ProjectTask>();
+    public DbSet<ServiceCase> ServiceCases => Set<ServiceCase>();
     public DbSet<User> Users => Set<User>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<Membership> Memberships => Set<Membership>();
@@ -37,6 +43,7 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         ConfigureSales(mb);
         ConfigureInventory(mb);
         ConfigureFinance(mb);
+        ConfigureAssets(mb);
         ConfigureIdentity(mb);
         ConfigurePlatform(mb);
         ConfigureSequences(mb);
@@ -220,6 +227,67 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         });
     }
 
+    private static void ConfigureAssets(ModelBuilder mb)
+    {
+        // tag/serial uniqueness is app-level over ACTIVE assets only (041 AC1 — a disposed asset
+        // frees its tag for the re-tagging workflow), so the index is deliberately non-unique
+        mb.Entity<FixedAsset>(e =>
+        {
+            e.ToTable("fixed_assets");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Tag });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Serial });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+            e.HasIndex(x => x.LocationId);
+        });
+
+        mb.Entity<AssetEvent>(e =>
+        {
+            e.ToTable("asset_events");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.AssetId);
+            e.HasIndex(x => new { x.AssetId, x.EventType });
+            e.HasOne<FixedAsset>().WithMany().HasForeignKey(x => x.AssetId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<DepreciationRun>(e =>
+        {
+            e.ToTable("depreciation_runs");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PeriodId });
+            e.HasOne<Journal>().WithMany().HasForeignKey(x => x.JournalId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<Project>(e =>
+        {
+            e.ToTable("projects");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.ManagerId);
+        });
+
+        mb.Entity<ProjectTask>(e =>
+        {
+            e.ToTable("project_tasks");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.ProjectId);
+            e.HasOne<Project>().WithMany().HasForeignKey(x => x.ProjectId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ServiceCase>(e =>
+        {
+            e.ToTable("service_cases");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.DueAt }); // queue/breach scans
+            e.HasIndex(x => x.RequesterId);
+        });
+    }
+
     private static void ConfigureIdentity(ModelBuilder mb)
     {
         // users and roles keep their record shape — tenant scope is shadow columns (task-2 §2:
@@ -283,7 +351,8 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     {
         // doc numbering: one sequence per prefix (task-2 §2) — A starts at 2 because A-0001 is
         // the seeded opening audit event; all other ids start at 1
-        foreach (var prefix in new[] { "sup", "po", "rc", "cus", "so", "shp", "wh", "loc", "trf", "cnt", "adj", "j", "e" })
+        foreach (var prefix in new[] { "sup", "po", "rc", "cus", "so", "shp", "wh", "loc", "trf", "cnt", "adj", "j", "e",
+                     "fa", "fae", "prj", "tsk", "case", "dep" })
             mb.HasSequence<long>($"doc_{prefix}");
         mb.HasSequence<long>("doc_a", s => s.StartsAt(2));
     }
@@ -309,20 +378,23 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         mb.Entity<Role>().HasData(
             new { Id = "R-ADMIN", Name = "tenant_admin", Permissions = new[] { "*" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-PROC", Name = "procurement_officer", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "ap:read", "po:approve" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write" }, TenantId = t, LegalEntityId = le });
+            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "ap:read", "po:approve", "periods:read" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-ASSETS", Name = "assets_officer", Permissions = new[] { "assets:read", "assets:write", "assets:approve", "projects:write", "projects:approve", "cases:write", "cases:read" }, TenantId = t, LegalEntityId = le });
 
         mb.Entity<User>().HasData(
             new { Id = "U-001", Email = "admin@teamzlab.dev", DisplayName = "Tenant Admin", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-002", Email = "procurve@teamzlab.dev", DisplayName = "Procure Officer", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-003", Email = "finance@teamzlab.dev", DisplayName = "Finance Officer", Active = true, TenantId = t, LegalEntityId = le },
-            new { Id = "U-004", Email = "sales@teamzlab.dev", DisplayName = "Sales Officer", Active = true, TenantId = t, LegalEntityId = le });
+            new { Id = "U-004", Email = "sales@teamzlab.dev", DisplayName = "Sales Officer", Active = true, TenantId = t, LegalEntityId = le },
+            new { Id = "U-005", Email = "assets@teamzlab.dev", DisplayName = "Assets Officer", Active = true, TenantId = t, LegalEntityId = le });
 
         mb.Entity<Membership>().HasData(
             new Membership("U-001", t, le, "R-ADMIN"),
             new Membership("U-002", t, le, "R-PROC"),
             new Membership("U-003", t, le, "R-FIN"),
-            new Membership("U-004", t, le, "R-SALES"));
+            new Membership("U-004", t, le, "R-SALES"),
+            new Membership("U-005", t, le, "R-ASSETS"));
 
         mb.Entity<AuditEvent>().HasData(new
         {

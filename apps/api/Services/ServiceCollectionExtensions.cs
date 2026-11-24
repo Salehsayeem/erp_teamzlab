@@ -21,6 +21,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISalesOrderRepository, SalesOrderRepository>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IJournalRepository, JournalRepository>();
+        services.AddScoped<IAssetsRepository, AssetsRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<ISupplierService, SupplierService>();
@@ -30,6 +31,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISalesOrderService, SalesOrderService>();
         services.AddScoped<IJournalService, JournalService>();
         services.AddScoped<IInventoryService, InventoryService>();
+        services.AddScoped<IAssetService, AssetService>();
+        services.AddScoped<IProjectService, ProjectService>();
+        services.AddScoped<IServiceCaseService, ServiceCaseService>();
         services.AddScoped<IPlatformService, PlatformService>();
         return services;
     }

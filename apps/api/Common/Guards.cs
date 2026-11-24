@@ -10,6 +10,9 @@ public static class Guards
         Check(value, "Email") is not null and var e ? e :
         value!.Contains('@', StringComparison.Ordinal) ? null : "Email must be valid.";
 
+    public static string? CheckPositive(decimal value, string field) =>
+        value <= 0 ? $"{field} must be greater than 0." : null;
+
     public static string? CheckLines(IReadOnlyList<PoLine>? lines)
     {
         if (lines is null || lines.Count == 0) return "At least one order line is required.";
