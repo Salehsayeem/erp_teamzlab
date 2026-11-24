@@ -21,4 +21,31 @@ public sealed class SuppliersController(ISupplierService suppliers) : Controller
         var (data, code, message) = suppliers.Create(u, request);
         return code is null ? (Envelope.OkBody(data), 201) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
     });
+
+    // task-6 (ERP-PROCUREMENT-047): lifecycle transition with a mandatory reason
+    [HttpPost("{id}/status")]
+    public IResult SetStatus(string id, SetSupplierStatusRequest request)
+    {
+        var err = Guards.Check(request.Reason, "Reason");
+        if (err is not null) return Envelope.Fail("VALIDATION_ERROR", err, 400);
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("suppliers:write")) return Envelope.Fail("FORBIDDEN", "suppliers:write permission required.", 403);
+        var (data, code, message) = suppliers.SetStatus(u, id, request);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
+    // task-6 (ERP-PROCUREMENT-023/044): effective-dated eligibility gate; a re-POST of the same
+    // gate with exceptionUntil records the time-bounded exception (R-T6e: suppliers:write)
+    [HttpPost("{id}/gates")]
+    public IResult AddGate(string id, AddSupplierGateRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var err = Guards.Check(request.GateCode, "GateCode")
+            ?? (request.EffectiveTo is { } to && to < request.EffectiveFrom
+                ? "EffectiveTo must be on or after EffectiveFrom." : null);
+        if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("suppliers:write")) return (Envelope.FailBody("FORBIDDEN", "suppliers:write permission required."), 403);
+        var (data, code, message) = suppliers.AddGate(u, id, request);
+        return code is null ? (Envelope.OkBody(data!), 201) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
+    });
 }
