@@ -65,7 +65,7 @@ public sealed class ServiceCaseService(
         return (Proj(serviceCase, BreachState(serviceCase, DateTimeOffset.UtcNow)), null, null);
     }
 
-    public (object? data, string? code, string? message) Transition(CurrentUser user, string caseId, CaseStatus to, string? reason)
+    public (object? data, string? code, string? message) Transition(CurrentUser user, string caseId, CaseStatus to, string? reason, string? resolutionCode)
     {
         var serviceCase = cases.FindCase(caseId);
         if (serviceCase is null) return (null, "CASE_NOT_FOUND", "Service case not found.");
@@ -75,10 +75,23 @@ public sealed class ServiceCaseService(
 
         // reopen = Resolved → Open reactivates the SLA clock by policy (fresh due instant)
         var reopen = from == CaseStatus.Resolved && to == CaseStatus.Open;
-        cases.SetCaseStatus(serviceCase, to, reopen ? null : serviceCase.ResolutionCode,
-            reopen ? DateTimeOffset.UtcNow + SlaWindow(serviceCase.Priority) : null);
-        audit.Log(user, "transition", "service_case", caseId,
-            $"Case {caseId}: {from} → {to} by {user.Email}{(reason is null ? "" : $" ({reason})")}");
+
+        // a transition into Resolved is a resolution: stamp the code and emit the same outbox
+        // event as /resolution (024 AC2 — the controller rejects a missing code before this)
+        if (to == CaseStatus.Resolved)
+        {
+            cases.SetCaseStatus(serviceCase, to, resolutionCode, null);
+            audit.Log(user, "resolve", "service_case", caseId,
+                $"Case {caseId} resolved by {user.Email} with code {resolutionCode}");
+            audit.Emit(user, "assets.case.resolved", new { caseId, resolutionCode, resolvedBy = user.Id });
+        }
+        else
+        {
+            cases.SetCaseStatus(serviceCase, to, reopen ? null : serviceCase.ResolutionCode,
+                reopen ? DateTimeOffset.UtcNow + SlaWindow(serviceCase.Priority) : null);
+            audit.Log(user, "transition", "service_case", caseId,
+                $"Case {caseId}: {from} → {to} by {user.Email}{(reason is null ? "" : $" ({reason})")}");
+        }
         cases.Save();
         return (Proj(serviceCase, BreachState(serviceCase, DateTimeOffset.UtcNow)), null, null);
     }

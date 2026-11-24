@@ -14,5 +14,5 @@ public record CompleteTaskRequest(decimal HoursActual);
 
 public record CreateCaseRequest(string Title, string Channel, string RequesterId, CasePriority Priority);
 public record AssignCaseRequest(string AssigneeId);
-public record TransitionCaseRequest(CaseStatus Status, string? Reason);
+public record TransitionCaseRequest(CaseStatus Status, string? Reason, string? ResolutionCode = null);
 public record ResolveCaseRequest(string ResolutionCode);
