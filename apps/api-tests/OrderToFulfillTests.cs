@@ -41,7 +41,7 @@ public class OrderToFulfillTests : IClassFixture<TestApiFactory>
     [Fact]
     public async Task Order_to_fulfill_posts_shipment_cogs_and_ar_invoice()
     {
-        var proc = "U-002"; var admin = "U-001"; var sales = "U-004";
+        var proc = "U-002"; var admin = "U-001"; var sales = "U-004"; var fin = "U-003";
 
         // supply first: supplier + PO 60 @ 45.50 → receive → stock 60 @ cost basis 45.50
         var res = await PostAsync("/api/v1/suppliers", new { name = "Rod Supplier", taxId = "TRX-7722", email = "rods@steel.test" }, proc);
@@ -97,13 +97,36 @@ public class OrderToFulfillTests : IClassFixture<TestApiFactory>
         Assert.Equal(2275.00m, shipData.GetProperty("journal").GetProperty("lines")[0].GetProperty("debit").GetDecimal());
         Assert.Equal(2275.00m, shipData.GetProperty("journal").GetProperty("lines")[1].GetProperty("credit").GetDecimal());
 
-        // invoice: AR journal at order total 50 × 75 = 3750.00
+        // R-T7f: the journal-only invoice shortcut is retired — the document flow replaces it
         res = await PostAsync($"/api/v1/sales-orders/{soId}/invoices", new { }, sales);
+        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
+
+        // invoice draft assembled from the shipment source event (editor = sales, invoices:write)
+        res = await PostAsync($"/api/v1/sales-orders/{soId}/invoice-drafts", new { }, sales);
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
-        var invData = (await Json(res)).GetProperty("data");
-        Assert.Equal("1200", invData.GetProperty("lines")[0].GetProperty("accountCode").GetString());
-        Assert.Equal(3750.00m, invData.GetProperty("lines")[0].GetProperty("debit").GetDecimal());
-        Assert.Equal(3750.00m, invData.GetProperty("lines")[1].GetProperty("credit").GetDecimal());
+        var draft = (await Json(res)).GetProperty("data");
+        Assert.Equal("Draft", draft.GetProperty("status").GetString());
+        var invoiceId = draft.GetProperty("id").GetString()!;
+
+        // maker-checker: the drafter cannot post their own invoice (043)
+        res = await PostAsync($"/api/v1/invoices/{invoiceId}/postings", new { }, sales);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("INVOICE_APPROVAL_ERROR", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
+
+        // finance (invoices:approve) posts → AR document journal Dr 1200 total / Cr 4000 net / Cr 2200 tax
+        res = await PostAsync($"/api/v1/invoices/{invoiceId}/postings", new { }, fin);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var posted = (await Json(res)).GetProperty("data");
+        Assert.Equal(3750.00m, posted.GetProperty("invoice").GetProperty("subTotal").GetDecimal());
+        Assert.Equal(562.50m, posted.GetProperty("invoice").GetProperty("taxTotal").GetDecimal());
+        Assert.Equal(4312.50m, posted.GetProperty("invoice").GetProperty("total").GetDecimal());
+        var invJournal = posted.GetProperty("journal");
+        Assert.Equal("1200", invJournal.GetProperty("lines")[0].GetProperty("accountCode").GetString());
+        Assert.Equal(4312.50m, invJournal.GetProperty("lines")[0].GetProperty("debit").GetDecimal());
+        Assert.Equal("4000", invJournal.GetProperty("lines")[1].GetProperty("accountCode").GetString());
+        Assert.Equal(3750.00m, invJournal.GetProperty("lines")[1].GetProperty("credit").GetDecimal());
+        Assert.Equal("2200", invJournal.GetProperty("lines")[2].GetProperty("accountCode").GetString());
+        Assert.Equal(562.50m, invJournal.GetProperty("lines")[2].GetProperty("credit").GetDecimal());
 
         // status transitions + balanced journal evidence
         var orders = await GetAsync("/api/v1/sales-orders", sales);
@@ -144,6 +167,31 @@ public class OrderToFulfillTests : IClassFixture<TestApiFactory>
         var body = await Json(res);
         Assert.Equal("INSUFFICIENT_STOCK", body.GetProperty("error").GetProperty("code").GetString());
         Assert.Contains("0", body.GetProperty("error").GetProperty("message").GetString());
+    }
+
+    // R-T7i: SO approval moves off so:write onto so:approve — the finance officer (R-FIN seed)
+    // gains so:approve, so a non-creator finance user can now clear the maker-checker gate
+    [Fact]
+    public async Task SO_approval_uses_so_approve_finance_officer_can_approve()
+    {
+        var sales = "U-004"; var fin = "U-003";
+
+        var res = await PostAsync("/api/v1/customers", new { name = "Fin Approved Co", taxId = "TRX-7788", email = "ap@finapproved.test" }, sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var customerId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+
+        res = await PostAsync("/api/v1/sales-orders", new
+        {
+            customerId,
+            lines = new[] { new { itemSku = "STL-ROD-12", description = "Steel rod 12mm", qty = 2m, unitPrice = 10.00m } },
+        }, sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var soId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        await PostAsync($"/api/v1/sales-orders/{soId}/submit", new { }, sales);
+
+        res = await PostAsync($"/api/v1/sales-orders/{soId}/approvals", new { reason = (string?)null }, fin);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("Confirmed", (await Json(res)).GetProperty("data").GetProperty("status").GetString());
     }
 
     [Fact]
