@@ -11,6 +11,7 @@ namespace Erp.Api.Migrations;
 // Designer for the hand-authored FixDepreciationRunsPk migration: BuildTargetModel mirrors
 // the current model snapshot so EF 9 Migrate() validation has a target model to diff against.
 [DbContext(typeof(ErpDbContext))]
+[Migration("20261124142024_FixDepreciationRunsPk")]
 public partial class FixDepreciationRunsPk
 {
     protected override void BuildTargetModel(ModelBuilder modelBuilder)

@@ -1,5 +1,6 @@
 using Erp.Api.Data;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -8,8 +9,6 @@ namespace Erp.Api.Migrations;
 
 // T7-UI controller flag: R-FIN holds invoices:approve but never gained invoices:read —
 // finance can post invoices yet cannot list them. Adds the read permission.
-[DbContext(typeof(ErpDbContext))]
-[Migration("20261124213000_AddFinInvoiceRead")]
 public partial class AddFinInvoiceRead : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)

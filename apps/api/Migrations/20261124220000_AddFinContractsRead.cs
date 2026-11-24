@@ -1,5 +1,6 @@
 using Erp.Api.Data;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -8,8 +9,6 @@ namespace Erp.Api.Migrations;
 
 // T6-UI controller flag: R-FIN holds sourcing:approve (opens bids) but lacked contracts:read —
 // the contract checker could not open the contract workspace. Adds the read permission.
-[DbContext(typeof(ErpDbContext))]
-[Migration("20261124220000_AddFinContractsRead")]
 public partial class AddFinContractsRead : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)

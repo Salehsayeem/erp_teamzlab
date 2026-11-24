@@ -11,6 +11,7 @@ namespace Erp.Api.Migrations;
 // Designer for the hand-authored AddFinInvoiceRead migration: BuildTargetModel mirrors the
 // current model so EF 9 Migrate() validation diffs against a real target.
 [DbContext(typeof(ErpDbContext))]
+[Migration("20261124213000_AddFinInvoiceRead")]
 public partial class AddFinInvoiceRead
 {
     protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -3306,7 +3307,7 @@ public partial class AddFinInvoiceRead
                         Id = "R-FIN",
                         LegalEntityId = "LE-001",
                         Name = "finance_officer",
-                        Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write" },
+                        Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write" },
                         TenantId = "T-001"
                     },
                     new
