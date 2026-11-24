@@ -27,6 +27,7 @@ Thumbs.db
 .playwright-mcp/
 .impeccable/
 /*.png
+t7-fixround/
 *.tsbuildinfo
 
 # Agent worktrees live INSIDE the repo (owner rule 2026-11-24)

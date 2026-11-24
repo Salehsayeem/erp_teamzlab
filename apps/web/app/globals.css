@@ -117,6 +117,19 @@ a:hover { text-decoration: underline; }
 .mono { font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Menlo, monospace; font-size: 13px; line-height: 20px; }
 ::selection { background: color-mix(in srgb, var(--primary) 30%, transparent); }
 
+
+/* mobile nav drawer: below 1024px the sidebar becomes a slide-in overlay
+   toggled by the topbar hamburger; the scrim closes it on tap */
+.drawer-scrim { position: fixed; inset: 0; z-index: 39; background: #050a12; opacity: 0.6; }
+@media (max-width: 1023px) {
+  .sidebar { position: fixed; inset-block: 0; inset-inline-start: 0; inline-size: 248px; translate: -100% 0; transition: translate 0.2s ease-out; z-index: 41; overflow-y: auto; }
+  .sidebar--open { translate: 0 0; }
+}
+@media (min-width: 1024px) {
+  .drawer-scrim { display: none; }
+  .topbar__menu { display: none; }
+}
+
 /* ---- app shell: sidebar (sidebar token) + topbar (card token) + content ---- */
 .app-shell { display: flex; min-height: 100vh; }
 .sidebar { display: none; }
@@ -132,6 +145,8 @@ a:hover { text-decoration: underline; }
 .sidebar__link[aria-current="page"] { color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, var(--sidebar)); font-weight: 600; }
 .shell__main { flex: 1; min-inline-size: 0; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 20px; background: var(--card); border-block-end: 1px solid var(--border); position: sticky; inset-block-start: 0; z-index: 30; }
+.topbar__menu { display: inline-flex; align-items: center; justify-content: center; inline-size: 36px; block-size: 36px; background: transparent; border: 1px solid var(--border); border-radius: 8px; color: var(--foreground); font-size: 18px; cursor: pointer; }
+.topbar__menu:hover { background: var(--muted); }
 .topbar__title { font-size: 15px; font-weight: 700; color: var(--foreground); text-decoration: none; }
 .topbar__actions { display: flex; align-items: center; gap: 10px; }
 .content { max-inline-size: 1200px; padding: 24px 20px 48px; }
