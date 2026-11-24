@@ -68,6 +68,15 @@ public class MfgFixRound1Tests : IClassFixture<TestApiFactory>
     private static string ErrCode(HttpResponseMessage res) =>
         RawJson(res).GetAwaiter().GetResult().GetProperty("error").GetProperty("code").GetString()!;
 
+    // an error body may only be read ONCE (the content stream is consumed) — grab the whole
+    // error object when both the code and a nested list are asserted
+    private static async Task<JsonElement> ErrObj(HttpResponseMessage res)
+    {
+        var stream = await res.Content.ReadAsStreamAsync();
+        using var doc = await JsonDocument.ParseAsync(stream);
+        return doc.RootElement.Clone().GetProperty("error");
+    }
+
     private async Task SeedStock(string sku, decimal qty, decimal price)
     {
         var proc = "U-002";
@@ -236,7 +245,7 @@ public class MfgFixRound1Tests : IClassFixture<TestApiFactory>
         await SeedApprovedBom(output, 3m, [new BomLineSeed(a, 1m, 0.10m, "Backflush"), new BomLineSeed(b, 1m, 0.10m, "Backflush")]);
         await SeedStock(a, 10m, 1m);
         await SeedStock(b, 10m, 1m);
-        var orderId = await SeedReleasedOrder(output, 5m);
+        var orderId = await SeedReleasedOrder(output, 1m);
 
         var res = await PostAsync($"/api/v1/production-orders/{orderId}/completions", new { qty = 1m }, Mfg);
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
@@ -342,16 +351,24 @@ public class MfgFixRound1Tests : IClassFixture<TestApiFactory>
         // InProcess → Completed refuses while consumption is unreconciled, naming the mismatch
         var res = await PostAsync($"/api/v1/production-orders/{orderId}/transitions", new { status = "Completed" }, Mfg);
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
-        Assert.Equal("MFG_CLOSE_BLOCKED", ErrCode(res));
-        var items = (await RawJson(res)).GetProperty("error").GetProperty("items").EnumerateArray()
+        var err = await ErrObj(res);
+        Assert.Equal("MFG_CLOSE_BLOCKED", err.GetProperty("code").GetString());
+        var items = err.GetProperty("items").EnumerateArray()
             .Select(i => i.GetProperty("code").GetString()!).ToList();
         Assert.Contains($"consumption:{comp}", items);
 
-        // repair AT Completed — reporting scope includes Completed orders for reconciliation
+        // repair: the last unit is issued — at InProcess the gate passes...
         Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/production-orders/{orderId}/material-issues", new { componentSku = comp, qty = 1m }, Mfg)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/production-orders/{orderId}/transitions", new { status = "Completed" }, Mfg)).StatusCode);
 
-        // reconciled → the Completed order closes without a residual
+        // ...and Completed is not a trap: reporting stays open there, a drift is repairable AT
+        // Completed, and the reconciled order closes without a residual
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/production-orders/{orderId}/material-issues", new { componentSku = comp, qty = 1m }, Mfg)).StatusCode);
         var check = (await GetAsync($"/api/v1/production-orders/{orderId}/close-check", Admin)).GetProperty("data");
+        Assert.True(check.GetProperty("open").GetBoolean());
+
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/production-orders/{orderId}/completions", new { qty = 1m }, Mfg)).StatusCode); // mfg:override over plan
+        check = (await GetAsync($"/api/v1/production-orders/{orderId}/close-check", Admin)).GetProperty("data");
         Assert.Equal(0, check.GetProperty("items").GetArrayLength());
         Assert.Equal(0m, check.GetProperty("wipRemainder").GetDecimal());
         Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/production-orders/{orderId}/closures", new { }, Admin)).StatusCode);
@@ -372,7 +389,7 @@ public class MfgFixRound1Tests : IClassFixture<TestApiFactory>
         await using var db = NewDb();
         await db.Database.ExecuteSqlRawAsync(
             "INSERT INTO order_amendments (id, tenant_id, legal_entity_id, order_id, field, old_value, new_value, reason, changed_by, changed_at) " +
-            "VALUES ({0}, 'other-tenant', 'other-entity', {1}, 'PlannedQty', '4', '5', 'lost the race', 'U-000', now())", orderId);
+            "VALUES ({0} || ':v1', 'other-tenant', 'other-entity', {0}, 'PlannedQty', '4', '5', 'lost the race', 'U-000', now())", orderId);
 
         var service = Service(db);
         var (data, code, message) = service.Transition(
@@ -380,7 +397,7 @@ public class MfgFixRound1Tests : IClassFixture<TestApiFactory>
             orderId, new Erp.Api.Dtos.TransitionOrderRequest(ProductionOrderStatus.Released, 5m, "legitimate amendment"));
         Assert.Equal("AMENDMENT_CONFLICT", code);
         Assert.Null(data);
-        Assert.Contains("v1", message);
+        Assert.Contains("collided", message);
         Assert.Equal("Released", (await GetOrder(orderId)).GetProperty("status").GetString());
     }
 }

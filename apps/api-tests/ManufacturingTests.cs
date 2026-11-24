@@ -870,8 +870,9 @@ public class ManufacturingTests : IClassFixture<TestApiFactory>
         // in depth behind the gate
         var res = await PostAsync($"/api/v1/production-orders/{orderId}/transitions", new { status = "Completed" }, Mfg);
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
-        Assert.Equal("MFG_CLOSE_BLOCKED", ErrCode(res));
-        Assert.Contains(Error(res).GetProperty("items").EnumerateArray()
+        var gateError = Error(res); // the response body is read once — code and items off one parse
+        Assert.Equal("MFG_CLOSE_BLOCKED", gateError.GetProperty("code").GetString());
+        Assert.Contains(gateError.GetProperty("items").EnumerateArray()
             .Select(i => i.GetProperty("code").GetString()!), c => c == "WIP_REMAINDER");
         Assert.Equal("InProcess", (await GetOrder(orderId)).GetProperty("status").GetString()); // gate held
 

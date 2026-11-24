@@ -50,9 +50,13 @@ public sealed class ProductionController(IProductionOrderService production) : C
         if (request.NewPlannedQty is { } qty && qty <= 0)
             return Envelope.Fail("VALIDATION_ERROR", "NewPlannedQty must be greater than 0.", 400);
         var (data, code, message) = production.Transition(u, id, request);
-        return code is not null
-            ? Envelope.Fail(code, message!, ErrorStatus.StatusFor(code))
-            : Envelope.Ok<object>(data!);
+        return code switch
+        {
+            // fix round 1 (F2.1): the Completed gate lifts its mismatch list like the close gate
+            "MFG_CLOSE_BLOCKED" => Envelope.From(Envelope.FailBodyItems(code, message!, (object[])data!), 409),
+            null => Envelope.Ok<object>(data!),
+            _ => Envelope.Fail(code, message!, ErrorStatus.StatusFor(code)),
+        };
     }
 
     [HttpPost("{id}/releases")]
