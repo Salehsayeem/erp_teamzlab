@@ -334,6 +334,7 @@ export default function ProductionOrderDetailPage() {
 
   // ---- derived ---------------------------------------------------------------------------
   const reportingOpen = order !== null && (order.status === "Released" || order.status === "InProcess" || order.status === "Completed");
+  const isCreator = meId !== null && order?.createdBy === meId;
   const canAmend = order !== null && order.status !== "Closed" && order.status !== "Cancelled";
   const showResidual = check !== null && check.wipRemainder > 0;
   const componentOptions = (revision?.lines ?? []).map((l) => ({ value: l.componentSku, label: l.componentSku + " (" + l.unit + ")" }));
@@ -421,13 +422,13 @@ export default function ProductionOrderDetailPage() {
           {order.status === "Draft" || order.status === "Planned" ? (
             <Button variant="danger" disabled={busy || !meReady} onClick={() => setCancelOpen(true)}>{tc.cancel}</Button>
           ) : null}
-          {order.status === "Planned" && canRelease !== false ? (
+          {order.status === "Planned" && canRelease !== false && !isCreator ? (
             <Button disabled={busy || !meReady} onClick={() => setReleaseOpen(true)}>{tc.release}</Button>
           ) : null}
           {order.status === "Planned" && meId !== null && order.createdBy === meId ? (
             <p className="t-caption" role="status">{t.mfg.makerChecker}</p>
           ) : null}
-          {order.status === "Completed" && canClose !== false ? (
+          {order.status === "Completed" && canClose !== false && !isCreator ? (
             <Button disabled={busy || !meReady} onClick={() => setCloseOpen(true)}>{tc.close}</Button>
           ) : null}
           {order.status === "Completed" && meId !== null && order.createdBy === meId ? (
