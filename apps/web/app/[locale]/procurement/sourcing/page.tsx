@@ -188,8 +188,8 @@ export default function SourcingEventsPage() {
                 value={form.eventType}
                 onChange={(e) => setForm({ ...form, eventType: e.target.value as SourcingEventType })}
               />
-              <Input id="ev-opens" label={s.form.opensAt} type="datetime-local" value={form.opensAt} onChange={(e) => setForm({ ...form, opensAt: e.target.value })} error={errors.closesAt} />
-              <Input id="ev-closes" label={s.form.closesAt} type="datetime-local" value={form.closesAt} onChange={(e) => setForm({ ...form, closesAt: e.target.value })} />
+              <Input id="ev-opens" label={s.form.opensAt} type="datetime-local" value={form.opensAt} onChange={(e) => setForm({ ...form, opensAt: e.target.value })} />
+              <Input id="ev-closes" label={s.form.closesAt} type="datetime-local" value={form.closesAt} onChange={(e) => setForm({ ...form, closesAt: e.target.value })} error={errors.closesAt} />
               <Input id="ev-tz" label={s.form.timeZone} hint={s.form.timeZoneHint} value={form.timeZoneName} onChange={(e) => setForm({ ...form, timeZoneName: e.target.value })} error={errors.timeZoneName} />
               <Input id="ev-currency" label={s.form.currency} value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })} error={errors.currency} />
             </div>

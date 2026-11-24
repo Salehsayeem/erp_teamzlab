@@ -262,6 +262,8 @@ export function BidsTab({ ctx, active }: { ctx: WorkspaceCtx; active: boolean })
 
       <Modal open={openOpen} onClose={() => setOpenOpen(false)} title={b.openTitle} closeLabel={t.common.cancel} busy={opening}>
         <p>{b.openConsequence}</p>
+        {/* API errors render inside the dialog — a page-level banner hides behind the scrim. */}
+        {actionError ? <p className="banner" role="alert">{actionError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setOpenOpen(false)}>{t.common.cancel}</Button>
           <Button loading={opening} onClick={() => void runOpen()}>{b.openBids}</Button>
