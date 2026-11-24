@@ -77,7 +77,7 @@ export function AwardsTab({ ctx, active }: { ctx: WorkspaceCtx; active: boolean 
     EVENT_STILL_OPEN: aw.stillOpenNote,
     BID_DISQUALIFIED: t.procurement.sourcing.workspace.evaluation.disqualified,
     AWARD_APPROVAL_ERROR: aw.makerChecker,
-    AWARD_STATE_ERROR: aw.makerChecker,
+    AWARD_STATE_ERROR: aw.stateError,
     FORBIDDEN: t.procurement.common.forbidden,
   };
 

@@ -2,10 +2,15 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { getDictionary, isLocale, type Dict } from "@/lib/i18n";
+
+type NavItem = { href: string; label?: string; labelKey?: keyof Dict["nav"] };
 
 // Grouped app navigation. Hidden on the pre-auth routes (login, select-entity):
 // an unauthenticated visitor gets the auth card, not a map of the app.
-const NAV = [
+// Items opt into the nav dictionary via labelKey (procurement slice); every other
+// item keeps its literal label until the merge wave wires all groups.
+const NAV: { heading: string; items: NavItem[] }[] = [
   {
     heading: "Overview",
     items: [{ href: "dashboard", label: "Dashboard" }],
@@ -15,8 +20,8 @@ const NAV = [
     items: [
       { href: "procurement/suppliers", label: "Suppliers" },
       { href: "procurement/purchase-orders", label: "Purchase orders" },
-      { href: "procurement/sourcing", label: "Sourcing" },
-      { href: "procurement/contracts", label: "Contracts" },
+      { href: "procurement/sourcing", labelKey: "sourcing" },
+      { href: "procurement/contracts", labelKey: "contracts" },
     ],
   },
   {
@@ -53,6 +58,7 @@ const NAV = [
 
 export default function AppSidebar({ locale }: { locale: string }) {
   const pathname = usePathname();
+  const dict = getDictionary(isLocale(locale) ? locale : "en");
   if (pathname === `/${locale}/login` || pathname === `/${locale}/select-entity`) return null;
 
   const isActive = (href: string) =>
@@ -73,7 +79,7 @@ export default function AppSidebar({ locale }: { locale: string }) {
               className="sidebar__link"
               aria-current={isActive(item.href) ? "page" : undefined}
             >
-              {item.label}
+              {item.labelKey ? dict.nav[item.labelKey] : (item.label ?? "")}
             </Link>
           ))}
         </nav>

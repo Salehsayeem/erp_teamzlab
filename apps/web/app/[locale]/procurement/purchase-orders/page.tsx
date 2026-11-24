@@ -166,7 +166,14 @@ export default function PurchaseOrdersPage() {
                           <div className="stack">
                             <Input id={`reject-${po.id}`} label={t.po.rejectionReason} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
                             <div className="row-actions" style={{ justifyContent: "flex-start" }}>
-                              <Button small loading={busyId === po.id} disabled={busyId !== null} onClick={() => void act(po.id, () => approvePo(token ?? "", po.id, rejectReason.trim() || null)).then((ok) => { if (ok) setOpenAction(null); })}>
+                              {/* A null reason reads as APPROVE server-side — the confirm stays
+                                  disabled until a real reason exists, and we never send null. */}
+                              <Button
+                                small
+                                loading={busyId === po.id}
+                                disabled={busyId !== null || !rejectReason.trim()}
+                                onClick={() => void act(po.id, () => approvePo(token ?? "", po.id, rejectReason.trim())).then((ok) => { if (ok) setOpenAction(null); })}
+                              >
                                 {t.po.confirmReject}
                               </Button>
                               <Button small variant="secondary" onClick={() => setOpenAction(null)}>{t.common.cancel}</Button>

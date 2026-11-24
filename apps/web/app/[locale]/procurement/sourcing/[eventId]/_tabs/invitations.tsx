@@ -47,9 +47,9 @@ export function InvitationsTab({ ctx, active }: { ctx: WorkspaceCtx; active: boo
   useEffect(() => { if (active) void load(); }, [active, load]);
 
   const errMap: Record<string, string> = {
-    SUPPLIER_INELIGIBLE: inv.errors.inviteRequired,
+    SUPPLIER_INELIGIBLE: inv.eligibleOnly,
     SUPPLIER_NOT_FOUND: t.procurement.common.forbidden,
-    INVITATION_EXISTS: inv.empty,
+    INVITATION_EXISTS: inv.alreadyInvited,
     EVENT_STATE_ERROR: t.procurement.common.forbidden,
     FORBIDDEN: t.procurement.common.forbidden,
   };

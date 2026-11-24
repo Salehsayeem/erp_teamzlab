@@ -109,7 +109,7 @@ export const en = {
     approve: "Approve",
     reject: "Reject",
     confirmReject: "Confirm rejection",
-    rejectionReason: "Rejection reason (optional)",
+    rejectionReason: "Rejection reason",
     receive: "Receive",
     receiveTitle: "Receive stock",
     itemSku: "Item",
@@ -318,7 +318,7 @@ export const en = {
     common: {
       actionFailed: "Action failed.",
       forbidden: "You do not have permission for this action.",
-      sessionOnly: "Listed from this session only — full history appears once the read API lands.",
+      sessionOnly: "Showing session-local data — live history is unavailable right now (permission or connection); reload to refresh.",
       supplier: "Supplier",
       status: "Status",
       currency: "Currency",
@@ -482,6 +482,7 @@ export const en = {
           versionBump: "Publishing an event-wide answer bumps the event version — bidders quote against the new version.",
           qaColumns: { question: "Question", answer: "Answer", scope: "Scope", supplier: "Supplier", published: "Published" },
           inviteFailed: "Could not send invitations.",
+          alreadyInvited: "That supplier is already invited to this event.",
           qaFailed: "Could not log the Q&A.",
           errors: {
             questionRequired: "Question is required.",
@@ -572,7 +573,7 @@ export const en = {
         awards: {
           title: "Awards",
           empty: "No awards recommended yet.",
-          sessionOnly: "Awards recommended in this session are listed; award history appears once the awards read API lands.",
+          sessionOnly: "Showing awards recorded in this session — live history is unavailable right now (permission or connection); reload to refresh.",
           stillOpenNote: "Awards wait until the bid window has closed.",
           recommendTitle: "Recommend an award",
           lot: "Lot",
@@ -603,6 +604,7 @@ export const en = {
           rejectTitle: "Reject this award?",
           rejectConsequence: "Rejecting ends this recommendation; the event moves to Closed — or NoAward when nothing remains awardable.",
           makerChecker: "Maker-checker: the recommender cannot decide their own award.",
+          stateError: "That award has already been decided.",
           allocationTitle: "Lot allocation",
           allocationColumns: { lot: "Lot", target: "Target qty", awarded: "Awarded qty", remaining: "Remaining" },
           recommendFailed: "Could not recommend the award.",
@@ -660,7 +662,7 @@ export const en = {
         loadFailed: "Could not load this contract.",
         notFound: "Contract not found.",
         backToList: "Back to contracts",
-        sessionOnly: "Amendments and obligations created in this session are listed below; full history needs the contract read endpoint.",
+        sessionOnly: "Showing this session's amendments and obligations — live history is unavailable right now (permission or connection); reload to refresh.",
         overview: {
           title: "Overview",
           supplier: "Supplier",
@@ -720,10 +722,12 @@ export const en = {
           verifyTitle: "Verify this obligation?",
           verifyConsequence: "Verification marks the obligation satisfied under your name. It cannot be undone.",
           makerChecker: "Maker-checker: the obligation creator cannot verify or waive it.",
+          verifyNeedsEvidence: "Submit evidence first — verification opens once the evidence is in.",
           addFailed: "Could not add the obligation.",
           evidenceFailed: "Could not submit evidence.",
           verifyFailed: "Could not verify the obligation.",
           waiveFailed: "Could not waive the obligation.",
+          stateError: "That obligation is not in a state that allows this action (already verified, waived, or still awaiting evidence).",
           errors: {
             typeRequired: "Type is required.",
             ownerRequired: "Owner is required.",
@@ -761,7 +765,7 @@ export const en = {
       },
       gates: {
         title: "Eligibility gates (this session)",
-        sessionNote: "Gates recorded in this session; full history appears once the gates read API lands.",
+        sessionNote: "Showing gates recorded in this session — live history is unavailable right now (permission or connection); retry to refresh.",
         empty: "No gates recorded in this session.",
         addTitle: "Add gate",
         gateCode: "Gate code",

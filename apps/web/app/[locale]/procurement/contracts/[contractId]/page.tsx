@@ -41,7 +41,7 @@ export default function ContractWorkspacePage() {
   const [priceLines, setPriceLines] = useState<ContractPriceLine[]>(EMPTY_LISTS.priceLines);
   const [obligations, setObligations] = useState<ContractObligation[]>(EMPTY_LISTS.obligations);
   const [me, setMe] = useState<{ id: string; perms: string[] } | null>(null);
-  const [phase, setPhase] = useState<"loading" | "notFound" | "error" | "success">("success");
+  const [phase, setPhase] = useState<"loading" | "notFound" | "error" | "success">("loading");
   const [sessionOnly, setSessionOnly] = useState(false);
 
   const [activateOpen, setActivateOpen] = useState(false);
@@ -92,7 +92,9 @@ export default function ContractWorkspacePage() {
 
   const canApprove = me ? hasPerm(me.perms, "contracts:approve") : false;
   const isMaker = me !== null && contract !== null && contract.createdBy === me.id;
-  const canActivate = canApprove && contract?.status === "Draft" && !isMaker;
+  // Zero price lines is knowable only from the detail read; a degraded session (no detail
+  // permission) leaves the decision to the server, which answers CONTRACT_NO_PRICE_LINES.
+  const canActivate = canApprove && contract?.status === "Draft" && !isMaker && (sessionOnly || priceLines.length > 0);
   const optionsLeft = contract !== null && contract.optionPeriodsTotal !== null && contract.optionsExercised < contract.optionPeriodsTotal;
   const canRenew = canApprove && contract?.status === "Active" && !isMaker && optionsLeft;
 
@@ -193,11 +195,16 @@ export default function ContractWorkspacePage() {
           isMaker ? (
             <p className="banner" role="status">{ov.makerChecker}</p>
           ) : (
-            <div className="row-actions" style={{ justifyContent: "flex-start" }}>
-              {contract.status === "Draft" ? (
-                <Button disabled={!canActivate} onClick={() => { setActionError(null); setActivateOpen(true); }}>{ov.activate}</Button>
+            <>
+              {contract.status === "Draft" && !sessionOnly && priceLines.length === 0 ? (
+                <p className="banner" role="status">{ov.noPriceLines}</p>
               ) : null}
-            </div>
+              <div className="row-actions" style={{ justifyContent: "flex-start" }}>
+                {contract.status === "Draft" ? (
+                  <Button disabled={!canActivate} onClick={() => { setActionError(null); setActivateOpen(true); }}>{ov.activate}</Button>
+                ) : null}
+              </div>
+            </>
           )
         ) : null}
       </section>
@@ -224,6 +231,8 @@ export default function ContractWorkspacePage() {
 
       <Modal open={activateOpen} onClose={() => setActivateOpen(false)} title={ov.activateTitle} closeLabel={t.common.cancel} busy={acting}>
         <p>{ov.activateConsequence}</p>
+        {/* API errors render inside the dialog — a page-level banner hides behind the scrim. */}
+        {actionError ? <p className="banner" role="alert">{actionError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setActivateOpen(false)}>{t.common.cancel}</Button>
           <Button loading={acting} onClick={() => void activate()}>{ov.activate}</Button>
@@ -232,6 +241,7 @@ export default function ContractWorkspacePage() {
 
       <Modal open={renewOpen} onClose={() => setRenewOpen(false)} title={rn.exerciseTitle} closeLabel={t.common.cancel} busy={acting}>
         <p>{rn.exerciseConsequence}</p>
+        {actionError ? <p className="banner" role="alert">{actionError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setRenewOpen(false)}>{t.common.cancel}</Button>
           <Button loading={acting} onClick={() => void renew()}>{rn.exercise}</Button>

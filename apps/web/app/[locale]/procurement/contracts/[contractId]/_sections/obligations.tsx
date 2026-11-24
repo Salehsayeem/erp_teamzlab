@@ -30,7 +30,7 @@ export function ObligationsSection({ ctx }: { ctx: ContractCtx }) {
 
   const errMap: Record<string, string> = {
     OBLIGATION_APPROVAL_ERROR: ob.makerChecker,
-    OBLIGATION_STATE_ERROR: ob.makerChecker,
+    OBLIGATION_STATE_ERROR: ob.stateError,
     FORBIDDEN: t.procurement.common.forbidden,
   };
 
@@ -103,7 +103,12 @@ export function ObligationsSection({ ctx }: { ctx: ContractCtx }) {
         actionable(o) ? (
           <div className="row-actions">
             {canWrite ? (
-              <Button small variant="secondary" onClick={() => { setOpenAction({ id: o.id, action: "evidence" }); setEvidenceRef(o.evidenceRef ?? ""); }}>
+              <Button
+                small
+                variant="secondary"
+                aria-expanded={openAction?.id === o.id && openAction.action === "evidence"}
+                onClick={() => { setOpenAction({ id: o.id, action: "evidence" }); setEvidenceRef(o.evidenceRef ?? ""); }}
+              >
                 {ob.submitEvidence}
               </Button>
             ) : null}
@@ -112,7 +117,12 @@ export function ObligationsSection({ ctx }: { ctx: ContractCtx }) {
                 <span className="t-caption">{ob.makerChecker}</span>
               ) : (
                 <>
-                  <Button small disabled={meId === null} onClick={() => { setActionError(null); setOpenAction({ id: o.id, action: "verify" }); }}>{ob.verify}</Button>
+                  {/* Verify requires EvidenceSubmitted — an Open obligation shows no Verify. */}
+                  {o.status === "EvidenceSubmitted" ? (
+                    <Button small disabled={meId === null} onClick={() => { setActionError(null); setOpenAction({ id: o.id, action: "verify" }); }}>{ob.verify}</Button>
+                  ) : (
+                    <span className="t-caption" title={ob.verifyNeedsEvidence}>{ob.verifyNeedsEvidence}</span>
+                  )}
                   <Button small variant="danger" disabled={meId === null} onClick={() => { setActionError(null); setWaiveReason(""); setOpenAction({ id: o.id, action: "waive" }); }}>{ob.waive}</Button>
                 </>
               )
@@ -188,6 +198,8 @@ export function ObligationsSection({ ctx }: { ctx: ContractCtx }) {
       >
         <p>{ob.verifyConsequence}</p>
         {openTarget ? <p className="t-caption mono">{openTarget.obligationType} · {openTarget.ownerUserId}</p> : null}
+        {/* API errors render inside the dialog — a page-level banner hides behind the scrim. */}
+        {actionError ? <p className="banner" role="alert">{actionError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setOpenAction(null)}>{t.common.cancel}</Button>
           <Button loading={busyId !== null} onClick={() => openTarget && void act(openTarget, "verify")}>{ob.verify}</Button>
@@ -203,6 +215,7 @@ export function ObligationsSection({ ctx }: { ctx: ContractCtx }) {
       >
         <p>{ob.waiveConsequence}</p>
         <Input id="waive-reason" label={ob.waiveReason} value={waiveReason} onChange={(e) => setWaiveReason(e.target.value)} />
+        {actionError ? <p className="banner" role="alert">{actionError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setOpenAction(null)}>{t.common.cancel}</Button>
           <Button variant="danger" loading={busyId !== null} disabled={!waiveReason.trim()} onClick={() => openTarget && void act(openTarget, "waive")}>{ob.waive}</Button>

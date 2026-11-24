@@ -126,7 +126,7 @@ export function SetupTab({ ctx }: { ctx: WorkspaceCtx }) {
   const criterionColumns: Column<EvalCriterion>[] = [
     { key: "code", label: st.criterionColumns.code, mono: true, render: (c) => c.code },
     { key: "name", label: st.criterionColumns.name, render: (c) => c.name },
-    { key: "kind", label: st.criterionColumns.kind, render: (c) => <Badge tone="muted">{statusLabel(t, c.kind)}</Badge> },
+    { key: "kind", label: st.criterionColumns.kind, render: (c) => <Badge tone="muted">{c.kind === "Scored" ? st.kindScored : st.kindPassFail}</Badge> },
     { key: "weightPct", label: st.criterionColumns.weightPct, mono: true, render: (c) => fmtNumber(c.weightPct, locale) },
     { key: "scaleMax", label: st.criterionColumns.scaleMax, mono: true, render: (c) => (c.kind === "Scored" ? fmtNumber(c.scaleMax, locale) : "—") },
   ];

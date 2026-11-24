@@ -47,7 +47,7 @@ export default function SupplierDetailPage() {
   const [savingStatus, setSavingStatus] = useState(false);
 
   const [gates, setGates] = useState<SupplierGate[]>([]);
-  const [gatesRead, setGatesRead] = useState(false);
+  const [gatesError, setGatesError] = useState(false);
   const [gateForm, setGateForm] = useState<GateForm>(EMPTY_GATE);
   const [gateErrors, setGateErrors] = useState<Partial<Record<keyof GateForm, string>>>({});
   const [gateError, setGateError] = useState<string | null>(null);
@@ -68,6 +68,16 @@ export default function SupplierDetailPage() {
     return () => { cancelled = true; };
   }, [token]);
 
+  const loadGates = useCallback(async () => {
+    if (!token) return;
+    setGatesError(false);
+    const res = await fetchSupplierGates(token, supplierId);
+    if (res.ok) {
+      setGates(res.data);
+      setGatesError(false);
+    } else setGatesError(true);
+  }, [token, supplierId]);
+
   const load = useCallback(async () => {
     if (!token) return;
     setPhase("loading");
@@ -75,18 +85,13 @@ export default function SupplierDetailPage() {
     const row = listRes.ok ? listRes.data.find((s) => s.id === supplierId) : undefined;
     if (!row) {
       setSupplier(null);
-      setPhase(listRes.ok ? "error" : "error");
+      setPhase("error");
       return;
     }
     setSupplier(row);
     setPhase("success");
-    // Gates read (landing in parallel) — merged into the in-session list when it answers.
-    const gatesRes = await fetchSupplierGates(token, supplierId);
-    if (gatesRes.ok) {
-      setGates(gatesRes.data);
-      setGatesRead(true);
-    }
-  }, [token, supplierId]);
+    void loadGates();
+  }, [token, supplierId, loadGates]);
   useEffect(() => { void load(); }, [load]);
 
   async function submitStatus(e: FormEvent) {
@@ -175,7 +180,12 @@ export default function SupplierDetailPage() {
           <Badge tone="warning">{fmtDate(g.exceptionUntil, locale)}</Badge>
         ) : canWrite === true ? (
           <div className="row-actions" style={{ justifyContent: "flex-start" }}>
-            <Button small variant="secondary" onClick={() => { setExceptionFor(exceptionFor === g.id ? null : g.id); setExceptionUntil(""); setExceptionError(null); }}>
+            <Button
+              small
+              variant="secondary"
+              aria-expanded={exceptionFor === g.id}
+              onClick={() => { setExceptionFor(exceptionFor === g.id ? null : g.id); setExceptionUntil(""); setExceptionError(null); }}
+            >
               {d.gates.grantException}
             </Button>
           </div>
@@ -251,8 +261,9 @@ export default function SupplierDetailPage() {
 
       <section className="card">
         <h2 className="t-title">{d.gates.title}</h2>
-        <p className="t-caption">{d.gates.sessionNote}</p>
-        {gates.length === 0 ? (
+        {gatesError ? (
+          <ErrorState message={d.gates.sessionNote} retryLabel={t.common.retry} onRetry={() => void loadGates()} />
+        ) : gates.length === 0 ? (
           <EmptyState title={d.gates.empty} />
         ) : (
           <>
