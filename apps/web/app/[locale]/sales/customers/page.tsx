@@ -19,7 +19,7 @@ import {
   type ToastItem,
 } from "@/components/uikit";
 import type { Column } from "@/components/uikit";
-import { salesActionError } from "../_lib/helpers";
+import { salesActionError, SalesMeError, useSalesMe } from "../_lib/helpers";
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -32,6 +32,7 @@ export default function CustomersPage() {
   const t = getDictionary(locale);
   const tc = t.sales.customers;
   const { token, ready } = useAuth(locale);
+  const { meFailed, retryMe } = useSalesMe(token);
 
   const [customers, setCustomers] = useState<CustomerRow[] | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
@@ -121,6 +122,7 @@ export default function CustomersPage() {
         <p className="t-caption">{tc.subtitle}</p>
       </div>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} closeLabel={t.common.cancel} />
+      {meFailed ? <SalesMeError t={t} onRetry={retryMe} /> : null}
       {createError ? <p className="banner" role="alert">{createError}</p> : null}
 
       <section className="card">

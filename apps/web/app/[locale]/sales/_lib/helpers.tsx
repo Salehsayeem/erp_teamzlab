@@ -4,29 +4,60 @@ import { useEffect, useState } from "react";
 import { fetchMe, type Me } from "@/lib/services/api";
 import { localeTag, type Locale } from "@/lib/i18n";
 import type { Dict } from "@/lib/i18n";
-import type { BadgeTone } from "@/components/uikit";
+import { Button, type BadgeTone } from "@/components/uikit";
 
 export type SalesMe = {
   meId: string | null;
   permissions: string[] | null;
   /** True once /me resolved — checker buttons stay disabled until then. */
   meReady: boolean;
+  /** True when /me definitively failed (401/network) — pages render a visible
+   * failure state with retry instead of silently dead gated buttons. */
+  meFailed: boolean;
+  /** Re-runs the /me fetch. */
+  retryMe: () => void;
 };
 
 /** Maker-checker idiom (inventory/counts): resolve /me once per page so the UI
  * can gate checker buttons on permission AND on "not the maker". While
- * unresolved, gated buttons render disabled — never enabled by default. */
+ * unresolved, gated buttons render disabled — never enabled by default.
+ * A definitive failure surfaces via `meFailed` (review 1.3/fix round 1):
+ * pages render SalesMeError with retry instead of leaving silent dead buttons. */
 export function useSalesMe(token: string | null): SalesMe {
   const [me, setMe] = useState<Me | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
+    setFailed(false);
     void fetchMe(token).then((res) => {
-      if (!cancelled && res.ok) setMe(res.data);
+      if (cancelled) return;
+      if (res.ok) setMe(res.data);
+      else setFailed(true);
     });
     return () => { cancelled = true; };
-  }, [token]);
-  return { meId: me?.user.id ?? null, permissions: me?.permissions ?? null, meReady: me !== null };
+  }, [token, attempt]);
+  return {
+    meId: me?.user.id ?? null,
+    permissions: me?.permissions ?? null,
+    meReady: me !== null,
+    meFailed: failed,
+    retryMe: () => setAttempt((a) => a + 1),
+  };
+}
+
+/** Visible /me failure state (fix round 1, review 1.3): rendered by every sales
+ * screen when permission resolution definitively failed — retry re-runs /me. */
+export function SalesMeError({ t, onRetry }: { t: Dict; onRetry: () => void }) {
+  return (
+    <div className="state state--error" role="alert">
+      <p className="state__title">{t.sales.meError}</p>
+      <Button variant="secondary" onClick={onRetry}>
+        {t.common.retry}
+      </Button>
+    </div>
+  );
 }
 
 /** Permission gate: null permissions (me unresolved) means "unknown" → callers
@@ -71,7 +102,9 @@ export function salesActionError(t: Dict, code: string, message: string): string
   if (code === "NETWORK") return t.common.networkError;
   const key = ERROR_KEYS[code];
   const label = key ? t.sales.errors[key] : null;
-  return label ? `${label}: ${message}` : `${t.sales.actionFailed}: ${message}`;
+  // An empty API message must not leave a dangling ": " (fix round 1, minor b).
+  if (label) return message ? `${label}: ${message}` : label;
+  return message ? `${t.sales.actionFailed}: ${message}` : t.sales.actionFailed;
 }
 
 /** Module-local status labels first, then the shared common.status entries. */

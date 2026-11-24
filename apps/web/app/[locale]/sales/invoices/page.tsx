@@ -32,7 +32,7 @@ import {
   ToastRegion,
   type ToastItem,
 } from "@/components/uikit";
-import { fmtDay, hasPermission, salesActionError, salesStatusLabel, salesTone, useSalesMe } from "../_lib/helpers";
+import { fmtDay, hasPermission, salesActionError, salesStatusLabel, salesTone, SalesMeError, useSalesMe } from "../_lib/helpers";
 
 const INVOICE_STATUSES = ["Draft", "Posted", "Discarded"];
 
@@ -47,7 +47,7 @@ export default function InvoicesPage() {
   const t = getDictionary(locale);
   const tc = t.sales.invoices;
   const { token, ready } = useAuth(locale);
-  const { meId, permissions, meReady } = useSalesMe(token);
+  const { meId, permissions, meReady, meFailed, retryMe } = useSalesMe(token);
 
   const [invoices, setInvoices] = useState<Invoice[] | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
@@ -64,6 +64,8 @@ export default function InvoicesPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [postModalId, setPostModalId] = useState<string | null>(null);
   const [discardModalId, setDiscardModalId] = useState<string | null>(null);
+  const [approveTarget, setApproveTarget] = useState<{ doc: AdjustmentDocument; invoiceId: string } | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   const [adjustFor, setAdjustFor] = useState<string | null>(null);
   const [adjustForm, setAdjustForm] = useState<AdjustForm>(EMPTY_ADJUST_FORM);
@@ -175,11 +177,11 @@ export default function InvoicesPage() {
   async function confirmPost() {
     if (!postModalId || !token) return;
     setBusyId(postModalId);
-    setActionError(null);
+    setModalError(null);
     const res = await postInvoice(token, postModalId);
     setBusyId(null);
     if (!res.ok) {
-      setActionError(salesActionError(t, res.code, res.message));
+      setModalError(salesActionError(t, res.code, res.message));
       return;
     }
     pushToast("success", `${tc.postedNote} ${res.data.journal.id}`);
@@ -189,12 +191,17 @@ export default function InvoicesPage() {
 
   async function confirmDiscard() {
     if (!discardModalId || !token) return;
-    const ok = await act(discardModalId, () => discardInvoice(token, discardModalId));
-    if (ok) {
-      pushToast("success", tc.discardNote);
-      setDiscardModalId(null);
-      await load();
+    setBusyId(discardModalId);
+    setModalError(null);
+    const res = await discardInvoice(token, discardModalId);
+    setBusyId(null);
+    if (!res.ok) {
+      setModalError(salesActionError(t, res.code, res.message));
+      return;
     }
+    pushToast("success", tc.discardNote);
+    setDiscardModalId(null);
+    await load();
   }
 
   function setAdjustLine(i: number, patch: Partial<AdjustLineForm>) {
@@ -247,15 +254,16 @@ export default function InvoicesPage() {
     setAdjustForm(EMPTY_ADJUST_FORM);
   }
 
-  async function approve(id: string, invoiceId: string, reason: string | null) {
-    if (!token) return false;
+  /** Runs the adjustment approve/reject call; returns a localized error string
+   * or null on success so each caller renders it in its own context (modal vs
+   * page banner). */
+  async function approve(id: string, invoiceId: string, reason: string | null): Promise<string | null> {
+    if (!token) return t.common.networkError;
     setBusyId(id);
-    setActionError(null);
     const res = await approveAdjustment(token, id, reason);
     setBusyId(null);
     if (!res.ok) {
-      setActionError(salesActionError(t, res.code, res.message));
-      return false;
+      return salesActionError(t, res.code, res.message);
     }
     setSessionAdjustments((prev) => ({
       ...prev,
@@ -267,7 +275,17 @@ export default function InvoicesPage() {
     }));
     if (reason === null) pushToast("success", `${tc.adjustApproved} ${res.data.journalId ?? ""}`);
     else pushToast("info", tc.adjustRejected);
-    return true;
+    return null;
+  }
+
+  async function confirmApprove() {
+    if (!approveTarget || !token) return;
+    const error = await approve(approveTarget.doc.id, approveTarget.invoiceId, null);
+    if (error) {
+      setModalError(error);
+      return;
+    }
+    setApproveTarget(null);
   }
 
   // Maker-checker gates: while /me is unresolved the controls render disabled;
@@ -286,6 +304,7 @@ export default function InvoicesPage() {
         <p className="t-caption">{tc.subtitle}</p>
       </div>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} closeLabel={t.common.cancel} />
+      {meFailed ? <SalesMeError t={t} onRetry={retryMe} /> : null}
       {actionError ? <p className="banner" role="alert">{actionError}</p> : null}
 
       <section className="card">
@@ -408,8 +427,8 @@ export default function InvoicesPage() {
                               onRejectOpen={(id) => { setRejectAdjustId(id); setRejectReason(""); }}
                               onRejectReason={setRejectReason}
                               onRejectCancel={() => setRejectAdjustId(null)}
-                              onApprove={(doc) => void approve(doc.id, invoice.id, null)}
-                              onRejectConfirm={(doc) => void approve(doc.id, invoice.id, rejectReason.trim() || null).then((ok) => { if (ok) setRejectAdjustId(null); })}
+                              onApproveOpen={(doc) => { setApproveTarget({ doc, invoiceId: invoice.id }); setModalError(null); }}
+                              onRejectConfirm={(doc) => void approve(doc.id, invoice.id, rejectReason.trim()).then((error) => { if (error === null) setRejectAdjustId(null); else setActionError(error); })}
                             />
                             {invoice.status === "Posted" && adjustFor === invoice.id ? (
                               <AdjustmentForm
@@ -440,6 +459,7 @@ export default function InvoicesPage() {
 
       <Modal open={postModalId !== null} onClose={() => setPostModalId(null)} title={tc.postConfirmTitle} closeLabel={t.common.cancel}>
         <p>{tc.postConfirm}</p>
+        {modalError ? <p className="banner" role="alert">{modalError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setPostModalId(null)}>{t.common.cancel}</Button>
           <Button loading={busyId !== null} onClick={() => void confirmPost()}>{tc.post}</Button>
@@ -448,9 +468,19 @@ export default function InvoicesPage() {
 
       <Modal open={discardModalId !== null} onClose={() => setDiscardModalId(null)} title={tc.discardConfirmTitle} closeLabel={t.common.cancel}>
         <p>{tc.discardConfirm}</p>
+        {modalError ? <p className="banner" role="alert">{modalError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setDiscardModalId(null)}>{t.common.cancel}</Button>
           <Button variant="danger" loading={busyId !== null} onClick={() => void confirmDiscard()}>{tc.discard}</Button>
+        </div>
+      </Modal>
+
+      <Modal open={approveTarget !== null} onClose={() => setApproveTarget(null)} title={tc.approveConfirmTitle} closeLabel={t.common.cancel}>
+        <p>{tc.approveConfirm}</p>
+        {modalError ? <p className="banner" role="alert">{modalError}</p> : null}
+        <div className="modal__actions">
+          <Button variant="secondary" onClick={() => setApproveTarget(null)}>{t.common.cancel}</Button>
+          <Button loading={busyId !== null} onClick={() => void confirmApprove()}>{tc.approveAdjustment}</Button>
         </div>
       </Modal>
     </div>
@@ -474,7 +504,7 @@ type DetailProps = {
   onRejectOpen: (id: string) => void;
   onRejectReason: (value: string) => void;
   onRejectCancel: () => void;
-  onApprove: (doc: AdjustmentDocument) => void;
+  onApproveOpen: (doc: AdjustmentDocument) => void;
   onRejectConfirm: (doc: AdjustmentDocument) => void;
 };
 
@@ -562,7 +592,7 @@ function AdjustmentList(props: DetailProps & { adjustments: AdjustmentDocument[]
                     <td data-label={t.journals.actions}>
                       {showActions ? (
                         <div className="row-actions">
-                          <Button small disabled={!meReady || busyId !== null} onClick={() => props.onApprove(doc)}>
+                          <Button small disabled={!meReady || busyId !== null} onClick={() => props.onApproveOpen(doc)}>
                             {tc.approveAdjustment}
                           </Button>
                           <Button small variant="danger" disabled={!meReady || busyId !== null} onClick={() => props.onRejectOpen(doc.id)}>
@@ -585,7 +615,7 @@ function AdjustmentList(props: DetailProps & { adjustments: AdjustmentDocument[]
         <div className="stack" style={{ marginTop: 12 }}>
           <Input id="adjust-reject-reason" label={tc.rejectReason} value={rejectReason} onChange={(e) => props.onRejectReason(e.target.value)} />
           <div className="row-actions" style={{ justifyContent: "flex-start" }}>
-            <Button small loading={busyId !== null} onClick={() => {
+            <Button small loading={busyId !== null} disabled={!rejectReason.trim()} onClick={() => {
               const doc = adjustments.find((d) => d.id === rejectId);
               if (doc) props.onRejectConfirm(doc);
             }}>

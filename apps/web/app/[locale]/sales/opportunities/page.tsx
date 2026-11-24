@@ -21,7 +21,7 @@ import {
   Modal,
   Select,
 } from "@/components/uikit";
-import { fmtDay, salesActionError, salesStatusLabel, salesTone } from "../_lib/helpers";
+import { fmtDay, salesActionError, salesStatusLabel, salesTone, SalesMeError, useSalesMe } from "../_lib/helpers";
 
 const OPP_STATUSES = ["Open", "Won", "Lost"];
 
@@ -35,6 +35,7 @@ export default function OpportunitiesPage() {
   const t = getDictionary(locale);
   const tc = t.sales.opportunities;
   const { token, ready } = useAuth(locale);
+  const { meFailed, retryMe } = useSalesMe(token);
 
   const [rows, setRows] = useState<Opportunity[] | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
@@ -51,6 +52,7 @@ export default function OpportunitiesPage() {
   const [lossReason, setLossReason] = useState("");
   const [competitor, setCompetitor] = useState("");
   const [reasonError, setReasonError] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -105,27 +107,29 @@ export default function OpportunitiesPage() {
     await load();
   }
 
-  async function transition(id: string, body: { status: string; stage: string; orderId?: string; lossReason?: string; competitor?: string }) {
-    if (!token) return false;
+  /** Returns a localized error string, or null on success — modal callers
+   * render it inside the dialog (fix round 1: failures were behind the scrim). */
+  async function transition(id: string, body: { status: string; stage: string; orderId?: string; lossReason?: string; competitor?: string }): Promise<string | null> {
+    if (!token) return t.common.networkError;
     setBusyId(id);
-    setActionError(null);
     const res = await transitionOpportunity(token, id, body);
     setBusyId(null);
     if (!res.ok) {
-      setActionError(salesActionError(t, res.code, res.message));
-      return false;
+      return salesActionError(t, res.code, res.message);
     }
-    return true;
+    return null;
   }
 
   async function confirmWon() {
     if (!wonId) return;
-    const ok = await transition(wonId, { status: "Won", stage: "", orderId: orderId.trim() });
-    if (ok) {
-      setWonId(null);
-      setOrderId("");
-      await load();
+    const error = await transition(wonId, { status: "Won", stage: "", orderId: orderId.trim() });
+    if (error) {
+      setModalError(error);
+      return;
     }
+    setWonId(null);
+    setOrderId("");
+    await load();
   }
 
   async function confirmLost() {
@@ -136,23 +140,25 @@ export default function OpportunitiesPage() {
       return;
     }
     setReasonError(null);
-    const ok = await transition(lostId, { status: "Lost", stage: "", lossReason: reason, competitor: competitor.trim() || undefined });
-    if (ok) {
-      setLostId(null);
-      setLossReason("");
-      setCompetitor("");
-      await load();
+    const error = await transition(lostId, { status: "Lost", stage: "", lossReason: reason, competitor: competitor.trim() || undefined });
+    if (error) {
+      setModalError(error);
+      return;
     }
+    setLostId(null);
+    setLossReason("");
+    setCompetitor("");
+    await load();
   }
 
   function rowActions(opp: Opportunity) {
     if (opp.status !== "Open") return null;
     return (
       <div className="row-actions">
-        <Button small onClick={() => { setWonId(opp.id); setOrderId(""); }}>
+        <Button small onClick={() => { setWonId(opp.id); setOrderId(""); setModalError(null); }}>
           {tc.markWon}
         </Button>
-        <Button small variant="danger" onClick={() => { setLostId(opp.id); setLossReason(""); setCompetitor(""); setReasonError(null); }}>
+        <Button small variant="danger" onClick={() => { setLostId(opp.id); setLossReason(""); setCompetitor(""); setReasonError(null); setModalError(null); }}>
           {tc.markLost}
         </Button>
       </div>
@@ -168,6 +174,7 @@ export default function OpportunitiesPage() {
         <h1 className="t-display">{tc.title}</h1>
         <p className="t-caption">{tc.subtitle}</p>
       </div>
+      {meFailed ? <SalesMeError t={t} onRetry={retryMe} /> : null}
       {actionError ? <p className="banner" role="alert">{actionError}</p> : null}
 
       <div className="tiles">
@@ -312,6 +319,7 @@ export default function OpportunitiesPage() {
           onChange={(e) => setOrderId(e.target.value)}
           hint={tc.orderIdHint}
         />
+        {modalError ? <p className="banner" role="alert">{modalError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setWonId(null)}>{t.common.cancel}</Button>
           <Button loading={busyId !== null} onClick={() => void confirmWon()}>{tc.confirmWon}</Button>
@@ -321,6 +329,7 @@ export default function OpportunitiesPage() {
       <Modal open={lostId !== null} onClose={() => setLostId(null)} title={tc.markLost} closeLabel={t.common.cancel}>
         <Input id="opp-loss-reason" label={tc.lossReason} value={lossReason} onChange={(e) => setLossReason(e.target.value)} error={reasonError ?? undefined} />
         <Input id="opp-competitor" label={tc.competitor} value={competitor} onChange={(e) => setCompetitor(e.target.value)} />
+        {modalError ? <p className="banner" role="alert">{modalError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setLostId(null)}>{t.common.cancel}</Button>
           <Button variant="danger" loading={busyId !== null} onClick={() => void confirmLost()}>{tc.confirmLost}</Button>

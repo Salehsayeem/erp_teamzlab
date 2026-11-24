@@ -29,7 +29,7 @@ import {
   ToastRegion,
   type ToastItem,
 } from "@/components/uikit";
-import { fmtDay, hasPermission, salesActionError, salesStatusLabel, salesTone, useSalesMe } from "../_lib/helpers";
+import { fmtDay, hasPermission, salesActionError, salesStatusLabel, salesTone, SalesMeError, useSalesMe } from "../_lib/helpers";
 
 const REMINDER_CHANNELS = ["Email", "Call", "Letter", "Sms"];
 
@@ -41,10 +41,11 @@ export default function CollectionsPage() {
   const t = getDictionary(locale);
   const tc = t.sales.collections;
   const { token, ready } = useAuth(locale);
-  const { permissions } = useSalesMe(token);
+  const { permissions, meFailed, retryMe } = useSalesMe(token);
 
   const [rows, setRows] = useState<WorklistRow[] | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
+  const [worklistErrorCode, setWorklistErrorCode] = useState<string | null>(null);
 
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [exposureCustomerId, setExposureCustomerId] = useState("");
@@ -57,7 +58,7 @@ export default function CollectionsPage() {
   const [reminderForm, setReminderForm] = useState({ channel: "", recipient: "", templateVersion: "" });
   const [disputeForm, setDisputeForm] = useState({ reason: "", promiseDate: "" });
   const [outcome, setOutcome] = useState("");
-  const [formErrors, setFormErrors] = useState<{ recipient?: string; reason?: string; outcome?: string }>({});
+  const [formErrors, setFormErrors] = useState<{ channel?: string; recipient?: string; reason?: string; outcome?: string }>({});
 
   const [sessionDisputes, setSessionDisputes] = useState<Record<string, DisputeRow[]>>({});
   const [fetchedDisputes, setFetchedDisputes] = useState<Record<string, DisputeRow[]>>({});
@@ -83,6 +84,7 @@ export default function CollectionsPage() {
       setPhase("success");
     } else {
       setRows(null);
+      setWorklistErrorCode(res.code);
       setPhase("error");
     }
   }, [token]);
@@ -154,7 +156,11 @@ export default function CollectionsPage() {
     e.preventDefault();
     const recipient = reminderForm.recipient.trim();
     if (!recipient || !reminderForm.channel) {
-      setFormErrors((prev) => ({ ...prev, recipient: recipient ? undefined : t.sales.errors.validation }));
+      setFormErrors((prev) => ({
+        ...prev,
+        channel: reminderForm.channel ? undefined : t.sales.errors.validation,
+        recipient: recipient ? undefined : t.sales.errors.validation,
+      }));
       return;
     }
     setFormErrors({});
@@ -241,7 +247,26 @@ export default function CollectionsPage() {
   }
 
   if (!ready || (phase === "loading" && rows === null)) return <LoadingSkeleton rows={6} />;
-  if (phase === "error") return <ErrorState message={tc.loadFailed} retryLabel={t.common.retry} onRetry={() => void load()} />;
+  if (phase === "error") {
+    // 403 on the worklist is an expected outcome for roles without
+    // collections:read — permission-specific copy, not the generic retry.
+    const forbidden = worklistErrorCode === "FORBIDDEN" || worklistErrorCode === "HTTP_403";
+    return (
+      <div className="stack">
+        <div className="page-header">
+          <h1 className="t-display">{tc.title}</h1>
+          <p className="t-caption">{tc.subtitle}</p>
+        </div>
+        {forbidden ? (
+          <div className="state state--error" role="alert">
+            <p className="state__title">{tc.worklistForbidden}</p>
+          </div>
+        ) : (
+          <ErrorState message={tc.loadFailed} retryLabel={t.common.retry} onRetry={() => void load()} />
+        )}
+      </div>
+    );
+  }
 
   const list = rows ?? [];
   const totalOpen = list.reduce((sum, row) => sum + row.openAmount, 0);
@@ -256,6 +281,7 @@ export default function CollectionsPage() {
         <p className="t-caption">{tc.subtitle}</p>
       </div>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} closeLabel={t.common.cancel} />
+      {meFailed ? <SalesMeError t={t} onRetry={retryMe} /> : null}
       {actionError ? <p className="banner" role="alert">{actionError}</p> : null}
 
       <div className="tiles">
@@ -312,14 +338,14 @@ export default function CollectionsPage() {
                       </td>
                       <td data-label={t.journals.actions}>
                         <div className="row-actions">
-                          <Button small variant="secondary" onClick={() => setInline((prev) => ({ ...prev, reminderId: prev.reminderId === row.invoiceId ? null : row.invoiceId, disputeId: null }))}>
+                          <Button small variant="secondary" aria-expanded={inline.reminderId === row.invoiceId} onClick={() => setInline((prev) => ({ ...prev, reminderId: prev.reminderId === row.invoiceId ? null : row.invoiceId, disputeId: null }))}>
                             {tc.reminderTitle}
                           </Button>
-                          <Button small variant="secondary" onClick={() => setInline((prev) => ({ ...prev, disputeId: prev.disputeId === row.invoiceId ? null : row.invoiceId, reminderId: null }))}>
+                          <Button small variant="secondary" aria-expanded={inline.disputeId === row.invoiceId} onClick={() => setInline((prev) => ({ ...prev, disputeId: prev.disputeId === row.invoiceId ? null : row.invoiceId, reminderId: null }))}>
                             {tc.disputeTitle}
                           </Button>
                           {activeDispute ? (
-                            <Button small onClick={() => setInline((prev) => ({ ...prev, resolveId: prev.resolveId === activeDispute.id ? null : activeDispute.id }))}>
+                            <Button small aria-expanded={inline.resolveId === activeDispute.id} onClick={() => setInline((prev) => ({ ...prev, resolveId: prev.resolveId === activeDispute.id ? null : activeDispute.id }))}>
                               {tc.resolve}
                             </Button>
                           ) : null}
@@ -423,7 +449,7 @@ type InlineProps = {
   reminderForm: { channel: string; recipient: string; templateVersion: string };
   disputeForm: { reason: string; promiseDate: string };
   outcome: string;
-  formErrors: { recipient?: string; reason?: string; outcome?: string };
+  formErrors: { channel?: string; recipient?: string; reason?: string; outcome?: string };
   busyId: string | null;
   activeDispute: DisputeRow | null;
   onReminderForm: (patch: Partial<{ channel: string; recipient: string; templateVersion: string }>) => void;
@@ -457,6 +483,7 @@ function RowInlineForms(props: InlineProps) {
               onChange={(e) => props.onReminderForm({ channel: e.target.value })}
               options={REMINDER_CHANNELS.map((c) => ({ value: c, label: c }))}
               placeholder={tc.channel}
+              error={formErrors.channel}
             />
             <Input id={`rem-recipient-${row.invoiceId}`} label={tc.recipient} value={reminderForm.recipient} onChange={(e) => props.onReminderForm({ recipient: e.target.value })} error={formErrors.recipient} />
             <Input id={`rem-template-${row.invoiceId}`} label={tc.templateVersion} value={reminderForm.templateVersion} onChange={(e) => props.onReminderForm({ templateVersion: e.target.value })} />
