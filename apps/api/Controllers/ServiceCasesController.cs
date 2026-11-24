@@ -45,9 +45,12 @@ public sealed class ServiceCasesController(IServiceCaseService cases) : Controll
     [HttpPost("{id}/transitions")]
     public IResult Transition(string id, TransitionCaseRequest request)
     {
+        // 024 AC2 on the transitions path too: reaching Resolved must carry a code
+        if (request.Status == CaseStatus.Resolved && string.IsNullOrWhiteSpace(request.ResolutionCode))
+            return Envelope.Fail("VALIDATION_ERROR", "ResolutionCode is required when transitioning to Resolved.", 400);
         var u = CurrentUser.From(HttpContext);
         if (!u.Has("cases:write")) return Envelope.Fail("FORBIDDEN", "cases:write permission required.", 403);
-        var (data, code, message) = cases.Transition(u, id, request.Status, request.Reason);
+        var (data, code, message) = cases.Transition(u, id, request.Status, request.Reason, request.ResolutionCode);
         return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
     }
 

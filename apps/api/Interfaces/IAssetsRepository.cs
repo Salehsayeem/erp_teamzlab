@@ -24,6 +24,7 @@ public interface IAssetsRepository
 
     // depreciation runs
     void AddRun(DepreciationRun run);
+    bool DepreciationPeriodAlreadyPosted(string periodId); // finding 4: one run per period
 
     // locations (shared inventory table) — entity-scoped plus tenant-wide for the cross-entity ruling
     StockLocation? FindLocationInEntity(string locationId);
