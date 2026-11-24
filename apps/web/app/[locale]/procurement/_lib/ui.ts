@@ -4,6 +4,7 @@ import type {
   Contract,
   ContractAmendment,
   ContractObligation,
+  ContractPriceLine,
   EventDetail,
   SourcingEvent,
 } from "@/lib/services/procurement";
@@ -29,6 +30,7 @@ export type ContractCtx = {
   t: Dict;
   contract: Contract;
   amendments: ContractAmendment[];
+  priceLines: ContractPriceLine[];
   obligations: ContractObligation[];
   meId: string | null;
   perms: string[];

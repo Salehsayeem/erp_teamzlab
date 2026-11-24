@@ -115,7 +115,12 @@ export function AmendmentsSection({ ctx }: { ctx: ContractCtx }) {
       ) : (
         <>
           <Table columns={columns} rows={amendments} caption={am.title} />
-          {ctx.amendments.length > 0 ? null : null}
+          {ctx.priceLines.length > 0 ? (
+            <>
+              <h3 className="t-body-strong">{am.priceLines}</h3>
+              <Table<ContractPriceLine> columns={priceLineColumns} rows={ctx.priceLines} caption={am.priceLines} />
+            </>
+          ) : null}
         </>
       )}
       {canWrite ? (

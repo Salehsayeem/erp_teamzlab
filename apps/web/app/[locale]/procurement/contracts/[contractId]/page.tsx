@@ -14,6 +14,7 @@ import {
   type Contract,
   type ContractAmendment,
   type ContractObligation,
+  type ContractPriceLine,
 } from "@/lib/services/procurement";
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, Button, LoadingSkeleton, Modal } from "@/components/uikit";
@@ -21,7 +22,11 @@ import { CONTRACT_STATUS_TONES, hasPerm, isoDate, statusLabel, type ContractCtx 
 import { AmendmentsSection } from "./_sections/amendments";
 import { ObligationsSection } from "./_sections/obligations";
 
-const EMPTY_LISTS = { amendments: [] as ContractAmendment[], obligations: [] as ContractObligation[] };
+const EMPTY_LISTS = {
+  amendments: [] as ContractAmendment[],
+  priceLines: [] as ContractPriceLine[],
+  obligations: [] as ContractObligation[],
+};
 
 export default function ContractWorkspacePage() {
   const params = useParams<{ locale: string; contractId: string }>();
@@ -33,6 +38,7 @@ export default function ContractWorkspacePage() {
 
   const [contract, setContract] = useState<Contract | null>(null);
   const [amendments, setAmendments] = useState<ContractAmendment[]>(EMPTY_LISTS.amendments);
+  const [priceLines, setPriceLines] = useState<ContractPriceLine[]>(EMPTY_LISTS.priceLines);
   const [obligations, setObligations] = useState<ContractObligation[]>(EMPTY_LISTS.obligations);
   const [me, setMe] = useState<{ id: string; perms: string[] } | null>(null);
   const [phase, setPhase] = useState<"loading" | "notFound" | "error" | "success">("success");
@@ -59,9 +65,10 @@ export default function ContractWorkspacePage() {
     // carries the overview and amendments/obligations stay in-session.
     const detailRes = await fetchContractDetail(token, contractId);
     if (detailRes.ok) {
-      const { amendments: a, obligations: o, ...row } = detailRes.data;
+      const { amendments: a, obligations: o, priceLines: pl, ...row } = detailRes.data;
       setContract(row);
       setAmendments(a);
+      setPriceLines(pl);
       setObligations(o);
       setSessionOnly(false);
       setPhase("success");
@@ -72,6 +79,7 @@ export default function ContractWorkspacePage() {
     if (row) {
       setContract(row);
       setAmendments([]);
+      setPriceLines([]);
       setObligations([]);
       setSessionOnly(true);
       setPhase("success");
@@ -149,6 +157,7 @@ export default function ContractWorkspacePage() {
     t,
     contract,
     amendments,
+    priceLines,
     obligations,
     meId: me?.id ?? null,
     perms: me?.perms ?? [],

@@ -151,15 +151,17 @@ export type Award = {
   lotId: string;
   supplierId: string;
   qty: number;
-  unitPrice: number;
+  /** Absent in GET /awards summaries while prices are sealed for the caller. */
+  unitPrice?: number;
   status: AwardStatus;
   basisEventVersion: number;
-  recommendation: string;
+  /** Absent in sealed GET /awards summaries. */
+  recommendation?: string;
   createdBy: string;
   approvedBy: string | null;
   approvedAt: string | null;
   rejectionReason: string | null;
-  createdAt: string;
+  createdAt?: string;
 };
 
 export type AwardLotAllocation = {

@@ -141,10 +141,10 @@ export function AwardsTab({ ctx, active }: { ctx: WorkspaceCtx; active: boolean 
     { key: "lot", label: aw.awardColumns.lot, mono: true, render: (a) => a.lotId },
     { key: "supplier", label: aw.awardColumns.supplier, mono: true, render: (a) => a.supplierId },
     { key: "qty", label: aw.awardColumns.qty, mono: true, render: (a) => fmtNumber(a.qty, locale) },
-    { key: "unitPrice", label: aw.awardColumns.unitPrice, mono: true, render: (a) => fmtMoney(a.unitPrice, locale, event.currency) },
+    { key: "unitPrice", label: aw.awardColumns.unitPrice, mono: true, render: (a) => (a.unitPrice === undefined ? "—" : fmtMoney(a.unitPrice, locale, event.currency)) },
     { key: "status", label: aw.awardColumns.status, render: (a) => <Badge tone={AWARD_STATUS_TONES[a.status] ?? "muted"}>{statusLabel(t, a.status)}</Badge> },
     { key: "basis", label: aw.awardColumns.basis, mono: true, render: (a) => `v${a.basisEventVersion}` },
-    { key: "recommendation", label: aw.awardColumns.recommendation, render: (a) => a.recommendation },
+    { key: "recommendation", label: aw.awardColumns.recommendation, render: (a) => a.recommendation ?? "—" },
     {
       key: "actions",
       label: aw.awardColumns.actions,
