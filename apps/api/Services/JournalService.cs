@@ -1,5 +1,6 @@
 using Erp.Api.Data;
 using Erp.Api.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace Erp.Api.Services;
 
@@ -56,7 +57,18 @@ public sealed class JournalService(
             $"Journal {j.Id} approved and posted by {approver.Email}: {j.Lines.Count} lines, {j.Lines.Sum(l => l.Debit):0.00} Dr" +
             (string.IsNullOrWhiteSpace(reason) ? "" : $" — {reason}"));
         audit.Emit(approver, "finance.journal.approved", new { journalId = j.Id, approver = approver.Id, reason });
-        journals.Save();
+        try
+        {
+            journals.Save();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // money-hardening: the Pending→Posted UPDATE is status-guarded and matched ZERO rows —
+            // another officer approved this journal while our snapshot was stale. Nothing above
+            // commits: no duplicated control lines, no second approval audit/outbox trail.
+            return (null, "JOURNAL_ALREADY_POSTED",
+                $"Journal {journalId} was already posted; the retry carried a stale pending snapshot and wrote nothing.");
+        }
         return (j, null, null);
     }
 
@@ -69,6 +81,20 @@ public sealed class JournalService(
         if (journals.HasReversal(journalId))
             return (null, "JOURNAL_ALREADY_REVERSED", $"Journal {journalId} has already been reversed; a retry must not reverse it twice.");
         if (!user.Has("journals:approve")) return (null, "FORBIDDEN", "journals:approve permission required.");
+
+        // money-hardening: the existence check above is read-then-write — two concurrent reversals
+        // could both pass it before either commits, then BOTH post a reversal journal and unwind
+        // the receipt stock twice. Reverse is multi-write, so check+commit are serialized per
+        // SOURCE row (the InvoiceService exposure path): SELECT … FOR UPDATE inside the request
+        // transaction (joined, never nested, when Idem.Wrap opened one), then the AUTHORITATIVE
+        // re-check under the lock before anything is written.
+        var ownsTx = db.Database.CurrentTransaction is null;
+        using var tx = ownsTx ? db.Database.BeginTransaction() : null;
+        db.Journals
+            .FromSql($"SELECT * FROM journals WHERE id = {journalId} AND tenant_id = {ec.TenantId} AND legal_entity_id = {ec.EntityId} FOR UPDATE")
+            .ToList();
+        if (journals.HasReversal(journalId))
+            return (null, "JOURNAL_ALREADY_REVERSED", $"Journal {journalId} has already been reversed; a retry must not reverse it twice.");
 
         // a reversal posts at today — the same lock applies (R9d: no posting into any closed month)
         var (guardCode, guardMsg) = FinanceGuards.EnsurePeriodOpen(db, ec, DateOnly.FromDateTime(DateTime.UtcNow));
@@ -96,6 +122,7 @@ public sealed class JournalService(
         audit.Emit(user, "finance.journal.reversed", new { journalId = j.Id, reversalId = rev.Id, receiptId = receipt?.Id });
         audit.Log(user, "reverse", "journal", rev.Id, $"Journal {j.Id} reversed by {user.Email} (linked provenance){stockNote}");
         journals.Save();
+        if (ownsTx) tx!.Commit();
         return (rev, null, null);
     }
 
