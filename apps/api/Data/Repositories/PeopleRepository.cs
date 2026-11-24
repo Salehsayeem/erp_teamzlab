@@ -24,7 +24,7 @@ public sealed class PeopleRepository(ErpDbContext db, EntityContext ec) : IPeopl
             .Where(w => status == null || w.Status == status)
             .Where(w => search == null
                 || w.FullName.ToLower().Contains(search.ToLower())
-                || (w.NationalId != null && w.NationalId.Contains(search)))
+                || (w.NationalId != null && w.NationalId.ToLower().Contains(search.ToLower()))) // case-insensitive (R4 minor)
             .OrderBy(w => w.Id).ToList();
 
     // 004 edge: normalized exact match (stored ids are already Trim+ToLower)
@@ -82,14 +82,21 @@ public sealed class PeopleRepository(ErpDbContext db, EntityContext ec) : IPeopl
 
     public void AddMembership(WorkerPayGroup membership) => db.WorkerPayGroups.Add(membership);
 
-    // run population (034): every non-terminated, onboarded member of the group
-    public List<Employment> WorkersInGroup(string payGroupId) =>
+    // run population (034, fix R4-1): every member whose employment OVERLAPPED the period —
+    // still-employed workers (no Draft/Prehire) plus mid-period leavers. A worker terminated on
+    // or after the period start keeps the pay they earned before leaving; a worker hired after
+    // the period end or terminated before it was never in this window. Fully-excluded workers
+    // surface in validations (warning), never silently.
+    public List<Employment> WorkersInGroup(string payGroupId, DateOnly periodStart, DateOnly periodEnd) =>
         db.WorkerPayGroups.Where(m => m.TenantId == ec.TenantId && m.LegalEntityId == ec.EntityId
                 && m.PayGroupId == payGroupId)
             .Join(WorkerScope(), m => m.EmploymentId, w => w.Id, (m, w) => w)
             .Where(w => w.Status == EmploymentStatus.Active
                 || w.Status == EmploymentStatus.OnLeave
-                || w.Status == EmploymentStatus.Suspended) // run population (034): no Draft/Prehire/Terminated
+                || w.Status == EmploymentStatus.Suspended
+                || (w.Status == EmploymentStatus.Terminated
+                    && w.TerminationDate != null && w.TerminationDate >= periodStart))
+            .Where(w => w.HireDate <= periodEnd)
             .OrderBy(w => w.Id).ToList();
 
     // ---- time ------------------------------------------------------------------------
@@ -174,6 +181,21 @@ public sealed class PeopleRepository(ErpDbContext db, EntityContext ec) : IPeopl
         db.EarningDeductionCodes.Where(c => c.TenantId == ec.TenantId && c.LegalEntityId == ec.EntityId)
             .Where(c => kind == null || c.Kind == kind)
             .OrderBy(c => c.Code).ToList();
+
+    // fix R4-6: mapping/calc corrections bump the version (037 AC2); closed runs keep frozen lines
+    public void UpdatePayCode(EarningDeductionCode code, string? name, decimal? ratePct, string? calcBasis)
+    {
+        if (name is not null)
+            db.Entry(code).Property(nameof(EarningDeductionCode.Name)).CurrentValue = name;
+        if (ratePct is not null)
+            db.Entry(code).Property(nameof(EarningDeductionCode.RatePct)).CurrentValue = ratePct;
+        if (calcBasis is not null)
+            db.Entry(code).Property(nameof(EarningDeductionCode.CalcBasis)).CurrentValue = calcBasis;
+        db.Entry(code).Property(nameof(EarningDeductionCode.Version)).CurrentValue = code.Version + 1;
+    }
+
+    public void SetPayCodeActive(EarningDeductionCode code, bool active) =>
+        db.Entry(code).Property(nameof(EarningDeductionCode.Active)).CurrentValue = active;
 
     // ---- pay runs --------------------------------------------------------------------
 

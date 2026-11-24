@@ -29,6 +29,8 @@ public interface IPayrollService
 {
     object ListPayCodes(CurrentUser user, PayCodeKind? kind);
     (EarningDeductionCode? code, string? errorCode, string? message) CreatePayCode(CurrentUser user, Dtos.CreatePayCodeRequest request);
+    (EarningDeductionCode? code, string? errorCode, string? message) UpdatePayCode(CurrentUser user, string codeCode, Dtos.UpdatePayCodeRequest request);
+    (EarningDeductionCode? code, string? errorCode, string? message) DeactivatePayCode(CurrentUser user, string codeCode);
     object ListRuns(CurrentUser user, PayRunStatus? status, string? periodId);
     (PayRun? run, string? code, string? message) CreateRun(CurrentUser user, Dtos.CreatePayRunRequest request);
     (PayRun? run, string? code, string? message) Calculate(CurrentUser user, string runId);

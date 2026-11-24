@@ -49,11 +49,20 @@ public sealed class TimeService(
         if (entry.CreatedBy == approver.Id)
             return (null, "TIME_APPROVAL_ERROR", "Maker-checker: the submitter cannot approve their own time entry.");
 
+        var previousStatus = entry.Status; // same ordering rule as the worker transition audit (R4-4)
         people.SetTimeEntryDecision(entry, request.Approve ? TimeEntryStatus.Approved : TimeEntryStatus.Rejected, request.DecisionReason);
         audit.Log(approver, request.Approve ? "approve" : "reject", "time_entry", entryId,
-            $"Time entry {entryId} {entry.Status} → {(request.Approve ? "Approved" : "Rejected")}" +
+            $"Time entry {entryId} {previousStatus} → {(request.Approve ? "Approved" : "Rejected")}" +
             (request.DecisionReason is null ? "" : $" — {request.DecisionReason}"));
-        people.Save();
+        try
+        {
+            people.Save();
+        }
+        catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException)
+        {
+            return (null, "TIME_ENTRY_ALREADY_DECIDED",
+                $"Time entry {entryId} was decided concurrently; the retry carried a stale snapshot and wrote nothing.");
+        }
         return (entry, null, null);
     }
 
@@ -92,6 +101,11 @@ public sealed class TimeService(
             return (null, "TIME_CORRECTION_STATE_ERROR", $"Only pending corrections can be decided (current: {correction.Status}).");
         if (correction.RequestedBy == approver.Id)
             return (null, "TIME_APPROVAL_ERROR", "Maker-checker: the requester cannot approve their own correction.");
+        // fix R4-3 (TOCTOU): the entry may have fed a POSTED run since the correction was proposed —
+        // re-check at decision time so approval can never silently overwrite posted payable hours
+        if (request.Approve && people.EntryHasPostedLine(correction.TimeEntryId))
+            return (null, "TIME_PERIOD_POSTED",
+                $"Time entry {correction.TimeEntryId} was payroll-posted after this correction was proposed; the decision waits for the next period (Q10).");
 
         var status = request.Approve ? TimeCorrectionStatus.Approved : TimeCorrectionStatus.Rejected;
         people.SetCorrectionDecision(correction, status, approver.Id, DateTimeOffset.UtcNow, request.DecisionReason);
@@ -111,7 +125,15 @@ public sealed class TimeService(
                 previousHours = correction.PreviousHours, proposedHours = correction.ProposedHours,
                 approvedBy = approver.Id,
             });
-        people.Save();
+        try
+        {
+            people.Save();
+        }
+        catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException)
+        {
+            return (null, "TIME_CORRECTION_ALREADY_DECIDED",
+                $"Correction {correctionId} was decided concurrently; the retry carried a stale snapshot and wrote nothing.");
+        }
         return (correction, null, null);
     }
 

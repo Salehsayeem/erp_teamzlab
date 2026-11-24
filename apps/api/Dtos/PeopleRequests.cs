@@ -25,6 +25,9 @@ public sealed record DecideTimeCorrectionRequest(bool Approve, string? DecisionR
 public sealed record CreatePayCodeRequest(string Code, PayCodeKind Kind, string Name, string CalcBasis,
     decimal? RatePct, string DebitAccount, string CreditAccount);
 
+// fix R4-6: partial edit - null leaves the field unchanged; mapping/calc changes bump the version
+public sealed record UpdatePayCodeRequest(string? Name, decimal? RatePct, string? CalcBasis);
+
 public sealed record AddPayGroupMembershipRequest(string PayGroupId, DateOnly EffectiveFrom, DateOnly? EffectiveTo);
 
 public sealed record CreatePayGroupRequest(string Code, string Name, string Frequency);
