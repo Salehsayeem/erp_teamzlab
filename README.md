@@ -108,7 +108,8 @@ can resolve the connection:
 dotnet ef database update --project apps/api
 ```
 
-The schema is additive (23 tables, sequences, seeded reference data); nothing is dropped.
+The schema is additive across the committed migrations (33 tables, sequences, seeded
+reference data — core + assets + finance); nothing is dropped.
 When the EF model changes later, add a migration first —
 `dotnet ef migrations add <DescriptiveName> --project apps/api` — and never edit an
 already-applied one (CLAUDE.md: forward-only migrations).
@@ -121,16 +122,19 @@ dotnet run --project apps/api
 ```
 
 Demo seed (migration-seeded): tenant `T-001`, legal entity `LE-001` (TeamZlab Ltd, BD, BDT),
-users `admin@teamzlab.dev` / `procurve@teamzlab.dev` / `finance@teamzlab.dev` / `sales@teamzlab.dev`.
-Stub auth: POST `/api/v1/auth/token-exchange` with an email → token (= user id) →
+and five users — `admin` (all permissions), `procurve` (procurement), `finance` (journals,
+periods, tax, accounts, aging), `sales` (customers, sales orders, shipments), `assets`
+(fixed assets, projects, service cases) — all `@teamzlab.dev`. Stub auth: POST
+`/api/v1/auth/token-exchange` with an email → token (= user id, e.g. `U-001`) →
 `Authorization: Bearer <token>`.
 
-Smoke test:
+**API explorer:** with the API running, open `http://localhost:5000/swagger` — every route
+with its request schema, and an Authorize button that takes the token from the exchange.
+
+Full live smoke (45 assertions over every endpoint, real database — creates `SMOKE-*` rows):
 
 ```bash
-curl -X POST http://localhost:5000/api/v1/auth/token-exchange \
-  -H "Content-Type: application/json" -d '{"email":"admin@teamzlab.dev"}'
-curl http://localhost:5000/api/v1/suppliers -H "Authorization: Bearer <token-from-above>"
+bash scripts/verify-all-features.sh          # API_BASE defaults to http://localhost:5000
 ```
 
 ### 5. Frontend
@@ -145,6 +149,12 @@ The browser client calls `NEXT_PUBLIC_API_BASE` (default `http://localhost:5000`
 `apps/web/.env.example`). Cross-origin calls are allowed only for origins listed in the
 API's CORS policy — set `CorsOrigins` (comma-separated) to extend the default
 `http://localhost:3000`.
+
+Browsing from another device on your network? Next 16 blocks cross-origin dev resources —
+add the host to `allowedDevOrigins` in `apps/web/next.config.ts`.
+
+The reusable UI kit (Field/Input/Select, Modal, Toasts, Tabs, Pagination, AA-checked badges)
+has a live showcase at `http://localhost:3000/en/design` (Bengali: `/bn/design`).
 
 ### 6. Tests
 
