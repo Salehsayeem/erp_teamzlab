@@ -17,6 +17,11 @@ public sealed class SalesOrderRepository(ErpDbContext db, EntityContext ec) : IS
 
     public List<SalesOrder> All() => Ordered(Scoped());
 
+    // 057 exposure basis (R-T7e): Confirmed and CreditHold orders are open commitments
+    public List<SalesOrder> OpenForCustomer(string customerId) =>
+        Ordered(Scoped().Where(s => s.CustomerId == customerId
+            && (s.Status == SoStatus.Confirmed || s.Status == SoStatus.CreditHold)));
+
     public void Add(SalesOrder so)
     {
         db.SalesOrders.Add(so);
@@ -49,7 +54,21 @@ public sealed class SalesOrderRepository(ErpDbContext db, EntityContext ec) : IS
 
     public void MarkInvoiced(SalesOrder so) => Set(so, nameof(SalesOrder.Status), SoStatus.Invoiced);
 
+    // 057 AC2: approval happened but the exposure gate held the order — ApprovedBy stamps the
+    // officer who made the hold decision (release is a separate audited act)
+    public void MarkCreditHold(SalesOrder so, string approverId)
+    {
+        Set(so, nameof(SalesOrder.Status), SoStatus.CreditHold);
+        Set(so, nameof(SalesOrder.ApprovedBy), approverId);
+        Set(so, nameof(SalesOrder.ApprovedAt), DateTimeOffset.UtcNow);
+    }
+
     public void AddShipment(Shipment shipment) => db.Shipments.Add(shipment);
+
+    // source events for billing — earliest first (invoice drafts pick the oldest unbilled one)
+    public List<Shipment> ShipmentsFor(string soId) =>
+        db.Shipments.Where(sh => sh.TenantId == ec.TenantId && sh.LegalEntityId == ec.EntityId && sh.SalesOrderId == soId)
+            .OrderBy(sh => sh.Id).ToList();
 
     public Dictionary<string, decimal> ShippedBySku(string soId)
     {

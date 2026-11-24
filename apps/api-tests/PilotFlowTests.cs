@@ -87,6 +87,31 @@ public class PilotFlowTests : IClassFixture<TestApiFactory>
         Assert.True(audit.GetProperty("data").GetArrayLength() >= 6);
     }
 
+    // R-T7i: SO approval is gated on so:approve (moved off so:write) — a role without it is
+    // forbidden even when the maker-checker pair is legal (procurement officer here)
+    [Fact]
+    public async Task SO_approval_forbidden_without_so_approve()
+    {
+        var proc = "U-002"; var sales = "U-004";
+
+        var res = await PostAsync("/api/v1/customers", new { name = "Gate Co", taxId = "TRX-GATE-1", email = "ap@gate.test" }, sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var customerId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+
+        res = await PostAsync("/api/v1/sales-orders", new
+        {
+            customerId,
+            lines = new[] { new { itemSku = "GATE-SKU", description = "Gate probe", qty = 1m, unitPrice = 5m } },
+        }, sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var soId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        await PostAsync($"/api/v1/sales-orders/{soId}/submit", new { }, sales);
+
+        res = await PostAsync($"/api/v1/sales-orders/{soId}/approvals", new { reason = (string?)null }, proc);
+        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        Assert.Equal("so:approve permission required.", (await Json(res)).GetProperty("error").GetProperty("message").GetString());
+    }
+
     [Fact]
     public async Task Validation_error_uses_envelope()
     {

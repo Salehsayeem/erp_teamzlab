@@ -17,6 +17,14 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<SalesOrder> SalesOrders => Set<SalesOrder>();
     public DbSet<Shipment> Shipments => Set<Shipment>();
+    public DbSet<Lead> Leads => Set<Lead>();
+    public DbSet<Interaction> Interactions => Set<Interaction>();
+    public DbSet<CrmCase> CrmCases => Set<CrmCase>();
+    public DbSet<Opportunity> Opportunities => Set<Opportunity>();
+    public DbSet<Invoice> Invoices => Set<Invoice>();
+    public DbSet<AdjustmentDocument> SalesAdjustments => Set<AdjustmentDocument>();
+    public DbSet<CollectionReminder> CollectionReminders => Set<CollectionReminder>();
+    public DbSet<Dispute> Disputes => Set<Dispute>();
     public DbSet<Warehouse> Warehouses => Set<Warehouse>();
     public DbSet<StockLocation> Locations => Set<StockLocation>();
     public DbSet<StockLevel> Stock => Set<StockLevel>();
@@ -134,6 +142,130 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
             e.HasIndex(x => x.SalesOrderId);
             e.HasOne<SalesOrder>().WithMany().HasForeignKey(x => x.SalesOrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // --- task-7 SALES deep: CRM, opportunities, invoice documents, collections ---
+        // every new table carries tenant_id + legal_entity_id from day one (R14) and every FK
+        // is indexed (CLAUDE.md)
+        mb.Entity<Lead>(e =>
+        {
+            e.ToTable("leads");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status }); // list w/ status filter
+        });
+
+        mb.Entity<Interaction>(e =>
+        {
+            e.ToTable("interactions");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PartyType, x.PartyId }); // party timeline
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OccurredAt }); // OccurredAt ordering (007)
+        });
+
+        mb.Entity<CrmCase>(e =>
+        {
+            e.ToTable("crm_cases"); // R-T7d: separate entity from the ASSETS service_cases table
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ResponseDueAt }); // overdue scans (008)
+            e.HasIndex(x => x.CustomerId);
+            e.HasIndex(x => x.SalesOrderId);
+            e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<SalesOrder>().WithMany().HasForeignKey(x => x.SalesOrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<Opportunity>(e =>
+        {
+            e.ToTable("opportunities");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status }); // status/owner filter
+            e.HasIndex(x => x.CustomerId);
+            e.HasIndex(x => x.LeadId);
+            e.HasIndex(x => x.OrderId);
+            e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Lead>().WithMany().HasForeignKey(x => x.LeadId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<SalesOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("opportunity_lines");
+                l.WithOwner().HasForeignKey("OpportunityId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("OpportunityId", "LineNo");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("OpportunityId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<Invoice>(e =>
+        {
+            e.ToTable("invoices");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.CustomerId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+            // 042 AC2: a shipment source event can bill at most once — unique index backs the
+            // service-level ALREADY_BILLED check up under concurrency
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SourceEventId }).IsUnique();
+            e.HasIndex(x => x.CustomerId);
+            e.HasIndex(x => x.SalesOrderId);
+            e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<SalesOrder>().WithMany().HasForeignKey(x => x.SalesOrderId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("invoice_lines");
+                l.WithOwner().HasForeignKey("InvoiceId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("InvoiceId", "LineNo");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("InvoiceId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<AdjustmentDocument>(e =>
+        {
+            e.ToTable("sales_adjustments"); // "adjustments" is inventory's stock-adjustment table
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.InvoiceId);
+            e.HasOne<Invoice>().WithMany().HasForeignKey(x => x.InvoiceId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("sales_adjustment_lines");
+                l.WithOwner().HasForeignKey("AdjustmentId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("AdjustmentId", "LineNo");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("AdjustmentId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<CollectionReminder>(e =>
+        {
+            e.ToTable("collection_reminders");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.InvoiceId });
+            e.HasIndex(x => x.InvoiceId);
+            e.HasOne<Invoice>().WithMany().HasForeignKey(x => x.InvoiceId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<Dispute>(e =>
+        {
+            e.ToTable("disputes");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.InvoiceId });
+            e.HasIndex(x => x.InvoiceId);
+            e.HasOne<Invoice>().WithMany().HasForeignKey(x => x.InvoiceId).OnDelete(DeleteBehavior.Restrict);
         });
     }
 
@@ -390,9 +522,13 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     private static void ConfigureSequences(ModelBuilder mb)
     {
         // doc numbering: one sequence per prefix (task-2 §2) — A starts at 2 because A-0001 is
-        // the seeded opening audit event; all other ids start at 1
+        // the seeded opening audit event; all other ids start at 1. T7 adds the SALES deep
+        // prefixes (lead/int/cc/opp/inv/crd/dbt/rem/dsp — no collisions with existing prefixes);
+        // NumberSeries.Next THROWS on a missing sequence, so sequences ship with the code that
+        // uses them (AddSalesDeepSeed carries the CreateSequence calls)
         foreach (var prefix in new[] { "sup", "po", "rc", "cus", "so", "shp", "wh", "loc", "trf", "cnt", "adj", "j", "e",
-                     "fa", "fae", "prj", "tsk", "case", "dep" })
+                     "fa", "fae", "prj", "tsk", "case", "dep",
+                     "lead", "int", "cc", "opp", "inv", "crd", "dbt", "rem", "dsp" })
             mb.HasSequence<long>($"doc_{prefix}");
         mb.HasSequence<long>("doc_a", s => s.StartsAt(2));
     }
@@ -418,8 +554,12 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         mb.Entity<Role>().HasData(
             new { Id = "R-ADMIN", Name = "tenant_admin", Permissions = new[] { "*" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-PROC", Name = "procurement_officer", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read",
+                    "so:approve", "invoices:approve", "credit:read", "credit:override" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write",
+                    "so:approve",
+                    "leads:read", "leads:write", "crm:read", "crm:write", "opps:read", "opps:write",
+                    "invoices:read", "invoices:write", "collections:read", "collections:write" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-ASSETS", Name = "assets_officer", Permissions = new[] { "assets:read", "assets:write", "assets:approve", "projects:write", "projects:approve", "cases:write", "cases:read" }, TenantId = t, LegalEntityId = le });
 
         mb.Entity<User>().HasData(
