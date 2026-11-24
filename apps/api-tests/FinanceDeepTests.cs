@@ -142,13 +142,19 @@ public class FinanceDeepTests : IClassFixture<TestApiFactory>
         Assert.Equal(stockAfterFirst, StockOf(await GetAsync("/api/v1/stock", Admin), "DBLREV-1"));
     }
 
-    // 005 AC1 — the centralized period lock rejects approvals AND receipts into closed months
+    // 005 AC1 — the centralized period lock rejects approvals AND receipts into closed months.
+    // Fix round 1: order-independent — the journal leg closes a DEDICATED period created here
+    // (not the seeded closed month), and the receipt leg (receipts always post at today) closes
+    // today's period only transiently, restoring it via the audited reopen before returning.
     [Fact]
     public async Task Posting_Into_Closed_Period_Returns_409_PERIOD_LOCKED()
     {
-        // journal leg: draft dated inside the seeded closed month; approval must be blocked
+        // journal leg: create + close a dedicated period, then a draft dated inside it
+        var probeId = await CreatePeriod(10, "lock");
+        Assert.Equal(HttpStatusCode.OK,
+            (await PostAsync($"/api/v1/fiscal-periods/{probeId}/close", new { reason = "probe close" }, Admin)).StatusCode);
         var closed = await GetAsync("/api/v1/fiscal-periods?status=Closed", Admin);
-        var period = closed.GetProperty("data").EnumerateArray().First();
+        var period = closed.GetProperty("data").EnumerateArray().First(p => p.GetProperty("id").GetString() == probeId);
         var periodName = period.GetProperty("name").GetString()!;
         var inPeriod = DateOnly.Parse(period.GetProperty("startDate").GetString()!).AddDays(3);
         var (_, journalId) = await CreateDraft($"closed-period probe {periodName}",
@@ -160,15 +166,20 @@ public class FinanceDeepTests : IClassFixture<TestApiFactory>
         Assert.Equal("PERIOD_LOCKED", body.GetProperty("error").GetProperty("code").GetString());
         Assert.Contains(periodName, body.GetProperty("error").GetProperty("message").GetString());
 
-        // receipt leg: close the CURRENT month (no pending drafts sit in it — earlier tests left
-        // theirs in prior/future months), then a receipt — which posts at today — must be rejected
+        // receipt leg: a receipt posts at today, so today's period must be closed for the lock to
+        // fire — and it is REOPENED (audited) before the test returns so no later test inherits
+        // a locked month
         var poId = await SeedApprovedPo("PCLOSE-1", 4m, 2.00m);
         var currentId = await PeriodContaining(Today);
         Assert.Equal(HttpStatusCode.OK,
-            (await PostAsync($"/api/v1/fiscal-periods/{currentId}/close", new { reason = "suite lock" }, Admin)).StatusCode);
+            (await PostAsync($"/api/v1/fiscal-periods/{currentId}/close", new { reason = "receipt-leg probe" }, Admin)).StatusCode);
         res = await PostAsync("/api/v1/receipts", new { purchaseOrderId = poId, itemSku = "PCLOSE-1", qty = 4m }, Proc);
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         Assert.Equal("PERIOD_LOCKED", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
+
+        res = await PostAsync($"/api/v1/fiscal-periods/{currentId}/reopen", new { reason = "restore after receipt-leg probe" }, Admin);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("Open", (await Json(res)).GetProperty("data").GetProperty("status").GetString());
     }
 
     // 005 AC2 — reopen demands a reason and leaves an audit event + outbox message
@@ -286,13 +297,24 @@ public class FinanceDeepTests : IClassFixture<TestApiFactory>
         Assert.Equal(countAfterFirst, (await GetAsync("/api/v1/journals", Admin)).GetProperty("data").GetArrayLength());
     }
 
-    // 031 AC1 — a fixed-as-of fixture of due dates 0/45/75/120 lands in the configured buckets
+    // 031 AC1 — a fixed-as-of fixture of due dates 0/45/75/120 lands in the configured buckets.
+    // Fix round 1: order-independent — a baseline snapshot is taken BEFORE the fixture and only
+    // deltas from THIS test's own invoices are asserted, so class-mates may run first.
     [Fact]
     public async Task Aging_Fixture_At_Fixed_AsOf_Lands_Buckets_With_Open_Totals()
     {
         var asOf = Today;
+        var query = $"/api/v1/finance/receivables/aging?asOf={asOf:yyyy-MM-dd}&basis=due";
+        var baselineRes = await GetRawAsync(query, Admin);
+        Assert.Equal(HttpStatusCode.OK, baselineRes.StatusCode);
+        var baseline = await Json(baselineRes);
+        var bucketsBefore = baseline.GetProperty("data").GetProperty("buckets").EnumerateArray()
+            .Select(b => b.GetProperty("amount").GetDecimal()).ToArray();
+        var worklistCountBefore = baseline.GetProperty("data").GetProperty("worklist").GetArrayLength();
+
         decimal[] amounts = [100m, 200m, 300m, 400m];
         int[] daysPastDue = [0, 45, 75, 120];
+        var fixtureIds = new List<string>();
         for (var i = 0; i < 4; i++)
         {
             // due date = invoice date + 30-day terms (seeded settings) → back-date the invoice
@@ -300,30 +322,38 @@ public class FinanceDeepTests : IClassFixture<TestApiFactory>
             var (_, journalId) = await CreateDraft($"aging fixture {daysPastDue[i]}d",
                 new[] { Line("1200", "Accounts Receivable", amounts[i], 0m), Line("4000", "Sales Revenue", 0m, amounts[i]) },
                 invoiceDate);
+            fixtureIds.Add(journalId);
             Assert.Equal(HttpStatusCode.OK,
                 (await PostAsync($"/api/v1/journals/{journalId}/approvals", new { reason = (string?)null }, Admin)).StatusCode);
         }
 
-        var agingRes = await GetRawAsync($"/api/v1/finance/receivables/aging?asOf={asOf:yyyy-MM-dd}&basis=due", Admin);
-        Assert.Equal(HttpStatusCode.OK, agingRes.StatusCode);
-        var aging = await Json(agingRes);
-        var buckets = aging.GetProperty("data").GetProperty("buckets");
+        var afterRes = await GetRawAsync(query, Admin);
+        Assert.Equal(HttpStatusCode.OK, afterRes.StatusCode);
+        var after = await Json(afterRes);
+        var buckets = after.GetProperty("data").GetProperty("buckets");
         Assert.Equal(4, buckets.GetArrayLength());
-        Assert.Equal("0-30", buckets[0].GetProperty("label").GetString());
-        Assert.Equal(100.00m, buckets[0].GetProperty("amount").GetDecimal());
-        Assert.Equal("31-60", buckets[1].GetProperty("label").GetString());
-        Assert.Equal(200.00m, buckets[1].GetProperty("amount").GetDecimal());
-        Assert.Equal("61-90", buckets[2].GetProperty("label").GetString());
-        Assert.Equal(300.00m, buckets[2].GetProperty("amount").GetDecimal());
-        Assert.Equal("90+", buckets[3].GetProperty("label").GetString());
-        Assert.Equal(400.00m, buckets[3].GetProperty("amount").GetDecimal());
-        Assert.Equal(1000.00m, aging.GetProperty("data").GetProperty("totalOpen").GetDecimal());
+        decimal[] expectedDeltas = [100.00m, 200.00m, 300.00m, 400.00m];
+        string[] labels = ["0-30", "31-60", "61-90", "90+"];
+        for (var i = 0; i < 4; i++)
+        {
+            Assert.Equal(labels[i], buckets[i].GetProperty("label").GetString());
+            Assert.Equal(expectedDeltas[i],
+                buckets[i].GetProperty("amount").GetDecimal() - bucketsBefore[i]);
+        }
+        Assert.Equal(1000.00m, after.GetProperty("data").GetProperty("totalOpen").GetDecimal()
+            - baseline.GetProperty("data").GetProperty("totalOpen").GetDecimal());
 
-        // dunning-ready worklist: everything overdue past the first boundary is flagged
-        var worklist = aging.GetProperty("data").GetProperty("worklist");
-        Assert.Equal(4, worklist.GetArrayLength());
-        Assert.False(worklist.EnumerateArray().First(w => w.GetProperty("daysPastDue").GetInt32() == 0).GetProperty("dunningReady").GetBoolean());
-        Assert.True(worklist.EnumerateArray().First(w => w.GetProperty("daysPastDue").GetInt32() == 120).GetProperty("dunningReady").GetBoolean());
+        // dunning-ready worklist: this fixture's four invoices, each in its own due bucket
+        var worklist = after.GetProperty("data").GetProperty("worklist").EnumerateArray()
+            .Where(w => fixtureIds.Contains(w.GetProperty("journalId").GetString()!)).ToList();
+        Assert.Equal(4, worklist.Count);
+        Assert.Equal(worklistCountBefore + 4, after.GetProperty("data").GetProperty("worklist").GetArrayLength());
+        for (var i = 0; i < 4; i++)
+        {
+            var item = worklist.First(w => w.GetProperty("journalId").GetString() == fixtureIds[i]);
+            Assert.Equal(daysPastDue[i], item.GetProperty("daysPastDue").GetInt32());
+            Assert.Equal(daysPastDue[i] > 30, item.GetProperty("dunningReady").GetBoolean());
+        }
     }
 
     // 032 AC1 — the revision effective at the journal's accounting date selects the rate
