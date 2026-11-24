@@ -57,7 +57,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 
 - [ ] FINANCE deep: AP/AR close, periods/locks, tax (**D-01**) (20 screens)
 - [x] INVENTORY deep: valuation, counts, transfers (16 screens) — API slice DONE (17/17 tests, commit ec4fcb4) + UI DONE (8275d73+4119c2c, build 24/24, browser-verified en+bn)
-- [x] PROCUREMENT deep: contracts, sourcing (12 screens) — API spine DONE (15ae201..3de82e9 on feat/procurement-deep: sourcing events/lots/frozen criteria, eligibility gates + exceptions, buyer-recorded digest-receipt bids, sealed-bid opening, evaluator scoring with deterministic trace, maker-checked awards with eligibility re-check + lot ceilings, commitment-only contracts with versioned amendments/overlap protection/obligations/renewal; 21 new tests, suite 79/79; UI screens pending)
+- [x] PROCUREMENT deep: contracts, sourcing (12 screens) — API spine DONE (15ae201..140d2fe on feat/procurement-deep, incl. fix round 1: digest sealing, evaluator row isolation, reject disposition, event/contract row locks + FixContractAmendmentGuards indexes, whole-request pre-validation: sourcing events/lots/frozen criteria, eligibility gates + exceptions, buyer-recorded digest-receipt bids, sealed-bid opening, evaluator scoring with deterministic trace, maker-checked awards with eligibility re-check + lot ceilings, commitment-only contracts with versioned amendments/overlap protection/obligations/renewal; 33 new tests, suite 91/91; UI screens pending)
 - [ ] SALES deep: CRM, billing, dunning (14 screens)
 - [ ] ASSETS: projects, service, fixed assets (15 screens)
 - [ ] PEOPLE: workers, time, payroll handoff (**b D-05**) (15 screens)
