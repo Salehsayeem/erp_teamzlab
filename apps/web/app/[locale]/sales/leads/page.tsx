@@ -24,7 +24,7 @@ import {
   ToastRegion,
   type ToastItem,
 } from "@/components/uikit";
-import { salesActionError, salesStatusLabel, salesTone } from "../_lib/helpers";
+import { salesActionError, salesStatusLabel, salesTone, SalesMeError, useSalesMe } from "../_lib/helpers";
 
 const LEAD_STATUSES = ["New", "Working", "Qualified", "Disqualified", "Converted", "Recycled"];
 
@@ -45,6 +45,7 @@ export default function LeadsPage() {
   const t = getDictionary(locale);
   const tc = t.sales.leads;
   const { token, ready } = useAuth(locale);
+  const { meFailed, retryMe } = useSalesMe(token);
 
   const [leads, setLeads] = useState<Lead[] | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
@@ -58,6 +59,7 @@ export default function LeadsPage() {
   const [disqualifyId, setDisqualifyId] = useState<string | null>(null);
   const [reasonCode, setReasonCode] = useState("");
   const [reasonError, setReasonError] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -139,11 +141,17 @@ export default function LeadsPage() {
       return;
     }
     setReasonError(null);
-    const ok = await act(disqualifyId, () => transitionLead(token, disqualifyId, "Disqualified", reason));
-    if (ok) {
-      setDisqualifyId(null);
-      setReasonCode("");
+    setModalError(null);
+    setBusyId(disqualifyId);
+    const res = await transitionLead(token, disqualifyId, "Disqualified", reason);
+    setBusyId(null);
+    if (!res.ok) {
+      setModalError(salesActionError(t, res.code, res.message));
+      return;
     }
+    setDisqualifyId(null);
+    setReasonCode("");
+    await load();
   }
 
   async function convert(lead: Lead) {
@@ -178,7 +186,7 @@ export default function LeadsPage() {
             <Button small loading={busyId === lead.id} disabled={busyId !== null} onClick={() => void act(lead.id, () => transitionLead(token ?? "", lead.id, "Qualified"))}>
               {tc.qualify}
             </Button>
-            <Button small variant="danger" onClick={() => { setDisqualifyId(lead.id); setReasonCode(""); setReasonError(null); }}>
+            <Button small variant="danger" onClick={() => { setDisqualifyId(lead.id); setReasonCode(""); setReasonError(null); setModalError(null); }}>
               {tc.disqualify}
             </Button>
           </>
@@ -208,6 +216,7 @@ export default function LeadsPage() {
         <p className="t-caption">{tc.subtitle}</p>
       </div>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} closeLabel={t.common.cancel} />
+      {meFailed ? <SalesMeError t={t} onRetry={retryMe} /> : null}
       {actionError ? <p className="banner" role="alert">{actionError}</p> : null}
 
       <section className="card">
@@ -284,6 +293,7 @@ export default function LeadsPage() {
           onChange={(e) => setReasonCode(e.target.value)}
           error={reasonError ?? undefined}
         />
+        {modalError ? <p className="banner" role="alert">{modalError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setDisqualifyId(null)}>{t.common.cancel}</Button>
           <Button variant="danger" loading={busyId !== null} onClick={() => void confirmDisqualify()}>{tc.confirmDisqualify}</Button>

@@ -27,7 +27,7 @@ import {
   ToastRegion,
   type ToastItem,
 } from "@/components/uikit";
-import { salesActionError, salesStatusLabel, salesTone } from "../_lib/helpers";
+import { salesActionError, salesStatusLabel, salesTone, SalesMeError, useSalesMe } from "../_lib/helpers";
 
 const PARTY_TYPES = ["Lead", "Customer", "Opportunity"];
 const CHANNELS = ["Call", "Meeting", "Email", "Note", "Task"];
@@ -43,6 +43,8 @@ type TabProps = {
   t: ReturnType<typeof getDictionary>;
   locale: Locale;
   pushToast: (tone: ToastItem["tone"], message: string) => void;
+  meFailed: boolean;
+  retryMe: () => void;
 };
 
 export default function CrmPage() {
@@ -51,6 +53,7 @@ export default function CrmPage() {
   const t = getDictionary(locale);
   const tc = t.sales.crm;
   const { token, ready } = useAuth(locale);
+  const { meFailed, retryMe } = useSalesMe(token);
 
   const [activeTab, setActiveTab] = useState("interactions");
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -69,13 +72,14 @@ export default function CrmPage() {
         <p className="t-caption">{tc.subtitle}</p>
       </div>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} closeLabel={t.common.cancel} />
+      {meFailed ? <SalesMeError t={t} onRetry={retryMe} /> : null}
       <Tabs
         label={tc.title}
         activeId={activeTab}
         onChange={setActiveTab}
         tabs={[
-          { id: "interactions", label: tc.tabInteractions, content: <InteractionsTab token={token} t={t} locale={locale} pushToast={pushToast} /> },
-          { id: "cases", label: tc.tabCases, content: <CasesTab token={token} t={t} locale={locale} pushToast={pushToast} /> },
+          { id: "interactions", label: tc.tabInteractions, content: <InteractionsTab token={token} t={t} locale={locale} pushToast={pushToast} meFailed={meFailed} retryMe={retryMe} /> },
+          { id: "cases", label: tc.tabCases, content: <CasesTab token={token} t={t} locale={locale} pushToast={pushToast} meFailed={meFailed} retryMe={retryMe} /> },
         ]}
       />
     </div>
@@ -250,6 +254,7 @@ function CasesTab({ token, t, locale, pushToast }: TabProps) {
   const [resolveId, setResolveId] = useState<string | null>(null);
   const [resolution, setResolution] = useState("");
   const [resolutionError, setResolutionError] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -314,11 +319,17 @@ function CasesTab({ token, t, locale, pushToast }: TabProps) {
       return;
     }
     setResolutionError(null);
-    const ok = await act(resolveId, () => transitionCrmCase(token, resolveId, "Resolved", text));
-    if (ok) {
-      setResolveId(null);
-      setResolution("");
+    setModalError(null);
+    setBusyId(resolveId);
+    const res = await transitionCrmCase(token, resolveId, "Resolved", text);
+    setBusyId(null);
+    if (!res.ok) {
+      setModalError(salesActionError(t, res.code, res.message));
+      return;
     }
+    setResolveId(null);
+    setResolution("");
+    await load();
   }
 
   function rowActions(crmCase: CrmCase) {
@@ -330,7 +341,7 @@ function CasesTab({ token, t, locale, pushToast }: TabProps) {
           </Button>
         ) : null}
         {crmCase.status === "InProgress" ? (
-          <Button small onClick={() => { setResolveId(crmCase.id); setResolution(""); setResolutionError(null); }}>
+          <Button small onClick={() => { setResolveId(crmCase.id); setResolution(""); setResolutionError(null); setModalError(null); }}>
             {tc.resolve}
           </Button>
         ) : null}
@@ -421,6 +432,7 @@ function CasesTab({ token, t, locale, pushToast }: TabProps) {
           onChange={(e) => setResolution(e.target.value)}
           error={resolutionError ?? undefined}
         />
+        {modalError ? <p className="banner" role="alert">{modalError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setResolveId(null)}>{t.common.cancel}</Button>
           <Button loading={busyId !== null} onClick={() => void confirmResolve()}>{tc.confirmResolve}</Button>

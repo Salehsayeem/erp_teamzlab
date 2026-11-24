@@ -29,7 +29,7 @@ import {
   ToastRegion,
   type ToastItem,
 } from "@/components/uikit";
-import { hasPermission, salesActionError, salesStatusLabel, salesTone, useSalesMe } from "../_lib/helpers";
+import { hasPermission, salesActionError, salesStatusLabel, salesTone, SalesMeError, useSalesMe } from "../_lib/helpers";
 
 type SoLineForm = { itemSku: string; description: string; qty: string; unitPrice: string };
 const EMPTY_SO_LINE: SoLineForm = { itemSku: "", description: "", qty: "", unitPrice: "" };
@@ -40,7 +40,7 @@ export default function SalesOrdersPage() {
   const t = getDictionary(locale);
   const tc = t.sales.orders;
   const { token, ready } = useAuth(locale);
-  const { meId, permissions, meReady } = useSalesMe(token);
+  const { meId, permissions, meReady, meFailed, retryMe } = useSalesMe(token);
 
   const [orders, setOrders] = useState<SalesOrderRow[] | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
@@ -59,6 +59,7 @@ export default function SalesOrdersPage() {
   const [rejectFor, setRejectFor] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [releaseId, setReleaseId] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -160,11 +161,17 @@ export default function SalesOrdersPage() {
 
   async function confirmRelease() {
     if (!releaseId || !token) return;
-    const ok = await act(releaseId, () => releaseCreditHold(token, releaseId));
-    if (ok) {
-      pushToast("success", tc.releasedNote);
-      setReleaseId(null);
+    setBusyId(releaseId);
+    setModalError(null);
+    const res = await releaseCreditHold(token, releaseId);
+    setBusyId(null);
+    if (!res.ok) {
+      setModalError(salesActionError(t, res.code, res.message));
+      return;
     }
+    pushToast("success", tc.releasedNote);
+    setReleaseId(null);
+    await load();
   }
 
   const approveGate = hasPermission(permissions, "so:approve");
@@ -181,6 +188,7 @@ export default function SalesOrdersPage() {
         <p className="t-caption">{tc.subtitle}</p>
       </div>
       <ToastRegion toasts={toasts} onDismiss={dismissToast} closeLabel={t.common.cancel} />
+      {meFailed ? <SalesMeError t={t} onRetry={retryMe} /> : null}
       {actionError ? <p className="banner" role="alert">{actionError}</p> : null}
 
       <section className="card">
@@ -261,7 +269,7 @@ export default function SalesOrdersPage() {
                                 <Button small disabled={!meReady || busyId !== null} onClick={() => void act(so.id, () => approveSalesOrder(token ?? "", so.id, null))}>
                                   {tc.approve}
                                 </Button>
-                                <Button small variant="danger" disabled={!meReady || busyId !== null} onClick={() => { setRejectFor(so.id); setRejectReason(""); }}>
+                                <Button small variant="danger" disabled={!meReady || busyId !== null} onClick={() => { setRejectFor(so.id); setRejectReason(""); setModalError(null); }}>
                                   {tc.reject}
                                 </Button>
                               </>
@@ -356,7 +364,7 @@ export default function SalesOrdersPage() {
                           <td colSpan={6}>
                             <Input id={`reject-${so.id}`} label={tc.rejectionReason} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
                             <div className="row-actions" style={{ justifyContent: "flex-start" }}>
-                              <Button small loading={busyId === so.id} disabled={busyId !== null} onClick={() => void act(so.id, () => approveSalesOrder(token ?? "", so.id, rejectReason.trim() || null)).then((ok) => { if (ok) setRejectFor(null); })}>
+                              <Button small loading={busyId === so.id} disabled={busyId !== null || !rejectReason.trim()} onClick={() => void act(so.id, () => approveSalesOrder(token ?? "", so.id, rejectReason.trim())).then((ok) => { if (ok) setRejectFor(null); })}>
                                 {tc.confirmReject}
                               </Button>
                               <Button small variant="secondary" onClick={() => setRejectFor(null)}>{t.common.cancel}</Button>
@@ -375,6 +383,7 @@ export default function SalesOrdersPage() {
 
       <Modal open={releaseId !== null} onClose={() => setReleaseId(null)} title={tc.releaseConfirmTitle} closeLabel={t.common.cancel}>
         <p>{tc.releaseConfirm}</p>
+        {modalError ? <p className="banner" role="alert">{modalError}</p> : null}
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setReleaseId(null)}>{t.common.cancel}</Button>
           <Button loading={busyId !== null} onClick={() => void confirmRelease()}>{tc.release}</Button>
