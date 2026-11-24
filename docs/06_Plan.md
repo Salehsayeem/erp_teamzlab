@@ -58,7 +58,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done (date) · `[b]` blocked by
 - [ ] FINANCE deep: AP/AR close, periods/locks, tax (**D-01**) (20 screens)
 - [x] INVENTORY deep: valuation, counts, transfers (16 screens) — API slice DONE (17/17 tests, commit ec4fcb4) + UI DONE (8275d73+4119c2c, build 24/24, browser-verified en+bn)
 - [ ] PROCUREMENT deep: contracts, sourcing (12 screens)
-- [~] SALES deep: CRM, billing, dunning (14 screens) — API slice DONE on `feat/sales-deep` (T7: leads/CRM/opportunities, invoice documents with per-line tax + maker-checker posting, credit/debit adjustments, collections + credit exposure; journal-only invoice endpoint RETIRED per R-T7f; suite 58→87 green; frontend screens not yet built)
+- [~] SALES deep: CRM, billing, dunning (14 screens) — API slice DONE on `feat/sales-deep` (T7: leads/CRM/opportunities, invoice documents with per-line tax + maker-checker posting, credit/debit adjustments, collections + credit exposure; journal-only invoice endpoint RETIRED per R-T7f; fix round 1: status-guarded posting, invoice discard, per-customer exposure serialization, route-aware idem hash — suite 58→94 green; frontend screens not yet built)
 - [ ] ASSETS: projects, service, fixed assets (15 screens)
 - [ ] PEOPLE: workers, time, payroll handoff (**b D-05**) (15 screens)
 - [ ] MFG: planning, production, quality (**b D-02**) (14 screens)
