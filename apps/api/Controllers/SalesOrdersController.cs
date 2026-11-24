@@ -46,12 +46,14 @@ public sealed class SalesOrdersController(ISalesOrderService orders) : Controlle
         return code is not null ? Envelope.Fail(code, error!, ErrorStatus.StatusFor(code)) : Envelope.Ok<object>(new { shipment, journal }, 201);
     }
 
-    [HttpPost("{id}/invoices")]
-    public IResult Invoice(string id)
+    // R-T7f: the journal-only /sales-orders/{id}/invoices endpoint was RETIRED — invoice
+    // documents (draft → maker-checker posting) live in InvoicesController instead.
+
+    // 057 AC2: releasing a credit-held order is a credit:override act, audited + outboxed
+    [HttpPost("{id}/credit-releases")]
+    public IResult ReleaseCredit(string id, ReleaseCreditRequest request)
     {
-        var u = CurrentUser.From(HttpContext);
-        if (!u.Has("so:write")) return Envelope.Fail("FORBIDDEN", "so:write permission required.", 403);
-        var (journal, code, error) = orders.Invoice(u, id);
-        return code is not null ? Envelope.Fail(code, error!, ErrorStatus.StatusFor(code)) : Envelope.Ok<object>(journal!, 201);
+        var (so, code, error) = orders.ReleaseCreditHold(CurrentUser.From(HttpContext), id);
+        return code is not null ? Envelope.Fail(code, error!, ErrorStatus.StatusFor(code)) : Envelope.Ok<object>(so!);
     }
 }

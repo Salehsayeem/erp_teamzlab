@@ -19,6 +19,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPurchaseOrderRepository, PurchaseOrderRepository>();
         services.AddScoped<ICustomerRepository, CustomerRepository>();
         services.AddScoped<ISalesOrderRepository, SalesOrderRepository>();
+        services.AddScoped<ILeadRepository, LeadRepository>();
+        services.AddScoped<ICrmRepository, CrmRepository>();
+        services.AddScoped<IOpportunityRepository, OpportunityRepository>();
+        services.AddScoped<IInvoiceRepository, InvoiceRepository>();
+        services.AddScoped<ICollectionsRepository, CollectionsRepository>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IJournalRepository, JournalRepository>();
         services.AddScoped<IAssetsRepository, AssetsRepository>();
@@ -33,6 +38,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IReceiptService, ReceiptService>();
         services.AddScoped<ICustomerService, CustomerService>();
         services.AddScoped<ISalesOrderService, SalesOrderService>();
+        services.AddScoped<ILeadService, LeadService>();
+        services.AddScoped<ICrmService, CrmService>();
+        services.AddScoped<IOpportunityService, OpportunityService>();
+        services.AddScoped<IInvoiceService, InvoiceService>();
+        services.AddScoped<ICollectionService, CollectionService>();
         services.AddScoped<IJournalService, JournalService>();
         services.AddScoped<IInventoryService, InventoryService>();
         services.AddScoped<IAssetService, AssetService>();

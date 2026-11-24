@@ -6,7 +6,7 @@ namespace Erp.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/customers")]
-public sealed class CustomersController(ICustomerService customers) : ControllerBase
+public sealed class CustomersController(ICustomerService customers, ICollectionService collections) : ControllerBase
 {
     [HttpGet]
     public IResult List() => Envelope.Ok<object>(customers.List());
@@ -21,4 +21,14 @@ public sealed class CustomersController(ICustomerService customers) : Controller
         var (data, code, message) = customers.Create(u, request);
         return code is null ? (Envelope.OkBody(data), 201) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
     });
+
+    // 057: credit exposure read — credit:read gate (R-FIN seed), explicit no-data flag (057 edge)
+    [HttpGet("{id}/credit-exposure")]
+    public IResult CreditExposure(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("credit:read")) return Envelope.Fail("FORBIDDEN", "credit:read permission required.", 403);
+        var (data, code, message) = collections.CreditExposure(id);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
 }

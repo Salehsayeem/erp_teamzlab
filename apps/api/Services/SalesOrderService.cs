@@ -5,8 +5,8 @@ namespace Erp.Api.Services;
 
 public sealed class SalesOrderService(
     ICustomerRepository customers, ISalesOrderRepository orders, IPurchaseOrderRepository costing,
-    IInventoryRepository inventory, IJournalRepository journals, INumberSeries numbers,
-    IAuditRepository audit, EntityContext ec, ErpDbContext db) : ISalesOrderService
+    IInventoryRepository inventory, IJournalRepository journals, IInvoiceRepository invoiceDocs,
+    INumberSeries numbers, IAuditRepository audit, EntityContext ec, ErpDbContext db) : ISalesOrderService
 {
     public object List() =>
         orders.All().Select(s => new
@@ -37,19 +37,53 @@ public sealed class SalesOrderService(
         return (so, null, null);
     }
 
+    // R-T7i: approval is gated on so:approve (moved off so:write); approver ≠ creator still holds.
+    // 057 AC2: an approval that would push exposure past the customer's credit limit lands the
+    // order in CreditHold instead of Confirmed — release is a separate credit:override act.
     public (SalesOrder? order, string? code, string? message) Approve(CurrentUser approver, string soId, string? reason)
     {
         var so = orders.Find(soId);
         if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
         if (so.Status != SoStatus.PendingApproval) return (null, "SO_APPROVAL_ERROR", $"Only pending sales orders can be approved (current: {so.Status}).");
         if (so.CreatedBy == approver.Id) return (null, "SO_APPROVAL_ERROR", "Maker-checker: the creator cannot approve their own sales order.");
-        if (!approver.Has("so:write") && !approver.Has("*")) return (null, "FORBIDDEN", "so:write permission required.");
+        if (!approver.Has("so:approve")) return (null, "FORBIDDEN", "so:approve permission required.");
 
-        if (reason is null) orders.MarkConfirmed(so, approver.Id);
-        else orders.MarkRejected(so, approver.Id, reason);
-        audit.Log(approver, reason is null ? "approve" : "reject", "sales_order", so.Id,
-            reason is null ? $"SO approved by {approver.Email}" : $"SO rejected: {reason}");
-        if (reason is null) audit.Emit(approver, "sales.so.approved", new { soId = so.Id, approver = approver.Id });
+        if (reason is not null)
+        {
+            orders.MarkRejected(so, approver.Id, reason);
+            audit.Log(approver, "reject", "sales_order", so.Id, $"SO rejected: {reason}");
+            orders.Save();
+            return (so, null, null);
+        }
+
+        var (overLimit, exposure) = ExposureIfApproved(so);
+        if (overLimit)
+        {
+            orders.MarkCreditHold(so, approver.Id);
+            audit.Log(approver, "credit_hold", "sales_order", so.Id,
+                $"SO approved but held: exposure {exposure:0.00} exceeds the customer credit limit");
+            orders.Save();
+            return (so, null, null);
+        }
+
+        orders.MarkConfirmed(so, approver.Id);
+        audit.Log(approver, "approve", "sales_order", so.Id, $"SO approved by {approver.Email}");
+        audit.Emit(approver, "sales.so.approved", new { soId = so.Id, approver = approver.Id });
+        orders.Save();
+        return (so, null, null);
+    }
+
+    // 057 AC2 release: CreditHold → Confirmed, credit:override gate, audited, outbox event
+    public (SalesOrder? order, string? code, string? message) ReleaseCreditHold(CurrentUser user, string soId)
+    {
+        var so = orders.Find(soId);
+        if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
+        if (so.Status != SoStatus.CreditHold) return (null, "SO_STATE_ERROR", $"Only credit-held sales orders can be released (current: {so.Status}).");
+        if (!user.Has("credit:override")) return (null, "FORBIDDEN", "credit:override permission required.");
+
+        orders.MarkConfirmed(so, user.Id);
+        audit.Log(user, "credit_release", "sales_order", so.Id, $"Credit hold released by {user.Email}; SO confirmed");
+        audit.Emit(user, "sales.credit.released", new { soId = so.Id, releasedBy = user.Id });
         orders.Save();
         return (so, null, null);
     }
@@ -96,28 +130,20 @@ public sealed class SalesOrderService(
         return (shipment, journal, null, null);
     }
 
-    // shortcut: approval gate = SO approval; separate invoice approval when spec card demands it
-    public (Journal? journal, string? code, string? message) Invoice(CurrentUser user, string soId)
+    // would confirming this order push the customer's exposure past the credit limit?
+    // exposure = open posted invoices (− credits + debits) + open Confirmed/CreditHold SO totals (R-T7e)
+    private (bool overLimit, decimal exposure) ExposureIfApproved(SalesOrder so)
     {
-        var so = orders.Find(soId);
-        if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
-        if (so.Status != SoStatus.Shipped) return (null, "INVOICE_ERROR", $"Only shipped sales orders can be invoiced (current: {so.Status}).");
+        var customer = customers.Find(so.CustomerId);
+        if (customer?.CreditLimit is not { } limit) return (false, 0); // no limit configured → no hold
 
-        // task-5: invoices post the AR journal at today — the centralized period lock applies
-        var (guardCode, guardMsg) = FinanceGuards.EnsurePeriodOpen(db, ec, DateOnly.FromDateTime(DateTime.UtcNow));
-        if (guardCode is not null) return (null, guardCode, guardMsg);
-
-        var total = so.Lines.Sum(l => decimal.Round(l.Qty * l.UnitPrice, 2, MidpointRounding.AwayFromZero));
-        var journal = new Journal(numbers.Next("J"), ec.TenantId, ec.EntityId, JournalStatus.Posted,
-            $"AR invoice for SO {soId}",
-            new JournalLine[] { new("1200", "Accounts Receivable", total, 0), new("4000", "Sales Revenue", 0, total) },
-            DateTimeOffset.UtcNow, user.Id);
-        journals.Add(journal);
-        orders.MarkInvoiced(so);
-
-        audit.Log(user, "invoice", "sales_order", so.Id, $"SO invoiced for {total}; journal {journal.Id} posted");
-        audit.Emit(user, "sales.invoice.posted", new { soId, total, journalId = journal.Id });
-        orders.Save();
-        return (journal, null, null);
+        var openInvoiced = OpenInvoiced(so.CustomerId);
+        var openOrders = orders.OpenForCustomer(so.CustomerId).Where(o => o.Id != so.Id).Sum(CreditMath.OrderTotal);
+        var exposure = openInvoiced + openOrders + CreditMath.OrderTotal(so);
+        return (exposure > limit, exposure);
     }
+
+    internal decimal OpenInvoiced(string customerId) =>
+        invoiceDocs.AllInvoices(InvoiceStatus.Posted, customerId)
+            .Sum(i => CreditMath.InvoiceOpen(i, invoiceDocs.AdjustmentsForInvoice(i.Id)));
 }
