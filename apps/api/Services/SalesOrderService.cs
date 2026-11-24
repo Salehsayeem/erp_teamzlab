@@ -1,3 +1,4 @@
+using Erp.Api.Data;
 using Erp.Api.Interfaces;
 
 namespace Erp.Api.Services;
@@ -5,7 +6,7 @@ namespace Erp.Api.Services;
 public sealed class SalesOrderService(
     ICustomerRepository customers, ISalesOrderRepository orders, IPurchaseOrderRepository costing,
     IInventoryRepository inventory, IJournalRepository journals, INumberSeries numbers,
-    IAuditRepository audit, EntityContext ec) : ISalesOrderService
+    IAuditRepository audit, EntityContext ec, ErpDbContext db) : ISalesOrderService
 {
     public object List() =>
         orders.All().Select(s => new
@@ -66,6 +67,10 @@ public sealed class SalesOrderService(
         if (onHand < qty)
             return (null, null, "INSUFFICIENT_STOCK", $"Insufficient stock for {itemSku}: available {onHand}, requested {qty}.");
 
+        // task-5: shipments post the COGS journal at today — the centralized period lock applies
+        var (guardCode, guardMsg) = FinanceGuards.EnsurePeriodOpen(db, ec, DateOnly.FromDateTime(DateTime.UtcNow));
+        if (guardCode is not null) return (null, null, guardCode, guardMsg);
+
         inventory.DrawStock(itemSku, qty);
 
         var shipment = new Shipment(numbers.Next("SHP"), ec.TenantId, ec.EntityId, soId, itemSku, qty, DateTimeOffset.UtcNow, user.Id);
@@ -97,6 +102,10 @@ public sealed class SalesOrderService(
         var so = orders.Find(soId);
         if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
         if (so.Status != SoStatus.Shipped) return (null, "INVOICE_ERROR", $"Only shipped sales orders can be invoiced (current: {so.Status}).");
+
+        // task-5: invoices post the AR journal at today — the centralized period lock applies
+        var (guardCode, guardMsg) = FinanceGuards.EnsurePeriodOpen(db, ec, DateOnly.FromDateTime(DateTime.UtcNow));
+        if (guardCode is not null) return (null, guardCode, guardMsg);
 
         var total = so.Lines.Sum(l => decimal.Round(l.Qty * l.UnitPrice, 2, MidpointRounding.AwayFromZero));
         var journal = new Journal(numbers.Next("J"), ec.TenantId, ec.EntityId, JournalStatus.Posted,

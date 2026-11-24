@@ -1,3 +1,4 @@
+using Erp.Api.Data;
 using Erp.Api.Dtos;
 using Erp.Api.Interfaces;
 
@@ -6,7 +7,7 @@ namespace Erp.Api.Services;
 // Inventory deep slice (ERP-INVENTORY-005 locations, -014 atomic movement, -020 negative-stock block)
 public sealed class InventoryService(
     IInventoryRepository inventory, IPurchaseOrderRepository costing, IJournalRepository journals,
-    INumberSeries numbers, IAuditRepository audit, EntityContext ec) : IInventoryService
+    INumberSeries numbers, IAuditRepository audit, EntityContext ec, ErpDbContext db) : IInventoryService
 {
     // stock grouped by warehouse/location (ERP-INVENTORY-005) — flat rows keyed by location
     public object ListStock() => inventory.AllStock().Select(s =>
@@ -92,6 +93,10 @@ public sealed class InventoryService(
         if (count.Status != CountStatus.Open) return (null, null, "COUNT_CLOSE_ERROR", $"Only open counts can be closed (current: {count.Status}).");
         if (count.CreatedBy == closer.Id) return (null, null, "COUNT_CLOSE_ERROR", "Maker-checker: the counter cannot close their own stock count.");
         if (!closer.Has("inventory:write")) return (null, null, "FORBIDDEN", "inventory:write permission required.");
+
+        // task-5: count adjustments post journals at today — the centralized period lock applies
+        var (guardCode, guardMsg) = FinanceGuards.EnsurePeriodOpen(db, ec, DateOnly.FromDateTime(DateTime.UtcNow));
+        if (guardCode is not null) return (null, null, guardCode, guardMsg);
 
         var loc = inventory.FindLocation(count.LocationId)!;
         var adjustments = new List<StockAdjustment>();
