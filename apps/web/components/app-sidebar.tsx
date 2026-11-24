@@ -83,7 +83,7 @@ export default function AppSidebar({
     },
     {
       heading: dict.nav.groups.system,
-      items: [{ href: "design", label: dict.nav.designSystem }],
+      items: [{ href: "design", label: dict.nav.groups.designSystem }],
     },
   ];
 

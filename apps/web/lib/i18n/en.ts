@@ -39,6 +39,11 @@ export const en = {
       designSystem: "Design system",
     },
   },
+  userMenu: {
+    signedInAs: "Signed in as",
+    logout: "Log out",
+    openMenu: "Open user menu",
+  },
   login: {
     title: "Sign in",
     subtitle: "Choose a pilot user to exchange for a session token.",

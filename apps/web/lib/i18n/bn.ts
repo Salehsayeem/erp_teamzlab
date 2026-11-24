@@ -41,6 +41,11 @@ export const bn: Dict = {
       designSystem: "ডিজাইন সিস্টেম",
     },
   },
+  userMenu: {
+    signedInAs: "সাইনড ইন অ্যাজ",
+    logout: "লগ আউট",
+    openMenu: "ইউজার মেনু খুলুন",
+  },
   login: {
     title: "সাইন ইন",
     subtitle: "সেশন টোকেন পেতে একজন পাইলট ব্যবহারকারী বেছে নিন।",

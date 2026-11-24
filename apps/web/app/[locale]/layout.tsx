@@ -3,9 +3,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { DM_Sans } from "next/font/google";
 import { getDictionary, isLocale, LOCALES } from "@/lib/i18n";
-import { LocaleSwitch } from "@/components/locale-switch";
-import ThemeToggle from "@/components/theme-toggle";
-import AppSidebar from "@/components/app-sidebar";
+import AppShell from "@/components/app-shell";
 import "../globals.css";
 
 // Reference theme typography: DM Sans variable (loaded via next/font, no runtime fetch).
@@ -37,21 +35,7 @@ export default async function LocaleLayout({ children, params }: { children: Rea
     <html lang={locale} dir="ltr">
       <body className={dmSans.className}>
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
-        <div className="app-shell">
-          <AppSidebar locale={locale} />
-          <div className="shell__main">
-            <header className="topbar">
-              <Link href={`/${locale}`} className="topbar__title">
-                {t.meta.appTitle}
-              </Link>
-              <div className="topbar__actions">
-                <LocaleSwitch locale={locale} otherLabel={t.meta.otherLocale} />
-                <ThemeToggle lightLabel="Switch to light theme" darkLabel="Switch to dark theme" />
-              </div>
-            </header>
-            <main className="content">{children}</main>
-          </div>
-        </div>
+        <AppShell locale={locale}>{children}</AppShell>
       </body>
     </html>
   );

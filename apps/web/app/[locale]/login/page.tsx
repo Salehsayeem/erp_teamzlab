@@ -13,6 +13,8 @@ const SEEDED_USERS = [
   { email: "finance@teamzlab.dev", key: "finance" },
   { email: "sales@teamzlab.dev", key: "sales" },
   { email: "assets@teamzlab.dev", key: "assets" },
+  { email: "hr@teamzlab.dev", key: "hr" },
+  { email: "mfg@teamzlab.dev", key: "mfg" },
 ] as const;
 
 export default function LoginPage() {
