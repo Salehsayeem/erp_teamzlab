@@ -397,11 +397,13 @@ public class SalesDeepTests : IClassFixture<TestApiFactory>
             .First(s => s.GetProperty("id").GetString() == soId);
         Assert.Equal("Invoiced", so.GetProperty("status").GetString());
 
-        // 052: the receivables handoff payload rides the outbox event
+        // 052: the receivables handoff payload rides the outbox event (match THIS test's event —
+        // earlier tests post invoices too)
         var outbox = await GetAsync("/api/v1/outbox", Admin);
-        var evt = outbox.GetProperty("data").EnumerateArray().First(e => e.GetProperty("type").GetString() == "sales.invoice.posted");
-        var payload = JsonDocument.Parse(evt.GetProperty("payloadJson").GetString()!).RootElement;
-        Assert.Equal(invoiceId, payload.GetProperty("invoiceId").GetString());
+        var payload = outbox.GetProperty("data").EnumerateArray()
+            .Where(e => e.GetProperty("type").GetString() == "sales.invoice.posted")
+            .Select(e => JsonDocument.Parse(e.GetProperty("payloadJson").GetString()!).RootElement)
+            .First(p => p.GetProperty("invoiceId").GetString() == invoiceId);
         Assert.Equal(journal.GetProperty("id").GetString(), payload.GetProperty("journalId").GetString());
         Assert.Equal(1150.00m, payload.GetProperty("total").GetDecimal());
         Assert.Equal(150.00m, payload.GetProperty("taxTotal").GetDecimal());
@@ -555,8 +557,8 @@ public class SalesDeepTests : IClassFixture<TestApiFactory>
             promiseDueDate = Today.AddDays(7),
         }, Sales);
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
-        var disputeId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
-        var dispute = (await Json(res)).GetProperty("data");
+        var dispute = (await Json(res)).GetProperty("data"); // read once — the content stream closes
+        var disputeId = dispute.GetProperty("id").GetString()!;
         Assert.Equal("Promised", dispute.GetProperty("status").GetString());
 
         // reminder while the dispute is open/promised → suppressed
