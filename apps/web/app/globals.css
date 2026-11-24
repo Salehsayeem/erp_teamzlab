@@ -125,6 +125,10 @@
   outline-offset: var(--focus-ring-offset);
 }
 
+/* utilities */
+/* sr-only: visually hidden, screen-reader accessible (loading button labels, table captions) */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
+
 /* type scale */
 .t-display { margin: 0; font-size: var(--fs-display); line-height: var(--lh-display); font-weight: 600; }
 .t-title { margin: 0; font-size: var(--fs-title); line-height: var(--lh-title); font-weight: 600; }
