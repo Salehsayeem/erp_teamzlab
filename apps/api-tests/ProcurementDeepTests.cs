@@ -1006,6 +1006,298 @@ public class ProcurementDeepTests : IClassFixture<TestApiFactory>
         Assert.Equal("OBLIGATION_STATE_ERROR", ErrorCode(await Json(res)));
     }
 
+    // ==================== fix round 1 (review findings) ====================
+
+    private async Task<long> CountRows(string table, string column, string value)
+    {
+        await using var conn = new NpgsqlConnection(_factory.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand($"SELECT count(*) FROM {table} WHERE {column} = $1", conn);
+        cmd.Parameters.AddWithValue(value);
+        return (long)(await cmd.ExecuteScalarAsync())!;
+    }
+
+    // FIX 1 — the SHA-256 digest lets an evaluator grid-search price×discount offline, so a
+    // sealed projection must carry no digest at all for non-sourcing:approve callers; the audit
+    // summary drops its fragment too. Approvers keep it per R-T6b; the submission receipt (028
+    // AC1) is unaffected — the buyer recorded the payload themselves.
+    [Fact]
+    public async Task Sealed_Bid_Hides_Content_Digest_Until_Opening()
+    {
+        var supplierId = await SeedSupplier("F1");
+        var (eventId, lotId, _) = await SeedPublishedEvent("F1", suppliers: [supplierId]);
+        await SubmitBid(eventId, supplierId, lotId);
+        await PostForData($"/api/v1/sourcing-events/{eventId}/evaluator-assignments",
+            new { userIds = new[] { Eval } }, Proc);
+
+        var sealedEval = await (await GetRawAsync($"/api/v1/sourcing-events/{eventId}/bids", Eval)).Content.ReadAsStringAsync();
+        Assert.DoesNotContain("contentDigest", sealedEval);
+        var sealedProc = await (await GetRawAsync($"/api/v1/sourcing-events/{eventId}/bids", Proc)).Content.ReadAsStringAsync();
+        Assert.DoesNotContain("contentDigest", sealedProc);
+
+        var finRaw = await (await GetRawAsync($"/api/v1/sourcing-events/{eventId}/bids", Fin)).Content.ReadAsStringAsync();
+        Assert.Contains("contentDigest", finRaw); // sourcing:approve callers inspect sealed prices (R-T6b)
+
+        var audit = await GetAsync("/api/v1/audit-events", Admin);
+        Assert.DoesNotContain(audit.GetProperty("data").EnumerateArray()
+            .Select(a => a.GetProperty("summary").GetString()!),
+            s => s.Contains("digest", StringComparison.OrdinalIgnoreCase));
+
+        await CloseEvent(eventId);
+        await PostForData($"/api/v1/sourcing-events/{eventId}/bid-openings", new { }, Fin);
+        var opened = await (await GetRawAsync($"/api/v1/sourcing-events/{eventId}/bids", Eval)).Content.ReadAsStringAsync();
+        Assert.Contains("contentDigest", opened);
+    }
+
+    // FIX 2 — 031 AC1: before any release stage, an evaluator sees only their own trace rows
+    // (other evaluators' ids and comments are invisible); buyers/approvers see the full trace
+    [Fact]
+    public async Task Score_Summary_Hides_Other_Evaluators_From_Evaluator_Callers()
+    {
+        var s1 = await SeedSupplier("F2");
+        var (eventId, lotId, criteria) = await SeedPublishedEvent("F2", suppliers: [s1]);
+        var bidId = await SubmitBid(eventId, s1, lotId);
+        await PostForData($"/api/v1/sourcing-events/{eventId}/evaluator-assignments",
+            new { userIds = new[] { Eval, Admin } }, Proc);
+        await PostForData($"/api/v1/sourcing-events/{eventId}/scores",
+            new { bidId, criterionId = criteria["PRICE"], rawScore = 8m, passFail = (bool?)null, comment = (string?)"eval-a" }, Eval);
+        await PostForData($"/api/v1/sourcing-events/{eventId}/scores",
+            new { bidId, criterionId = criteria["DELIVERY"], rawScore = 4m, passFail = (bool?)null, comment = (string?)"admin-b" }, Admin);
+
+        var evalView = (await GetAsync($"/api/v1/sourcing-events/{eventId}/score-summary", Eval)).GetProperty("data");
+        var evalBid = evalView.GetProperty("bids")[0];
+        Assert.Equal(1, evalBid.GetProperty("rows").GetArrayLength());
+        Assert.Equal(Eval, evalBid.GetProperty("rows")[0].GetProperty("evaluatorUserId").GetString());
+        Assert.False(evalBid.TryGetProperty("total", out _));   // aggregates leak other evaluators' input
+        Assert.False(evalBid.TryGetProperty("rank", out _));
+        Assert.False(evalBid.TryGetProperty("disqualified", out _));
+
+        var buyerView = (await GetAsync($"/api/v1/sourcing-events/{eventId}/score-summary", Proc)).GetProperty("data");
+        var buyerBid = buyerView.GetProperty("bids")[0];
+        Assert.Equal(3, buyerBid.GetProperty("rows").GetArrayLength()); // full trace: all criteria, missing flagged
+        Assert.Equal(72.00m, buyerBid.GetProperty("total").GetDecimal());
+    }
+
+    // FIX 3 — rejection IS the disposition for an ineligible supplier; the re-check must not
+    // dead-end a checker who is rejecting with a reason
+    [Fact]
+    public async Task Reject_With_Reason_Skips_Eligibility_Recheck()
+    {
+        var supplierId = await SeedSupplier("F3");
+        var (awardId, eventId) = await SeedRecommendedAward("F3", supplierId);
+        await PostAsync($"/api/v1/suppliers/{supplierId}/status", new { status = "Suspended", reason = "blacklisted mid-flight" }, Proc);
+
+        var res = await PostAsync($"/api/v1/awards/{awardId}/approvals", new { reason = "supplier suspended — rejecting" }, Fin);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("Rejected", (await Json(res)).GetProperty("data").GetProperty("award").GetProperty("status").GetString());
+        var events = await GetAsync("/api/v1/sourcing-events?status=NoAward", Proc);
+        Assert.Contains(eventId, events.GetProperty("data").EnumerateArray().Select(e => e.GetProperty("id").GetString()));
+    }
+
+    // FIX 4 — honest concurrency proof: two same-lot approvals racing must produce exactly one
+    // approval (7+5 over a 10 ceiling). Without serialization both read stale approved-qty and
+    // both approve; with the event-row lock the second re-checks under the lock and 409s.
+    [Fact]
+    public async Task Concurrent_Lot_Approvals_Cannot_Over_Award()
+    {
+        var s1 = await SeedSupplier("F4A");
+        var s2 = await SeedSupplier("F4B");
+        var (eventId, lotId, _) = await SeedPublishedEvent("F4", targetQty: 10m, suppliers: [s1, s2]);
+        await SubmitBid(eventId, s1, lotId);
+        await SubmitBid(eventId, s2, lotId);
+        await CloseEvent(eventId);
+        var a1 = (await PostForData("/api/v1/awards",
+            new { eventId, lotId, supplierId = s1, qty = 7m, unitPrice = 100m, recommendation = "A" }, Proc)).GetProperty("id").GetString()!;
+        var a2 = (await PostForData("/api/v1/awards",
+            new { eventId, lotId, supplierId = s2, qty = 5m, unitPrice = 95m, recommendation = "B" }, Proc)).GetProperty("id").GetString()!;
+
+        var r1 = PostAsync($"/api/v1/awards/{a1}/approvals", new { reason = (string?)null }, Fin);
+        var r2 = PostAsync($"/api/v1/awards/{a2}/approvals", new { reason = (string?)null }, Fin);
+        await Task.WhenAll(r1, r2);
+        static string? OutcomeCode(HttpResponseMessage res)
+        {
+            var root = System.Text.Json.JsonDocument.Parse(res.Content.ReadAsStream()).RootElement;
+            return root.TryGetProperty("error", out var e) ? e.GetProperty("code").GetString() : null;
+        }
+        var outcomes = new List<string?> { OutcomeCode(await r1), OutcomeCode(await r2) };
+        Assert.Single(outcomes, o => o is null);
+        Assert.Single(outcomes, o => o == "AWARD_OVER_CEILING");
+    }
+
+    // FIX 6b — concurrent amendments must not double-assign a version: with the contract-row
+    // lock the second computes its version only after the first commits (strictly 2 then 3)
+    [Fact]
+    public async Task Concurrent_Amendments_Get_Distinct_Versions()
+    {
+        var supplierId = await SeedSupplier("F5");
+        var contractId = await SeedActiveContract("F5", supplierId); // version 2
+        var r1 = PostAsync($"/api/v1/contracts/{contractId}/amendments", new
+        {
+            effectiveDate = Today, summary = "concurrent A",
+            priceLines = new[] { new { itemSku = "SKU-F5-X", unitPrice = 5m, effectiveFrom = Today.AddDays(90), effectiveTo = (DateOnly?)null } },
+        }, Proc);
+        var r2 = PostAsync($"/api/v1/contracts/{contractId}/amendments", new
+        {
+            effectiveDate = Today, summary = "concurrent B",
+            priceLines = new[] { new { itemSku = "SKU-F5-Y", unitPrice = 6m, effectiveFrom = Today.AddDays(90), effectiveTo = (DateOnly?)null } },
+        }, Proc);
+        await Task.WhenAll(r1, r2);
+        Assert.Equal(System.Net.HttpStatusCode.Created, (await r1).StatusCode);
+        Assert.Equal(System.Net.HttpStatusCode.Created, (await r2).StatusCode);
+        var row = await ContractRowAsync(contractId);
+        Assert.Equal(4, row.GetProperty("version").GetInt32());          // 2 base + 2 amendments
+        Assert.Equal(3, row.GetProperty("amendmentCount").GetInt32());   // strictly distinct versions
+    }
+
+    // FIX 6a+e — unique indexes exist: contract_amendments(contract_id, version) and
+    // contracts(award_id); an index violation on the amendment version maps to a clean 409
+    [Fact]
+    public async Task Amendment_Version_Index_Violation_Maps_To_409_CONTRACT_AMENDMENT_CONFLICT()
+    {
+        var supplierId = await SeedSupplier("F6");
+        var contractId = await SeedActiveContract("F6", supplierId); // amendment v2 already executed
+
+        await using (var conn = new NpgsqlConnection(_factory.ConnectionString))
+        {
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                "SELECT tablename || '|' || indexdef FROM pg_indexes WHERE tablename IN ('contract_amendments','contracts')", conn);
+            await using var reader = await cmd.ExecuteReaderAsync();
+            var defs = new List<string>();
+            while (await reader.ReadAsync()) defs.Add(reader.GetString(0));
+            Assert.Contains(defs, d => d.StartsWith("contract_amendments|") && d.Contains("UNIQUE") && d.Contains("(contract_id, version)"));
+            Assert.Contains(defs, d => d.StartsWith("contracts|") && d.Contains("UNIQUE") && d.Contains("(award_id)"));
+        }
+
+        // smuggle a row occupying the NEXT version the API would assign, bypassing the API
+        await using (var conn = new NpgsqlConnection(_factory.ConnectionString))
+        {
+            await conn.OpenAsync();
+            await using var cmd = new NpgsqlCommand(
+                "INSERT INTO contract_amendments (id, tenant_id, legal_entity_id, contract_id, version, effective_date, summary, approved_by, approved_at) " +
+                "VALUES ('AMD-F6-SMUGGLED', 'T-001', 'LE-001', $1, 3, CURRENT_DATE, 'smuggled', 'raw', now())", conn);
+            cmd.Parameters.AddWithValue(contractId);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        var res = await PostAsync($"/api/v1/contracts/{contractId}/amendments", new
+        {
+            effectiveDate = Today,
+            summary = "should collide on version 3",
+            priceLines = new[] { new { itemSku = "SKU-F6-W", unitPrice = 7m, effectiveFrom = Today.AddDays(120), effectiveTo = (DateOnly?)null } },
+        }, Proc);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("CONTRACT_AMENDMENT_CONFLICT", ErrorCode(await Json(res)));
+    }
+
+    // FIX 6e — the service still 409s first (index is the race backstop); direct coverage for
+    // the duplicate-contract path that previously only existed as a check
+    [Fact]
+    public async Task Duplicate_Contract_From_One_Award_Returns_409()
+    {
+        var supplierId = await SeedSupplier("F6B");
+        var (awardId, _) = await SeedRecommendedAward("F6B", supplierId);
+        await PostForData($"/api/v1/awards/{awardId}/approvals", new { reason = (string?)null }, Fin);
+        var first = await PostAsync("/api/v1/contracts", new
+        {
+            supplierId, awardId, currency = "BDT", effectiveFrom = Today, effectiveTo = Today.AddDays(30),
+            renewalNoticeDays = (int?)null, optionPeriodsTotal = (int?)null,
+        }, Proc);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var res = await PostAsync("/api/v1/contracts", new
+        {
+            supplierId, awardId, currency = "BDT", effectiveFrom = Today, effectiveTo = Today.AddDays(30),
+            renewalNoticeDays = (int?)null, optionPeriodsTotal = (int?)null,
+        }, Proc);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("AWARD_ALREADY_CONTRACTED", ErrorCode(await Json(res)));
+    }
+
+    // FIX 7 — a mid-list failure must not leave earlier items persisted (the idempotency store
+    // shares the scoped context, so tracked-but-uncommitted work would flush on Complete)
+    [Fact]
+    public async Task Multi_Supplier_Invite_Failure_Persists_Nothing()
+    {
+        var eligible = await SeedSupplier("F7A");
+        var suspended = await SeedSupplier("F7B");
+        await PostAsync($"/api/v1/suppliers/{suspended}/status", new { status = "Suspended", reason = "x" }, Proc);
+        var eventId = await CreateEvent("F7");
+
+        var res = await PostAsync($"/api/v1/sourcing-events/{eventId}/invitations",
+            new { supplierIds = new[] { eligible, suspended } }, Proc, "f7-invite");
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("SUPPLIER_INELIGIBLE", ErrorCode(await Json(res)));
+        Assert.Equal(0, await CountRows("event_invitations", "event_id", eventId));
+    }
+
+    [Fact]
+    public async Task Evaluator_Assignment_Failure_Persists_Nothing()
+    {
+        var supplierId = await SeedSupplier("F7C");
+        var (eventId, _, _) = await SeedPublishedEvent("F7C", suppliers: [supplierId]);
+        var res = await PostAsync($"/api/v1/sourcing-events/{eventId}/evaluator-assignments",
+            new { userIds = new[] { Eval, Proc } }, Proc, "f7-assign"); // second id IS the event creator
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("EVALUATOR_CREATOR_CONFLICT", ErrorCode(await Json(res)));
+        Assert.Equal(0, await CountRows("evaluator_assignments", "event_id", eventId));
+    }
+
+    // FIX 5 — overdue/expiring/notice windows derive from the current date per call, not a
+    // process-start snapshot (the old bug is only observable across process lifetime, so this
+    // test pins the contract rather than reproducing the failure in-process)
+    [Fact]
+    public async Task Overdue_Queue_Tracks_The_Current_Date()
+    {
+        var supplierId = await SeedSupplier("F8");
+        var contractId = await SeedActiveContract("F8", supplierId);
+        await PostForData($"/api/v1/contracts/{contractId}/obligations",
+            new { obligationType = "Due tomorrow", ownerUserId = Proc, dueDate = Today.AddDays(1), sourceClause = (string?)null }, Proc);
+        Assert.Equal(0, (await ContractRowAsync(contractId)).GetProperty("overdueObligations").GetInt32());
+        await PostForData($"/api/v1/contracts/{contractId}/obligations",
+            new { obligationType = "Due yesterday", ownerUserId = Proc, dueDate = Today.AddDays(-1), sourceClause = (string?)null }, Proc);
+        Assert.Equal(1, (await ContractRowAsync(contractId)).GetProperty("overdueObligations").GetInt32());
+    }
+
+    // minor (d) — expiringWithinDays surfaces contracts NOT yet expired
+    [Fact]
+    public async Task ExpiringWithin_Excludes_Already_Expired_Contracts()
+    {
+        var supplierId = await SeedSupplier("F9");
+        var (awardId, _) = await SeedRecommendedAward("F9", supplierId);
+        await PostForData($"/api/v1/awards/{awardId}/approvals", new { reason = (string?)null }, Fin);
+        var res = await PostAsync("/api/v1/contracts", new
+        {
+            supplierId, awardId, currency = "BDT", effectiveFrom = Today.AddDays(-30), effectiveTo = Today.AddDays(-1),
+            renewalNoticeDays = (int?)null, optionPeriodsTotal = (int?)null,
+        }, Proc);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var contractId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+
+        var unfiltered = await GetAsync("/api/v1/contracts", Proc);
+        Assert.Contains(unfiltered.GetProperty("data").EnumerateArray(), c => c.GetProperty("id").GetString() == contractId);
+        var filtered = await GetAsync("/api/v1/contracts?expiringWithinDays=45", Proc);
+        Assert.DoesNotContain(filtered.GetProperty("data").EnumerateArray(), c => c.GetProperty("id").GetString() == contractId);
+    }
+
+    // minor (b) — identical duplicate price lines are a client error, not a PK violation
+    [Fact]
+    public async Task Duplicate_Price_Lines_In_One_Amendment_Returns_400()
+    {
+        var supplierId = await SeedSupplier("F10");
+        var contractId = await SeedActiveContract("F10", supplierId);
+        var res = await PostAsync($"/api/v1/contracts/{contractId}/amendments", new
+        {
+            effectiveDate = Today,
+            summary = "duplicated line",
+            priceLines = new object[]
+            {
+                new { itemSku = "SKU-F10-DUP", unitPrice = 5m, effectiveFrom = Today.AddDays(200), effectiveTo = (DateOnly?)null },
+                new { itemSku = "SKU-F10-DUP", unitPrice = 5m, effectiveFrom = Today.AddDays(200), effectiveTo = (DateOnly?)null },
+            },
+        }, Proc);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal("VALIDATION_ERROR", ErrorCode(await Json(res)));
+    }
+
     private async Task<JsonElement> ContractRowAsync(string contractId) =>
         (await GetAsync("/api/v1/contracts", Proc)).GetProperty("data").EnumerateArray()
             .First(c => c.GetProperty("id").GetString() == contractId);
