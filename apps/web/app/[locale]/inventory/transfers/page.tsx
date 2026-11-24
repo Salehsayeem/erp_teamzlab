@@ -92,7 +92,7 @@ export default function TransfersPage() {
       </div>
       {posted ? (
         <p className="banner" role="status">
-          {t.inventory.transfers.posted} {posted.id}: {locCode.get(posted.fromLocationId) ?? posted.fromLocationId} → {locCode.get(posted.toLocationId) ?? posted.toLocationId} · {posted.itemSku} × {fmtNumber(posted.qty, locale)}
+          {t.inventory.transfers.posted} <span className="mono">{posted.id}</span>: {locCode.get(posted.fromLocationId) ?? posted.fromLocationId} → {locCode.get(posted.toLocationId) ?? posted.toLocationId} · <span className="mono">{posted.itemSku} × {fmtNumber(posted.qty, locale)}</span>
         </p>
       ) : null}
       {postError ? <p className="banner" role="alert">{postError}</p> : null}
@@ -118,8 +118,8 @@ export default function TransfersPage() {
               onChange={(e) => setForm({ ...form, toLocationId: e.target.value })}
               error={errors.toLocationId}
             />
-            <Input id="tr-sku" label={t.inventory.transfers.itemSku} value={form.itemSku} onChange={(e) => setForm({ ...form, itemSku: e.target.value })} error={errors.itemSku} />
-            <Input id="tr-qty" label={t.inventory.transfers.qty} type="number" min="0" step="any" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} error={errors.qty} />
+            <Input id="tr-sku" label={t.inventory.transfers.itemSku} className="input mono" value={form.itemSku} onChange={(e) => setForm({ ...form, itemSku: e.target.value })} error={errors.itemSku} />
+            <Input id="tr-qty" label={t.inventory.transfers.qty} type="number" min="0" step="any" className="input mono" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} error={errors.qty} />
           </div>
           <p><Button type="submit" loading={posting}>{t.inventory.transfers.post}</Button></p>
         </form>

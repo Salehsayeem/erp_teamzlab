@@ -87,6 +87,9 @@ export default function JournalsPage() {
                       <td data-label={t.journals.created}><span className="t-caption">{fmtDate(j.createdAt, locale)}</span></td>
                       <td data-label={t.journals.actions}>
                         <div className="row-actions">
+                          <Button small variant="secondary" aria-expanded={expandedId === j.id} onClick={() => setExpandedId(expandedId === j.id ? null : j.id)}>
+                            {expandedId === j.id ? t.journals.hideLines : t.journals.showLines}
+                          </Button>
                           {j.status === "Posted" ? (
                             <Button small loading={busyId === j.id} disabled={busyId !== null} onClick={() => { if (window.confirm(t.journals.confirmReverse)) void reverse(j); }}>
                               {t.journals.reverse}

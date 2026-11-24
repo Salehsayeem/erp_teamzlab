@@ -161,6 +161,7 @@ export default function StockCountsPage() {
                   <Input
                     id={`cnt-sku-${i}`}
                     label={`${t.inventory.counts.itemSku} ${i + 1}`}
+                    className="input mono"
                     value={ln.itemSku}
                     onChange={(e) => setLine(i, { itemSku: e.target.value })}
                     error={skuError}
@@ -171,6 +172,7 @@ export default function StockCountsPage() {
                     type="number"
                     min="0"
                     step="any"
+                    className="input mono"
                     value={ln.countedQty}
                     onChange={(e) => setLine(i, { countedQty: e.target.value })}
                     error={qtyError}
