@@ -12,6 +12,21 @@ namespace Erp.Api.Data;
 public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(options)
 {
     public DbSet<Supplier> Suppliers => Set<Supplier>();
+    public DbSet<SupplierGate> SupplierGates => Set<SupplierGate>();
+    public DbSet<SourcingEvent> SourcingEvents => Set<SourcingEvent>();
+    public DbSet<EventLot> EventLots => Set<EventLot>();
+    public DbSet<EvalCriterion> EvalCriteria => Set<EvalCriterion>();
+    public DbSet<EventInvitation> EventInvitations => Set<EventInvitation>();
+    public DbSet<EventQa> EventQas => Set<EventQa>();
+    public DbSet<Bid> Bids => Set<Bid>();
+    public DbSet<BidLine> BidLines => Set<BidLine>();
+    public DbSet<EvaluatorAssignment> EvaluatorAssignments => Set<EvaluatorAssignment>();
+    public DbSet<ScoreCard> ScoreCards => Set<ScoreCard>();
+    public DbSet<Award> Awards => Set<Award>();
+    public DbSet<Contract> Contracts => Set<Contract>();
+    public DbSet<ContractAmendment> ContractAmendments => Set<ContractAmendment>();
+    public DbSet<ContractPriceLine> ContractPriceLines => Set<ContractPriceLine>();
+    public DbSet<ContractObligation> ContractObligations => Set<ContractObligation>();
     public DbSet<PurchaseOrder> PurchaseOrders => Set<PurchaseOrder>();
     public DbSet<Receipt> Receipts => Set<Receipt>();
     public DbSet<Customer> Customers => Set<Customer>();
@@ -94,6 +109,162 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PurchaseOrderId, x.ItemSku });
             e.HasIndex(x => x.PurchaseOrderId);
             e.HasOne<PurchaseOrder>().WithMany().HasForeignKey(x => x.PurchaseOrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // task-6 sourcing/contract tables — tenant+entity scope on every table from day one (R14
+        // note): scoped lookups filter both columns; ids come from the shared doc_ sequences (or
+        // deterministic natural keys for child rows), never per-entity sequences or composite PKs
+        mb.Entity<SourcingEvent>(e =>
+        {
+            e.ToTable("sourcing_events");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EventType });
+        });
+
+        mb.Entity<EventLot>(e =>
+        {
+            e.ToTable("event_lots");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.EventId);
+            e.HasOne<SourcingEvent>().WithMany().HasForeignKey(x => x.EventId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<EvalCriterion>(e =>
+        {
+            e.ToTable("eval_criteria");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.EventId);
+            e.HasOne<SourcingEvent>().WithMany().HasForeignKey(x => x.EventId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<EventInvitation>(e =>
+        {
+            e.ToTable("event_invitations");
+            e.HasKey(x => x.Id); // natural key {eventId}:{supplierId}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.EventId);
+            e.HasIndex(x => x.SupplierId);
+            e.HasOne<SourcingEvent>().WithMany().HasForeignKey(x => x.EventId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Supplier>().WithMany().HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<EventQa>(e =>
+        {
+            e.ToTable("event_qas");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.EventId);
+            e.HasOne<SourcingEvent>().WithMany().HasForeignKey(x => x.EventId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<Bid>(e =>
+        {
+            e.ToTable("bids");
+            e.HasKey(x => x.Id); // Bid.Id IS the receipt id (028 AC1)
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.EventId);
+            e.HasIndex(x => x.SupplierId);
+            e.HasOne<SourcingEvent>().WithMany().HasForeignKey(x => x.EventId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Supplier>().WithMany().HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<BidLine>(e =>
+        {
+            e.ToTable("bid_lines");
+            e.HasKey(x => x.Id); // natural key {bidId}:{lotId}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.BidId);
+            e.HasIndex(x => x.LotId);
+            e.HasOne<Bid>().WithMany().HasForeignKey(x => x.BidId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<EventLot>().WithMany().HasForeignKey(x => x.LotId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<EvaluatorAssignment>(e =>
+        {
+            e.ToTable("evaluator_assignments");
+            e.HasKey(x => x.Id); // natural key {eventId}:{userId}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.EventId);
+            e.HasOne<SourcingEvent>().WithMany().HasForeignKey(x => x.EventId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ScoreCard>(e =>
+        {
+            e.ToTable("score_cards");
+            e.HasKey(x => x.Id); // natural key {bidId}:{criterionId}:{evaluatorUserId}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.EventId);
+            e.HasIndex(x => x.BidId);
+            e.HasIndex(x => x.CriterionId);
+            e.HasOne<SourcingEvent>().WithMany().HasForeignKey(x => x.EventId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Bid>().WithMany().HasForeignKey(x => x.BidId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<EvalCriterion>().WithMany().HasForeignKey(x => x.CriterionId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<Award>(e =>
+        {
+            e.ToTable("awards");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.EventId);
+            e.HasIndex(x => x.LotId);
+            e.HasIndex(x => x.SupplierId);
+            e.HasOne<SourcingEvent>().WithMany().HasForeignKey(x => x.EventId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<EventLot>().WithMany().HasForeignKey(x => x.LotId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Supplier>().WithMany().HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<Contract>(e =>
+        {
+            e.ToTable("contracts");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+            e.HasIndex(x => x.SupplierId);
+            e.HasIndex(x => x.AwardId);
+            e.HasOne<Supplier>().WithMany().HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Award>().WithMany().HasForeignKey(x => x.AwardId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ContractAmendment>(e =>
+        {
+            e.ToTable("contract_amendments");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.ContractId);
+            e.HasOne<Contract>().WithMany().HasForeignKey(x => x.ContractId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ContractPriceLine>(e =>
+        {
+            e.ToTable("contract_price_lines");
+            e.HasKey(x => x.Id); // natural key {contractId}:{itemSku}:{effectiveFrom}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.ContractId);
+            e.HasOne<Contract>().WithMany().HasForeignKey(x => x.ContractId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ContractObligation>(e =>
+        {
+            e.ToTable("contract_obligations");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.ContractId);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.DueDate }); // overdue queue scans
+            e.HasOne<Contract>().WithMany().HasForeignKey(x => x.ContractId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<SupplierGate>(e =>
+        {
+            e.ToTable("supplier_gates");
+            e.HasKey(x => x.Id); // natural key {supplierId}:{gateCode}:{effectiveFrom}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.SupplierId);
+            e.HasOne<Supplier>().WithMany().HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
         });
     }
 
@@ -392,7 +563,10 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         // doc numbering: one sequence per prefix (task-2 §2) — A starts at 2 because A-0001 is
         // the seeded opening audit event; all other ids start at 1
         foreach (var prefix in new[] { "sup", "po", "rc", "cus", "so", "shp", "wh", "loc", "trf", "cnt", "adj", "j", "e",
-                     "fa", "fae", "prj", "tsk", "case", "dep" })
+                     "fa", "fae", "prj", "tsk", "case", "dep",
+                     // task-6 procurement deep prefixes (brief R-T6 list) — ship with the code that
+                     // calls them in AddProcurementDeepSeed, since NumberSeries.Next throws if missing
+                     "ev", "lot", "qa", "bid", "awd", "ctr", "amd", "obl" })
             mb.HasSequence<long>($"doc_{prefix}");
         mb.HasSequence<long>("doc_a", s => s.StartsAt(2));
     }
@@ -417,24 +591,28 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
 
         mb.Entity<Role>().HasData(
             new { Id = "R-ADMIN", Name = "tenant_admin", Permissions = new[] { "*" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-PROC", Name = "procurement_officer", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-PROC", Name = "procurement_officer", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer", "sourcing:read", "sourcing:write", "contracts:read", "contracts:write", "suppliers:read" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "sourcing:read", "sourcing:approve", "contracts:approve" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-ASSETS", Name = "assets_officer", Permissions = new[] { "assets:read", "assets:write", "assets:approve", "projects:write", "projects:approve", "cases:write", "cases:read" }, TenantId = t, LegalEntityId = le });
+            new { Id = "R-ASSETS", Name = "assets_officer", Permissions = new[] { "assets:read", "assets:write", "assets:approve", "projects:write", "projects:approve", "cases:write", "cases:read" }, TenantId = t, LegalEntityId = le },
+            // task-6: independent evaluators (031 AC1) — read + score only, no buyer permissions
+            new { Id = "R-EVAL", Name = "evaluator", Permissions = new[] { "sourcing:read", "sourcing:evaluate" }, TenantId = t, LegalEntityId = le });
 
         mb.Entity<User>().HasData(
             new { Id = "U-001", Email = "admin@teamzlab.dev", DisplayName = "Tenant Admin", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-002", Email = "procurve@teamzlab.dev", DisplayName = "Procure Officer", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-003", Email = "finance@teamzlab.dev", DisplayName = "Finance Officer", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-004", Email = "sales@teamzlab.dev", DisplayName = "Sales Officer", Active = true, TenantId = t, LegalEntityId = le },
-            new { Id = "U-005", Email = "assets@teamzlab.dev", DisplayName = "Assets Officer", Active = true, TenantId = t, LegalEntityId = le });
+            new { Id = "U-005", Email = "assets@teamzlab.dev", DisplayName = "Assets Officer", Active = true, TenantId = t, LegalEntityId = le },
+            new { Id = "U-006", Email = "evaluator@teamzlab.dev", DisplayName = "Independent Evaluator", Active = true, TenantId = t, LegalEntityId = le });
 
         mb.Entity<Membership>().HasData(
             new Membership("U-001", t, le, "R-ADMIN"),
             new Membership("U-002", t, le, "R-PROC"),
             new Membership("U-003", t, le, "R-FIN"),
             new Membership("U-004", t, le, "R-SALES"),
-            new Membership("U-005", t, le, "R-ASSETS"));
+            new Membership("U-005", t, le, "R-ASSETS"),
+            new Membership("U-006", t, le, "R-EVAL"));
 
         mb.Entity<AuditEvent>().HasData(new
         {

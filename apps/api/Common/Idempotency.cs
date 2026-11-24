@@ -22,8 +22,12 @@ namespace Erp.Api;
 // (endpoints that pass no payload, or data written before this existed) keep the plain replay.
 public static class Idem
 {
-    private static readonly System.Text.Json.JsonSerializerOptions Opts =
+    // web defaults + enum strings — the canonical serialization for stored responses AND for the
+    // bid content digest (028 AC1), so both sides of a replay compare like for like
+    public static readonly System.Text.Json.JsonSerializerOptions JsonOptions =
         new(System.Text.Json.JsonSerializerDefaults.Web) { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } };
+
+    private static System.Text.Json.JsonSerializerOptions Opts => JsonOptions;
 
     // existing call sites — no payload hash, replay-anyway semantics unchanged
     public static IResult Wrap(HttpContext ctx, Func<(object body, int status)> run) =>
@@ -83,7 +87,9 @@ public static class Idem
         Results.Json(Envelope.FailBody("IDEMPOTENCY_CONFLICT",
             "This Idempotency-Key was already used with a different request payload."), statusCode: 409);
 
-    private static string? HashOf(object? payload)
+    // public since task-6: the bid receipt digest (ERP-PROCUREMENT-028 AC1) uses the same
+    // SHA-256-of-canonical-json scheme as the idempotency store — one code path, one scheme
+    public static string? HashOf(object? payload)
     {
         if (payload is null) return null;
         var json = System.Text.Json.JsonSerializer.Serialize(payload, Opts);
