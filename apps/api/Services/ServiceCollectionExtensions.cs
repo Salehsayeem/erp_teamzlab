@@ -23,6 +23,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IJournalRepository, JournalRepository>();
         services.AddScoped<IAssetsRepository, AssetsRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
+        services.AddScoped<IFiscalPeriodRepository, FiscalPeriodRepository>();
+        services.AddScoped<IAccountRepository, AccountRepository>();
+        services.AddScoped<ITaxCodeRepository, TaxCodeRepository>();
+        services.AddScoped<IFinanceSettingRepository, FinanceSettingRepository>();
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<ISupplierService, SupplierService>();
         services.AddScoped<IPurchaseOrderService, PurchaseOrderService>();
@@ -35,6 +39,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IProjectService, ProjectService>();
         services.AddScoped<IServiceCaseService, ServiceCaseService>();
         services.AddScoped<IPlatformService, PlatformService>();
+        services.AddScoped<IFiscalPeriodService, FiscalPeriodService>();
+        services.AddScoped<IAccountService, AccountService>();
+        services.AddScoped<ITaxCodeService, TaxCodeService>();
+        services.AddScoped<IFinanceAgingService, FinanceAgingService>();
         return services;
     }
 }

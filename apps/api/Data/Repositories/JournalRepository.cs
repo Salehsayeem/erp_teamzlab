@@ -16,6 +16,11 @@ public sealed class JournalRepository(ErpDbContext db, EntityContext ec) : IJour
 
     public List<Journal> All() => Ordered(Scoped());
 
+    // fix round 1: any journal pointing back at this one means it was already reversed — a retry
+    // must not reverse the source twice (second stock unwind / double revenue reversal)
+    public bool HasReversal(string journalId) =>
+        Scoped().Any(j => j.ReversalOfId == journalId);
+
     public void Add(Journal journal)
     {
         db.Journals.Add(journal);
@@ -24,6 +29,20 @@ public sealed class JournalRepository(ErpDbContext db, EntityContext ec) : IJour
             db.Entry(line).Property("TenantId").CurrentValue = ec.TenantId;
             db.Entry(line).Property("LegalEntityId").CurrentValue = ec.EntityId;
         }
+    }
+
+    // approval: append tax control lines (shadow tenant columns set — they are new owned rows)
+    // and flip Pending → Posted on the tracked entity
+    public void MarkPosted(Journal journal, IReadOnlyList<JournalLine>? additionalLines = null)
+    {
+        if (additionalLines is not null)
+            foreach (var line in additionalLines)
+            {
+                db.Entry(line).Property("TenantId").CurrentValue = ec.TenantId;
+                db.Entry(line).Property("LegalEntityId").CurrentValue = ec.EntityId;
+                journal.Lines.Add(line);
+            }
+        db.Entry(journal).Property(nameof(Journal.Status)).CurrentValue = JournalStatus.Posted;
     }
 
     public int Save() => db.SaveChanges();

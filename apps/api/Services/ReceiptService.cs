@@ -1,10 +1,11 @@
+using Erp.Api.Data;
 using Erp.Api.Interfaces;
 
 namespace Erp.Api.Services;
 
 public sealed class ReceiptService(
     IPurchaseOrderRepository orders, IInventoryRepository inventory, IJournalRepository journals,
-    INumberSeries numbers, IAuditRepository audit, EntityContext ec) : IReceiptService
+    INumberSeries numbers, IAuditRepository audit, EntityContext ec, ErpDbContext db) : IReceiptService
 {
     public (Receipt? receipt, Journal? journal, string? code, string? message) Receive(
         CurrentUser user, string poId, string itemSku, decimal qty)
@@ -15,6 +16,10 @@ public sealed class ReceiptService(
         if (qty <= 0) return (null, null, "VALIDATION_ERROR", "Receipt qty must be greater than 0.");
         var line = po.Lines.FirstOrDefault(l => l.ItemSku == itemSku);
         if (line is null) return (null, null, "ITEM_NOT_FOUND", $"Item {itemSku} is not on this purchase order.");
+
+        // task-5: receipts post the AP-accrual journal at today — the centralized period lock applies
+        var (guardCode, guardMsg) = FinanceGuards.EnsurePeriodOpen(db, ec, DateOnly.FromDateTime(DateTime.UtcNow));
+        if (guardCode is not null) return (null, null, guardCode, guardMsg);
 
         // finding 2: over-receipt is unbounded → reject before any receipt/journal is written (ERP-PROCUREMENT-057)
         var already = orders.ReceivedQty(poId, itemSku);

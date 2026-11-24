@@ -30,6 +30,10 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<ProjectTask> ProjectTasks => Set<ProjectTask>();
     public DbSet<ServiceCase> ServiceCases => Set<ServiceCase>();
+    public DbSet<FiscalPeriod> FiscalPeriods => Set<FiscalPeriod>();
+    public DbSet<Account> Accounts => Set<Account>();
+    public DbSet<TaxCode> TaxCodes => Set<TaxCode>();
+    public DbSet<FinanceSetting> FinanceSettings => Set<FinanceSetting>();
     public DbSet<User> Users => Set<User>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<Membership> Memberships => Set<Membership>();
@@ -225,6 +229,40 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                 l.HasIndex("TenantId", "LegalEntityId");
             });
         });
+
+        // task-5 finance configuration tables — tenant+entity scope on every lookup
+        mb.Entity<FiscalPeriod>(e =>
+        {
+            e.ToTable("fiscal_periods");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Name }).IsUnique();
+        });
+
+        mb.Entity<Account>(e =>
+        {
+            e.ToTable("accounts");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            // CoA basics: one live account per code this slice (no edit endpoint yet; Version column
+            // is the versioning hook — FINANCE-001 full revision ranges deferred)
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+        });
+
+        mb.Entity<TaxCode>(e =>
+        {
+            e.ToTable("tax_codes");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }); // revisions share Code
+        });
+
+        mb.Entity<FinanceSetting>(e =>
+        {
+            e.ToTable("finance_settings");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Key }).IsUnique();
+        });
     }
 
     private static void ConfigureAssets(ModelBuilder mb)
@@ -380,7 +418,7 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         mb.Entity<Role>().HasData(
             new { Id = "R-ADMIN", Name = "tenant_admin", Permissions = new[] { "*" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-PROC", Name = "procurement_officer", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "ap:read", "po:approve", "periods:read" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-ASSETS", Name = "assets_officer", Permissions = new[] { "assets:read", "assets:write", "assets:approve", "projects:write", "projects:approve", "cases:write", "cases:read" }, TenantId = t, LegalEntityId = le });
 
