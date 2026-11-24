@@ -470,4 +470,67 @@ public class FinanceDeepTests : IClassFixture<TestApiFactory>
         Assert.Equal(1150.00m, journal.GetProperty("lines").EnumerateArray().Sum(l => l.GetProperty("debit").GetDecimal()));
         Assert.Equal(1150.00m, journal.GetProperty("lines").EnumerateArray().Sum(l => l.GetProperty("credit").GetDecimal()));
     }
+
+    // Fix round 1 — a Zero/Exempt code published with a non-zero rate would tax exempt sales at
+    // that rate (computation only reads RatePct); publish must reject the combination outright
+    [Fact]
+    public async Task Zero_Or_Exempt_Tax_Code_Must_Publish_With_Rate_Zero()
+    {
+        var start = MonthStart(Today).AddMonths(8);
+
+        // Zero basis @ 15% → rejected before the registry is touched
+        var res = await PostAsync("/api/v1/tax-codes", new
+        {
+            code = "VAT-ZERO-BAD",
+            ratePct = 15m,
+            basis = "Zero",
+            recoverable = true,
+            effectiveFrom = start,
+            effectiveTo = (DateOnly?)null,
+            reason = "zero-rated export",
+        }, Admin);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var body = await Json(res);
+        Assert.Equal("VALIDATION_ERROR", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Contains("rate 0", body.GetProperty("error").GetProperty("message").GetString());
+
+        // Exempt basis @ 5% → same rejection
+        res = await PostAsync("/api/v1/tax-codes", new
+        {
+            code = "VAT-EXEMPT-BAD",
+            ratePct = 5m,
+            basis = "Exempt",
+            recoverable = false,
+            effectiveFrom = start,
+            effectiveTo = (DateOnly?)null,
+            reason = "exempt supplies",
+        }, Admin);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal("VALIDATION_ERROR", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
+
+        // Zero basis @ 0% publishes fine (reason still required by the 032 edge rule)
+        res = await PostAsync("/api/v1/tax-codes", new
+        {
+            code = "VAT-ZERO-OK",
+            ratePct = 0m,
+            basis = "Zero",
+            recoverable = true,
+            effectiveFrom = start,
+            effectiveTo = (DateOnly?)null,
+            reason = "zero-rated export",
+        }, Admin);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+
+        // Standard basis is untouched by the new rule (the golden test proves computation)
+        res = await PostAsync("/api/v1/tax-codes", new
+        {
+            code = "VAT-STD-OK",
+            ratePct = 15m,
+            basis = "Standard",
+            recoverable = true,
+            effectiveFrom = start,
+            effectiveTo = (DateOnly?)null,
+        }, Admin);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+    }
 }
