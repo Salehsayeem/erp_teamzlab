@@ -48,6 +48,22 @@ export const en = {
       auditEvents: "Audit events",
       outbox: "Outbox messages",
     },
+    charts: {
+      title: "Live overview",
+      arAging: {
+        title: "Receivables aging",
+        caption: "Open customer balances by days past due.",
+        totalOpen: "Total open",
+        empty: "No open receivables — everything is collected.",
+        loadFailed: "Could not load receivables aging.",
+      },
+      topStock: {
+        title: "Top stock by value",
+        caption: "Five highest-value SKUs at weighted-average cost.",
+        empty: "No stock to value yet.",
+        loadFailed: "Could not load stock valuation.",
+      },
+    },
   },
   suppliers: {
     title: "Suppliers",

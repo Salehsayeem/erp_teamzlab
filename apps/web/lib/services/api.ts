@@ -122,6 +122,15 @@ export type StockAdjustment = {
 };
 export type CountCloseResult = { count: StockCount; adjustments: StockAdjustment[] };
 export type ValuationRow = { itemSku: string; qtyOnHand: number; unitCost: number; value: number };
+export type AgingBucket = { label: string; fromDays: number; toDays: number | null; count: number; amount: number };
+export type AgingResponse = {
+  asOf: string;
+  basis: string;
+  termsDays: number;
+  buckets: AgingBucket[];
+  totalOpen: number;
+  worklist: unknown[];
+};
 
 // --- Endpoint helpers ---
 
@@ -161,6 +170,12 @@ export function reverseJournal(token: string, id: string) {
 }
 export function fetchCount(token: string, path: string) {
   return apiFetch<unknown[]>(path, { token });
+}
+
+// --- Finance ---
+
+export function fetchReceivablesAging(token: string) {
+  return apiFetch<AgingResponse>("/api/v1/finance/receivables/aging?basis=due", { token });
 }
 
 // --- Inventory ---
