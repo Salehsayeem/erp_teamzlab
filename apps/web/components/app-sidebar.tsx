@@ -15,6 +15,8 @@ const NAV = [
     items: [
       { href: "procurement/suppliers", label: "Suppliers" },
       { href: "procurement/purchase-orders", label: "Purchase orders" },
+      { href: "procurement/sourcing", label: "Sourcing" },
+      { href: "procurement/contracts", label: "Contracts" },
     ],
   },
   {

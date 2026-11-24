@@ -1,13 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
-import { createSupplier, fetchSuppliers, type Supplier } from "@/lib/services/api";
+import { createSupplier } from "@/lib/services/api";
+import { fetchSupplierRows, type SupplierRow } from "@/lib/services/procurement";
 import { fmtDate } from "@/lib/format";
 import { useAuth } from "@/hooks/useAuth";
-import { Button, EmptyState, ErrorState, Input, LoadingSkeleton, Table } from "@/components/uikit";
+import { Badge, Button, EmptyState, ErrorState, Input, LoadingSkeleton, Table } from "@/components/uikit";
 import type { Column } from "@/components/uikit";
+import { SUPPLIER_STATUS_TONES, statusLabel } from "../_lib/ui";
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -19,7 +22,7 @@ export default function SuppliersPage() {
   const locale: Locale = isLocale(params.locale) ? params.locale : "en";
   const t = getDictionary(locale);
   const { token, ready } = useAuth(locale);
-  const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
+  const [suppliers, setSuppliers] = useState<SupplierRow[] | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
   const [form, setForm] = useState<FormState>({ name: "", taxId: "", email: "" });
   const [errors, setErrors] = useState<FormErrors>({});
@@ -29,7 +32,7 @@ export default function SuppliersPage() {
   const load = useCallback(async () => {
     if (!token) return;
     setPhase("loading");
-    const res = await fetchSuppliers(token);
+    const res = await fetchSupplierRows(token);
     if (res.ok) {
       setSuppliers(res.data);
       setPhase("success");
@@ -63,15 +66,38 @@ export default function SuppliersPage() {
       setCreateError(res.code === "NETWORK" ? t.common.networkError : `${t.suppliers.createFailed} ${res.message}`);
       return;
     }
-    setSuppliers((prev) => [res.data, ...(prev ?? [])]);
+    // The create endpoint returns the full entity (status included) but api.ts types it
+    // narrowly — recast instead of touching the shared module.
+    const row = res.data as unknown as SupplierRow;
+    setSuppliers((prev) => [row, ...(prev ?? [])]);
     setForm({ name: "", taxId: "", email: "" });
   }
 
-  const columns: Column<Supplier>[] = [
+  const columns: Column<SupplierRow>[] = [
     { key: "name", label: t.suppliers.columns.name, render: (s) => s.name },
     { key: "taxId", label: t.suppliers.columns.taxId, mono: true, render: (s) => s.taxId },
     { key: "email", label: t.suppliers.columns.email, render: (s) => s.email },
+    {
+      key: "status",
+      label: t.procurement.common.status,
+      render: (s) => (
+        <Badge tone={s.status === "Suspended" || s.status === "Blocked" ? "danger" : SUPPLIER_STATUS_TONES[s.status] ?? "muted"}>
+          {statusLabel(t, s.status)}
+        </Badge>
+      ),
+    },
     { key: "created", label: t.suppliers.columns.created, render: (s) => <span className="t-caption">{fmtDate(s.createdAt, locale)}</span> },
+    {
+      key: "manage",
+      label: t.procurement.common.actions,
+      render: (s) => (
+        <div className="row-actions">
+          <Link className="btn btn--secondary btn--sm" href={`/${locale}/procurement/suppliers/${s.id}`}>
+            {t.procurement.supplierDetail.manage}
+          </Link>
+        </div>
+      ),
+    },
   ];
 
   if (!ready || (phase === "loading" && suppliers === null)) return <LoadingSkeleton rows={5} />;
@@ -96,7 +122,7 @@ export default function SuppliersPage() {
         </form>
       </section>
       <section className="card">
-        {list.length === 0 ? <EmptyState title={t.suppliers.empty} /> : <Table<Supplier> columns={columns} rows={list} caption={t.suppliers.title} />}
+        {list.length === 0 ? <EmptyState title={t.suppliers.empty} /> : <Table<SupplierRow> columns={columns} rows={list} caption={t.suppliers.title} />}
       </section>
     </div>
   );
