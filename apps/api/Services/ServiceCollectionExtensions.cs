@@ -34,6 +34,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAccountRepository, AccountRepository>();
         services.AddScoped<ITaxCodeRepository, TaxCodeRepository>();
         services.AddScoped<IFinanceSettingRepository, FinanceSettingRepository>();
+        services.AddScoped<IPeopleRepository, PeopleRepository>();
+        services.AddScoped<IWorkerService, WorkerService>();
+        services.AddScoped<ITimeService, TimeService>();
+        services.AddScoped<IPayrollService, PayrollService>();
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<ISupplierService, SupplierService>();
         services.AddScoped<ISourcingService, SourcingService>();
