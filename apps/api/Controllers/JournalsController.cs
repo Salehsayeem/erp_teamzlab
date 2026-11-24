@@ -23,9 +23,7 @@ public sealed class JournalsController(IJournalService journals) : ControllerBas
     [HttpPost]
     public IResult Create(CreateJournalRequest request) => Idem.Wrap(HttpContext, request, () =>
     {
-        var err = Guards.Check(request.Memo, "Memo")
-            ?? (request.Lines is null || request.Lines.Count == 0 ? "At least one journal line is required." : null)
-            ?? LineErrors(request.Lines);
+        var err = Guards.Check(request.Memo, "Memo") ?? LineErrors(request.Lines);
         if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
         var u = CurrentUser.From(HttpContext);
         if (!u.Has("journals:write")) return (Envelope.FailBody("FORBIDDEN", "journals:write permission required."), 403);
@@ -49,8 +47,9 @@ public sealed class JournalsController(IJournalService journals) : ControllerBas
         return code is not null ? Envelope.Fail(code, error!, ErrorStatus.StatusFor(code)) : Envelope.Ok<object>(rev!, 201);
     }
 
-    private static string? LineErrors(IReadOnlyList<JournalLineInput> lines)
+    private static string? LineErrors(IReadOnlyList<JournalLineInput>? lines)
     {
+        if (lines is null || lines.Count == 0) return "At least one journal line is required.";
         foreach (var line in lines)
         {
             var err = Guards.Check(line.AccountCode, "AccountCode", 50) ?? Guards.Check(line.AccountName, "AccountName");
