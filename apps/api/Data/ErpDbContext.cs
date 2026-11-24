@@ -233,7 +233,8 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
             e.HasIndex(x => x.SupplierId);
-            e.HasIndex(x => x.AwardId);
+            // FIX 6e: one contract per award (unique with NULLS DISTINCT — manual contracts may repeat)
+            e.HasIndex(x => x.AwardId).IsUnique();
             e.HasOne<Supplier>().WithMany().HasForeignKey(x => x.SupplierId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<Award>().WithMany().HasForeignKey(x => x.AwardId).OnDelete(DeleteBehavior.Restrict);
         });
@@ -244,6 +245,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
             e.HasIndex(x => x.ContractId);
+            // FIX 6a: executed amendment versions are immutable AND unique per contract — the
+            // backstop behind the amendment row lock (FixContractAmendmentGuards migration)
+            e.HasIndex(x => new { x.ContractId, x.Version }).IsUnique();
             e.HasOne<Contract>().WithMany().HasForeignKey(x => x.ContractId).OnDelete(DeleteBehavior.Restrict);
         });
 

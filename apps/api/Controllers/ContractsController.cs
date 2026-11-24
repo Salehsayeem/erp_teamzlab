@@ -55,6 +55,8 @@ public sealed class ContractsController(IContractsService contracts) : Controlle
             err = "At least one price line is required.";
         if (err is null && request.PriceLines!.Any(l => string.IsNullOrWhiteSpace(l.ItemSku)))
             err = "Every price line needs an item SKU.";
+        if (err is null && request.PriceLines!.GroupBy(l => new { l.ItemSku, l.EffectiveFrom, l.EffectiveTo }).Any(g => g.Count() > 1))
+            err = "Identical duplicate price lines are not allowed in one amendment.";
         if (err is null && request.PriceLines!.Any(l => l.UnitPrice < 0))
             err = "Price line unit price must be 0 or greater.";
         if (err is null && request.PriceLines!.Any(l => l.EffectiveTo is { } to && to < l.EffectiveFrom))
