@@ -1,6 +1,11 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Erp.Api.Data;
+using Erp.Api.Data.Repositories;
+using Erp.Api.Services;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Xunit;
 
 // Task-7 SALES deep slice (ERP-SALES-003/004/005/007/008/015/016/017/042/043/044/045/046/048/049/
@@ -9,6 +14,8 @@ using Xunit;
 // posting, credit/debit adjustments, collections worklist/reminders/disputes, credit exposure
 // with SO holds + override. Controller rulings R-T7a..l are binding (see task-7-brief-draft.md).
 // Test data uses unique SKUs/tax ids per test — the class fixture shares one throwaway database.
+// Fix round 1 (review): status-guarded invoice posting, invoice discards, per-customer exposure
+// serialization, route-aware idempotency hashes, plus blank-taxId and customer-field guards.
 
 namespace Erp.Api.Tests;
 
@@ -853,6 +860,196 @@ public class SalesDeepTests : IClassFixture<TestApiFactory>
         var accounts = journal.GetProperty("lines").EnumerateArray().Select(l => l.GetProperty("accountCode").GetString()).ToList();
         Assert.DoesNotContain("2200", accounts);
         Assert.Equal(2, accounts.Count);
+    }
+
+    // ---- fix round 1 (review) ----------------------------------------------------------
+    // review 1a: two concurrent posters of one draft must not write two AR journals — the
+    // UPDATE that flips Draft→Posted is STATUS-GUARDED; a stale second poster gets 409
+    // INVOICE_ALREADY_POSTED and no journal. Evidence: scope A holds the stale Draft snapshot
+    // while scope B (HTTP) commits the post, then A tries to post from its stale view — the
+    // exact interleaving the in-memory check misses.
+    [Fact]
+    public async Task Invoice_Double_Post_Race_Is_Rejected_By_The_Status_Guard()
+    {
+        var sku = Tag("SKU");
+        await SeedStock(sku, 2m, 1m);
+        var soId = await SeedShippedSo(sku, 2m, 50m);
+        var draft = await DraftInvoice(soId);
+        var invoiceId = draft.GetProperty("id").GetString()!;
+
+        // scope A: a second finance officer's context loads the draft BEFORE the race
+        var options = new DbContextOptionsBuilder<ErpDbContext>().UseNpgsql(_factory.ConnectionString).Options;
+        await using var dbA = new ErpDbContext(options);
+        var ecA = new EntityContext();
+        var serviceA = new InvoiceService(new InvoiceRepository(dbA, ecA), new SalesOrderRepository(dbA, ecA),
+            new CustomerRepository(dbA, ecA), new TaxCodeRepository(dbA, ecA), new JournalRepository(dbA, ecA),
+            new NumberSeries(dbA), new AuditRepository(dbA, new NumberSeries(dbA), ecA), ecA, dbA);
+        var stale = new InvoiceRepository(dbA, ecA).FindInvoice(invoiceId);
+        Assert.Equal(InvoiceStatus.Draft, stale!.Status); // scope A believes it is still draft
+
+        // scope B: the first officer posts via HTTP and commits
+        var journalsBefore = (await GetAsync("/api/v1/journals", Admin)).GetProperty("data").GetArrayLength();
+        var (postedId, _) = await PostInvoice(invoiceId, Fin);
+        Assert.Equal(invoiceId, postedId);
+
+        // scope A: posts the SAME draft from its stale snapshot — the guard must refuse and
+        // no second journal may be written
+        var approver = new Erp.Api.CurrentUser("U-001", "admin@teamzlab.dev", "Tenant Admin", "R-ADMIN", new[] { "*" });
+        var (data, code, _) = serviceA.Post(approver, invoiceId);
+        Assert.Equal("INVOICE_ALREADY_POSTED", code);
+        Assert.Null(data);
+        Assert.Equal(journalsBefore + 1, (await GetAsync("/api/v1/journals", Admin)).GetProperty("data").GetArrayLength());
+    }
+
+    // review 1b: a mis-drafted invoice must not be a dead end — discard (drafter or admin,
+    // Draft only) frees the shipment source event for re-billing, burns the INV number, and
+    // discarded documents behave like drafts everywhere else (no exposure, no worklist, no post)
+    [Fact]
+    public async Task Invoice_Discard_Frees_Source_Event_Burns_Number_And_Rejects_Late_Posts()
+    {
+        var sku = Tag("SKU");
+        await SeedStock(sku, 3m, 1m);
+        var (_, soId) = await SeedConfirmedSo(sku, 3m, 50m);
+        var shipRes = await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = sku, qty = 3m }, Sales);
+        Assert.Equal(HttpStatusCode.Created, shipRes.StatusCode);
+        var sourceEventId = (await Json(shipRes)).GetProperty("data").GetProperty("shipment").GetProperty("id").GetString()!;
+        var dead = await DraftInvoice(soId);
+        var deadId = dead.GetProperty("id").GetString()!;
+        var customerId = dead.GetProperty("customerId").GetString()!;
+
+        // the drafter discards their own draft
+        var res = await PostAsync($"/api/v1/invoices/{deadId}/discards", new { }, Sales);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("Discarded", (await Json(res)).GetProperty("data").GetProperty("status").GetString());
+
+        // a late poster cannot revive it
+        res = await PostAsync($"/api/v1/invoices/{deadId}/postings", new { }, Fin);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("INVOICE_DISCARDED", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
+
+        // the source event is freed — the re-draft succeeds with a FRESH INV number (burned)
+        var redraft = await DraftInvoice(soId);
+        var newId = redraft.GetProperty("id").GetString()!;
+        Assert.NotEqual(deadId, newId);
+        Assert.Equal(sourceEventId, redraft.GetProperty("sourceEventId").GetString());
+
+        // the discard is audited and names the burned number
+        var audit = await GetAsync("/api/v1/audit-events", Admin);
+        Assert.Contains(audit.GetProperty("data").EnumerateArray(),
+            e => e.GetProperty("action").GetString() == "discard" && e.GetProperty("entityId").GetString() == deadId);
+
+        // discarded documents count like drafts: no exposure, no worklist entry
+        var exposure = (await GetAsync($"/api/v1/customers/{customerId}/credit-exposure", Fin)).GetProperty("data");
+        Assert.False(exposure.GetProperty("hasData").GetBoolean());
+        Assert.Equal(0m, exposure.GetProperty("total").GetDecimal());
+        var worklist = await GetAsync("/api/v1/collections/worklist", Sales);
+        Assert.DoesNotContain(worklist.GetProperty("data").EnumerateArray(),
+            w => w.GetProperty("invoiceId").GetString() == deadId);
+    }
+
+    // review 2a: the exposure check and the approval commit are serialized per customer via a
+    // customer row lock (SELECT … FOR UPDATE inside the approval transaction). Evidence: while
+    // a raw transaction holds the customer row lock, the approval HTTP call must NOT complete
+    // (it blocks on the lock); after the lock is released it completes and still lands
+    // CreditHold. Cheapest honest proof the lock is taken — a full two-client race is flaky.
+    [Fact]
+    public async Task SO_Approval_Serializes_Exposure_On_The_Customer_Row_Lock()
+    {
+        var (invoiceId, _) = await SeedPostedInvoice(5m, 100m, creditLimit: "500"); // exposure 575.00
+        var customerId = (await GetInvoice(invoiceId)).GetProperty("customerId").GetString()!;
+        var sku = Tag("SKU");
+
+        // a PENDING approval for 1000.00 — approving it would push exposure past the 500 limit
+        var res = await PostAsync("/api/v1/sales-orders", new
+        {
+            customerId,
+            lines = new[] { new { itemSku = sku, description = $"Item {sku}", qty = 10m, unitPrice = 100m } },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var soId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/sales-orders/{soId}/submit", new { }, Sales)).StatusCode);
+
+        // hold the customer row lock in an uncommitted raw transaction
+        await using var conn = new NpgsqlConnection(_factory.ConnectionString);
+        await conn.OpenAsync();
+        await using var lockTx = await conn.BeginTransactionAsync();
+        await using var lockCmd = new NpgsqlCommand("SELECT id FROM customers WHERE id = $1 FOR UPDATE", conn, (NpgsqlTransaction)lockTx);
+        lockCmd.Parameters.AddWithValue(customerId);
+        await lockCmd.ExecuteScalarAsync();
+
+        // the approval must block until the lock is released
+        var approval = PostAsync($"/api/v1/sales-orders/{soId}/approvals", new { reason = (string?)null }, Admin);
+        var finished = await Task.WhenAny(approval, Task.Delay(2500)) == approval;
+        Assert.False(finished, "SO approval did not block on the customer row lock — exposure check is not serialized.");
+
+        await lockTx.RollbackAsync(); // release the lock
+        var approvalRes = await approval;
+        Assert.Equal(HttpStatusCode.OK, approvalRes.StatusCode);
+        Assert.Equal("CreditHold", (await Json(approvalRes)).GetProperty("data").GetProperty("status").GetString());
+    }
+
+    // review 4a: the idempotency hash covers route + method — a reused key aimed at a DIFFERENT
+    // invoice must conflict, never replay the wrong document's response
+    [Fact]
+    public async Task Same_Idem_Key_On_A_Different_Invoice_Conflicts_Instead_Of_Replaying()
+    {
+        var sku = Tag("SKU");
+        await SeedStock(sku, 2m, 1m);
+        var (_, soId) = await SeedConfirmedSo(sku, 2m, 60m);
+        await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = sku, qty = 1m }, Sales);
+        await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = sku, qty = 1m }, Sales);
+        var invoiceA = (await DraftInvoice(soId)).GetProperty("id").GetString()!;
+        var invoiceB = (await DraftInvoice(soId)).GetProperty("id").GetString()!;
+        var key = $"post-{Guid.NewGuid():N}";
+
+        var res = await PostAsync($"/api/v1/invoices/{invoiceA}/postings", new { }, Fin, key);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+
+        // same key, same (empty) payload, DIFFERENT resource path → conflict, no cross-replay
+        res = await PostAsync($"/api/v1/invoices/{invoiceB}/postings", new { }, Fin, key);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("IDEMPOTENCY_CONFLICT", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal("Draft", (await GetInvoice(invoiceB)).GetProperty("status").GetString());
+
+        // same key + same path + same payload still replays the original
+        res = await PostAsync($"/api/v1/invoices/{invoiceA}/postings", new { }, Fin, key);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal(invoiceA, (await Json(res)).GetProperty("data").GetProperty("invoice").GetProperty("id").GetString());
+    }
+
+    // review 7a: a blank tax id is absent — normalized to null at capture, never matched
+    [Fact]
+    public async Task Lead_Blank_TaxId_Is_Normalized_To_Null()
+    {
+        var res = await PostAsync("/api/v1/leads", new
+        {
+            company = $"Blank Tax {Tag("LEAD")}",
+            source = "Web",
+            taxId = "   ",
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var leadId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        var lead = (await GetAsync("/api/v1/leads", Sales)).GetProperty("data").EnumerateArray()
+            .First(l => l.GetProperty("id").GetString() == leadId);
+        Assert.True(lead.GetProperty("taxId").ValueKind == JsonValueKind.Null);
+    }
+
+    // review 7b: customer extension fields are guarded when supplied
+    [Fact]
+    public async Task Customer_CreditLimit_And_Terms_Are_Guarded_When_Supplied()
+    {
+        var res = await PostAsync("/api/v1/customers", new { name = "Neg Limit Co", taxId = $"TRX-{Tag("X")}", email = "neg@buyer.test", creditLimit = -5 }, Sales);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal("VALIDATION_ERROR", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
+
+        res = await PostAsync("/api/v1/customers", new { name = "Zero Terms Co", taxId = $"TRX-{Tag("X")}", email = "zero@buyer.test", paymentTermNetDays = 0 }, Sales);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+
+        res = await PostAsync("/api/v1/customers", new { name = "Valid Terms Co", taxId = $"TRX-{Tag("X")}", email = "valid@buyer.test", creditLimit = 1000, paymentTermNetDays = 45 }, Sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var created = (await Json(res)).GetProperty("data");
+        Assert.Equal(1000m, created.GetProperty("creditLimit").GetDecimal());
+        Assert.Equal(45, created.GetProperty("paymentTermNetDays").GetInt32());
     }
 
     // ---- helper ------------------------------------------------------------------------

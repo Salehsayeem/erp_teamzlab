@@ -1,4 +1,5 @@
 using Erp.Api.Data;
+using Microsoft.EntityFrameworkCore;
 using Erp.Api.Interfaces;
 
 namespace Erp.Api.Services;
@@ -77,11 +78,15 @@ public sealed class InvoiceService(
     }
 
     // 045: maker-checker posting — poster ≠ drafter, period open at the invoice date, per-line
-    // tax pinned, one balanced journal, document flips to Posted atomically.
+    // tax pinned, one balanced journal, document flips to Posted atomically. Review 1a: the
+    // status flip is a concurrency-token UPDATE — a stale second poster commits NOTHING and
+    // gets 409 INVOICE_ALREADY_POSTED instead of a duplicate AR journal.
     public (object? data, string? code, string? message) Post(CurrentUser approver, string invoiceId)
     {
         var invoice = invoices.FindInvoice(invoiceId);
         if (invoice is null) return (null, "INVOICE_NOT_FOUND", "Invoice not found.");
+        if (invoice.Status == InvoiceStatus.Discarded)
+            return (null, "INVOICE_DISCARDED", "A discarded invoice can never be posted; its shipment source event must be re-drafted.");
         if (invoice.Status != InvoiceStatus.Draft)
             return (null, "INVOICE_APPROVAL_ERROR", $"Only draft invoices can be posted (current: {invoice.Status}).");
         if (invoice.CreatedBy == approver.Id)
@@ -116,8 +121,39 @@ public sealed class InvoiceService(
             invoiceId, journalId = journal.Id, dueDate, total, subTotal, taxTotal,
             currency = invoice.Currency, customerId = invoice.CustomerId,
         });
-        invoices.Save(); // document + pinned lines + journal + audit + outbox in ONE SaveChanges
+        try
+        {
+            invoices.Save(); // document + pinned lines + journal + audit + outbox in ONE SaveChanges
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // review 1a: the guarded Draft→Posted UPDATE matched zero rows — another officer
+            // posted this draft while our snapshot was stale. Nothing above commits: no
+            // duplicate journal, no AR overstatement.
+            return (null, "INVOICE_ALREADY_POSTED",
+                $"Invoice {invoiceId} was already posted; the retry carried a stale draft snapshot and wrote nothing.");
+        }
         return (new { invoice, journal }, null, null);
+    }
+
+    // review 1b: a mis-drafted draft must not dead-end its shipment — discard is terminal,
+    // frees the source event (partial index + FindBySourceEvent skip Discarded), and burns the
+    // INV number (documented in the audit). Drafter-or-admin gate is enforced here.
+    public (Invoice? invoice, string? code, string? message) Discard(CurrentUser user, string invoiceId)
+    {
+        var invoice = invoices.FindInvoice(invoiceId);
+        if (invoice is null) return (null, "INVOICE_NOT_FOUND", "Invoice not found.");
+        if (user.Id != invoice.CreatedBy && !user.Has("*"))
+            return (null, "FORBIDDEN", "Only the drafter or an admin can discard a draft invoice.");
+        if (invoice.Status != InvoiceStatus.Draft)
+            return (null, "INVOICE_STATE_ERROR", $"Only draft invoices can be discarded (current: {invoice.Status}).");
+
+        invoices.MarkInvoiceDiscarded(invoice);
+        audit.Log(user, "discard", "invoice", invoice.Id,
+            $"Invoice {invoice.Id} discarded by {user.Email} — the INV number is burned (never reused); " +
+            $"source event {invoice.SourceEventId} is released for re-billing");
+        invoices.Save();
+        return (invoice, null, null);
     }
 
     // 046: every adjustment references a posted invoice (standalone memos deferred, R-T7k)
@@ -162,6 +198,16 @@ public sealed class InvoiceService(
         var invoice = invoices.FindInvoice(adjustment.InvoiceId);
         if (invoice is null) return (null, "INVOICE_NOT_FOUND", "The referenced invoice no longer exists.");
 
+        // review 2a: the open-amount check and the commit are serialized per INVOICE — lock the
+        // invoice row so two concurrent approvals cannot both pass the bounded-credit check
+        // against the same committed balances. When Idem.Wrap already opened the request
+        // transaction, we join it instead of nesting a second one.
+        var ownsTx = db.Database.CurrentTransaction is null;
+        using var tx = ownsTx ? db.Database.BeginTransaction() : null;
+        db.Invoices
+            .FromSql($"SELECT * FROM invoices WHERE id = {invoice.Id} AND tenant_id = {ec.TenantId} AND legal_entity_id = {ec.EntityId} FOR UPDATE")
+            .ToList();
+
         // the memo posts at approval day — the centralized period lock applies
         var (guardCode, guardMsg) = FinanceGuards.EnsurePeriodOpen(db, ec, DateOnly.FromDateTime(DateTime.UtcNow));
         if (guardCode is not null) return (null, guardCode, guardMsg);
@@ -191,7 +237,19 @@ public sealed class InvoiceService(
             $"{adjustment.Kind} memo {adjustmentId} approved: total {total:0.00} (net {subTotal:0.00}, tax {taxTotal:0.00}); journal {journal.Id}");
         audit.Emit(approver, "sales.adjustment.approved",
             new { adjustmentId, kind = adjustment.Kind.ToString(), invoiceId = invoice.Id, total, journalId = journal.Id });
-        invoices.Save();
+        try
+        {
+            invoices.Save();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // review 1a (same family): the guarded Draft→Approved UPDATE matched zero rows —
+            // a concurrent officer approved this memo against our stale snapshot; no second
+            // reversing journal is written
+            return (null, "ADJUSTMENT_ALREADY_APPROVED",
+                $"Adjustment {adjustmentId} was already approved; the retry carried a stale snapshot and wrote nothing.");
+        }
+        if (ownsTx) tx!.Commit();
         return (adjustment, null, null);
     }
 

@@ -22,12 +22,8 @@ namespace Erp.Api;
 // (endpoints that pass no payload, or data written before this existed) keep the plain replay.
 public static class Idem
 {
-    // web defaults + enum strings — the canonical serialization for stored responses AND for the
-    // bid content digest (028 AC1), so both sides of a replay compare like for like
     public static readonly System.Text.Json.JsonSerializerOptions JsonOptions =
         new(System.Text.Json.JsonSerializerDefaults.Web) { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } };
-
-    private static System.Text.Json.JsonSerializerOptions Opts => JsonOptions;
 
     // existing call sites — no payload hash, replay-anyway semantics unchanged
     public static IResult Wrap(HttpContext ctx, Func<(object body, int status)> run) =>
@@ -45,7 +41,7 @@ public static class Idem
         var scope = services.GetRequiredService<EntityContext>();
         var store = services.GetRequiredService<IIdempotencyStore>();
         var db = services.GetRequiredService<ErpDbContext>();
-        var hash = HashOf(payload);
+        var hash = HashOf(ctx, payload);
         if (store.TryGet(scope.TenantId, scope.EntityId, key) is { } stored)
             return Conflicts(stored.RequestHash, hash)
                 ? ConflictResult()
@@ -56,7 +52,7 @@ public static class Idem
         {
             store.Reserve(scope.TenantId, scope.EntityId, key, hash);
             var (body, status) = run();
-            var json = System.Text.Json.JsonSerializer.Serialize(body, Opts);
+            var json = System.Text.Json.JsonSerializer.Serialize(body, JsonOptions);
             store.Complete(scope.TenantId, scope.EntityId, key, status, json, hash);
             tx.Commit();
             return Results.Content(json, "application/json", statusCode: status);
@@ -87,12 +83,17 @@ public static class Idem
         Results.Json(Envelope.FailBody("IDEMPOTENCY_CONFLICT",
             "This Idempotency-Key was already used with a different request payload."), statusCode: 409);
 
-    // public since task-6: the bid receipt digest (ERP-PROCUREMENT-028 AC1) uses the same
-    // SHA-256-of-canonical-json scheme as the idempotency store — one code path, one scheme
-    public static string? HashOf(object? payload)
+    // review 4a (fix round 1): the hash covers ROUTE + METHOD, not just the payload — empty-body
+    // POSTs to two different resources (e.g. /invoices/{a}/postings vs /invoices/{b}/postings)
+    // would otherwise hash identically and a reused key would replay the WRONG document's
+    // response. Note: rows stored before this change keep their old hashes — retrying one of
+    // those keys now returns 409 IDEMPOTENCY_CONFLICT instead of a replay (accepted for the
+    // pilot; stored rows live only in throwaway test databases).
+    private static string? HashOf(HttpContext ctx, object? payload)
     {
         if (payload is null) return null;
-        var json = System.Text.Json.JsonSerializer.Serialize(payload, Opts);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
+        var json = System.Text.Json.JsonSerializer.Serialize(payload, JsonOptions);
+        var material = $"{ctx.Request.Method} {ctx.Request.Path.Value}{json}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 }

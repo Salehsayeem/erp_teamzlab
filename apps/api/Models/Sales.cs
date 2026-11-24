@@ -67,7 +67,9 @@ public record Opportunity(string Id, string TenantId, string LegalEntityId, stri
 // number (same owned-line pattern as count_lines/journal_lines — server-assembled, no client ids)
 public record OpportunityLine(string ItemSku, string Description, decimal Qty, decimal TargetPrice);
 
-public enum InvoiceStatus { Draft, Posted } // no Void — corrections go through adjustments (046)
+// Discarded APPENDED (fix round 1, review 1b): a mis-drafted invoice must not be a dead end —
+// discard is terminal, frees the shipment source event for re-billing, and burns the INV number.
+public enum InvoiceStatus { Draft, Posted, Discarded }
 
 // 042/043/045: SourceEventId is the shipment that triggered the document (no double billing);
 // tax components are pinned per line at posting (048 AC2); DueDate is computed from the

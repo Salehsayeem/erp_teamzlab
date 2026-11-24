@@ -9,6 +9,7 @@ public interface IInvoiceRepository
     Invoice? FindBySourceEvent(string sourceEventId);
     void PinLineTax(InvoiceLine line, string taxCodeId, int taxCodeVersion, decimal taxAmount);
     void MarkInvoicePosted(Invoice invoice, string journalId, string postedBy, DateOnly dueDate, decimal taxTotal, decimal total);
+    void MarkInvoiceDiscarded(Invoice invoice);
     List<AdjustmentDocument> AdjustmentsForInvoice(string invoiceId);
     AdjustmentDocument? FindAdjustment(string adjustmentId);
     void AddAdjustment(AdjustmentDocument adjustment);

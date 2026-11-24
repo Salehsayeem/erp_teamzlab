@@ -7,4 +7,6 @@ public interface IInvoiceService
     (object? data, string? code, string? message) Post(CurrentUser approver, string invoiceId);
     (AdjustmentDocument? adjustment, string? code, string? message) CreateAdjustment(CurrentUser user, Dtos.CreateAdjustmentRequest request);
     (AdjustmentDocument? adjustment, string? code, string? message) ApproveAdjustment(CurrentUser approver, string adjustmentId, string? reason);
+    // review 1b: terminal discard — frees the shipment source event, burns the INV number
+    (Invoice? invoice, string? code, string? message) Discard(CurrentUser user, string invoiceId);
 }

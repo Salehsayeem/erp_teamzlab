@@ -68,4 +68,14 @@ public sealed class InvoicesController(IInvoiceService invoices) : ControllerBas
         var (adjustment, code, message) = invoices.ApproveAdjustment(u, id, request.Reason);
         return code is null ? Envelope.Ok<object>(adjustment!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
     }
+
+    // review 1b: the drafter's (or admin's) escape hatch for a mis-drafted draft — terminal,
+    // frees the shipment source event, burns the INV number (audited)
+    [HttpPost("invoices/{id}/discards")]
+    public IResult Discard(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        var (invoice, code, message) = invoices.Discard(u, id);
+        return code is null ? Envelope.Ok<object>(invoice!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
 }

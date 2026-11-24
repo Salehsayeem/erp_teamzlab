@@ -380,8 +380,15 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.CustomerId });
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
             // 042 AC2: a shipment source event can bill at most once — unique index backs the
-            // service-level ALREADY_BILLED check up under concurrency
-            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SourceEventId }).IsUnique();
+            // service-level ALREADY_BILLED check up under concurrency. Partial (fix round 1,
+            // review 1b): a DISCARDED draft releases its source event for re-billing, so the
+            // uniqueness no longer covers discarded rows.
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SourceEventId }).IsUnique()
+                .HasFilter($"status <> {(int)InvoiceStatus.Discarded}");
+            // review 1a: status is a concurrency token — every invoice UPDATE carries
+            // WHERE status = <original>, so a stale second post updates ZERO rows and
+            // DbUpdateConcurrencyException surfaces as 409 INVOICE_ALREADY_POSTED
+            e.Property(x => x.Status).IsConcurrencyToken();
             e.HasIndex(x => x.CustomerId);
             e.HasIndex(x => x.SalesOrderId);
             e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
@@ -405,6 +412,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
             e.HasIndex(x => x.InvoiceId);
+            // review 1a (same family): a stale second approval updates zero rows instead of
+            // writing a second reversing journal
+            e.Property(x => x.Status).IsConcurrencyToken();
             e.HasOne<Invoice>().WithMany().HasForeignKey(x => x.InvoiceId).OnDelete(DeleteBehavior.Restrict);
             e.OwnsMany(x => x.Lines, l =>
             {
