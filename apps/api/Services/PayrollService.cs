@@ -1,3 +1,4 @@
+using System.Globalization;
 using Erp.Api.Data;
 using Erp.Api.Interfaces;
 using Microsoft.EntityFrameworkCore;
@@ -55,6 +56,55 @@ public sealed class PayrollService(
         return (code, null, null);
     }
 
+    // fix R4-6: a typo'd mapping must be correctable — edits bump the version (037 AC2);
+    // posted runs keep their frozen lines, only FUTURE runs consume the new values
+    public (EarningDeductionCode? code, string? errorCode, string? message) UpdatePayCode(CurrentUser user, string codeCode, Dtos.UpdatePayCodeRequest request)
+    {
+        var code = people.FindPayCode(codeCode);
+        if (code is null) return (null, "PAY_CODE_NOT_FOUND", $"Pay code {codeCode} not found.");
+        if (!code.Active)
+            return (null, "PAY_CODE_INACTIVE", $"Pay code {codeCode} is inactive; reactivate-on-edit is not supported in the pilot — create a new code.");
+        if (request.CalcBasis is not null && request.CalcBasis is not ("Hours" or "Amount" or "Percent"))
+            return (null, "VALIDATION_ERROR", "CalcBasis must be Hours, Amount or Percent.");
+        var effectiveRate = request.RatePct ?? code.RatePct;
+        var effectiveBasis = request.CalcBasis ?? code.CalcBasis;
+        if (effectiveBasis == "Amount" && (effectiveRate is null || effectiveRate < 0))
+            return (null, "VALIDATION_ERROR", "Amount-basis codes need a non-negative RatePct.");
+
+        var changed = new List<string>();
+        if (request.Name is not null && request.Name != code.Name) changed.Add($"name='{request.Name}'");
+        if (request.RatePct is not null && request.RatePct != code.RatePct) changed.Add($"ratePct={request.RatePct}");
+        if (request.CalcBasis is not null && request.CalcBasis != code.CalcBasis) changed.Add($"calcBasis={request.CalcBasis}");
+        if (changed.Count == 0)
+            return (code, null, null); // no-op edit is idempotent, no version churn
+
+        people.UpdatePayCode(code, request.Name, request.RatePct, request.CalcBasis);
+        audit.Log(user, "update", "pay_code", code.Code,
+            $"Pay code {code.Code} updated to v{code.Version + 1}: {string.Join(", ", changed)} — posted runs keep their frozen lines");
+        audit.Emit(user, "people.paycode.updated", new
+        {
+            code = code.Code, version = code.Version + 1, name = request.Name, ratePct = request.RatePct,
+            calcBasis = request.CalcBasis, updatedBy = user.Id,
+        });
+        people.Save();
+        return (people.FindPayCode(codeCode), null, null);
+    }
+
+    // fix R4-6: deactivation stops consumption in new calculations immediately; closed runs are untouched
+    public (EarningDeductionCode? code, string? errorCode, string? message) DeactivatePayCode(CurrentUser user, string codeCode)
+    {
+        var code = people.FindPayCode(codeCode);
+        if (code is null) return (null, "PAY_CODE_NOT_FOUND", $"Pay code {codeCode} not found.");
+        if (!code.Active)
+            return (null, "PAY_CODE_ALREADY_INACTIVE", $"Pay code {codeCode} is already inactive.");
+        people.SetPayCodeActive(code, false);
+        audit.Log(user, "deactivate", "pay_code", code.Code,
+            $"Pay code {code.Code} deactivated by {user.Email} — excluded from new calculations; posted runs keep their frozen lines");
+        audit.Emit(user, "people.paycode.deactivated", new { code = code.Code, deactivatedBy = user.Id });
+        people.Save();
+        return (people.FindPayCode(codeCode), null, null);
+    }
+
     // ---- runs (035/049) ---------------------------------------------------------------
 
     public object ListRuns(CurrentUser user, PayRunStatus? status, string? periodId) =>
@@ -103,7 +153,7 @@ public sealed class PayrollService(
                 $"Run {runId} is {run.Status}; recalculation would invalidate the approval snapshot (048 AC2). Late corrections wait for the next period (R-PEO10).");
 
         var period = FiscalPeriodOf(run);
-        var population = people.WorkersInGroup(run.PayGroupId);
+        var population = people.WorkersInGroup(run.PayGroupId, period.StartDate, period.EndDate);
         var populationIds = population.Select(w => w.Id).ToList();
         var approved = people.TimeInWindow(period.StartDate, period.EndDate, TimeEntryStatus.Approved, populationIds)
             .GroupBy(t => t.EmploymentId).ToDictionary(g => g.Key, g => g.ToList());
@@ -116,14 +166,19 @@ public sealed class PayrollService(
 
         foreach (var worker in population)
         {
+            // fix R4-1: the compensation reference date is the worker's window end — for a
+            // mid-period leaver that is their termination date, so terms covering the days they
+            // actually worked still resolve (as-of period end would miss them)
+            var windowEnd = WindowEnd(worker, period);
             approved.TryGetValue(worker.Id, out var entries);
-            var comp = people.ApplicableCompensation(worker.Id, period.EndDate); // 024 AC1: as-of period end
+            var comp = people.ApplicableCompensation(worker.Id, windowEnd); // 024 AC1: as-of the worker's window end
             if (comp is null)
             {
-                excluded.Add(worker.Id); // surfaces in validations (046) — never silently dropped
+                excluded.Add(worker.Id); // surfaces in validations (046 + EXCLUDED_WITH_TIME) — never silent
                 continue;
             }
-            lines.AddRange(BuildEarningLines(worker, comp, entries ?? [], basic, overtime, multiplier));
+            lines.AddRange(BuildEarningLines(worker, comp, entries ?? [], basic, overtime, multiplier,
+                WindowStart(worker, period), windowEnd, period));
         }
 
         // every active deduction code applies to each worker's gross (037; R-PEO7 flat catalog)
@@ -162,10 +217,13 @@ public sealed class PayrollService(
         return (people.FindPayRun(runId), null, null);
     }
 
-    // 038 AC2: every line identifies source input, code, basis quantity, rate, amount, currency
+    // 038 AC2: every line identifies source input, code, basis quantity, rate, amount, currency.
+    // fix R4-2: the monthly salary line carries the proration formula on the line itself —
+    // Hours = worked calendar days in [max(period start, hire), min(period end, termination)],
+    // Rate = salary / period days, Amount = salary × worked / period days.
     private List<PayRunLine> BuildEarningLines(Employment worker, CompensationEvent comp,
         List<TimeEntry> entries, EarningDeductionCode? basic, EarningDeductionCode? overtime,
-        decimal multiplier)
+        decimal multiplier, DateOnly windowStart, DateOnly windowEnd, FiscalPeriod period)
     {
         var lines = new List<PayRunLine>();
         if (comp.PayBasis == "Hourly")
@@ -185,11 +243,17 @@ public sealed class PayrollService(
                 }
             }
         }
-        else // Monthly: the period salary is one flat line; OT prices at the 025-trim equivalent
+        else // Monthly: the period salary prorates by calendar days in the worker's window (fix R4-2)
         {
-            if (basic is not null)
+            var periodDays = period.EndDate.DayNumber - period.StartDate.DayNumber + 1;
+            var workedDays = windowEnd.DayNumber - windowStart.DayNumber + 1;
+            if (basic is not null && workedDays > 0)
+            {
+                var salary = decimal.Round(comp.Amount * workedDays / periodDays, 2, MidpointRounding.AwayFromZero);
+                var dailyRate = decimal.Round(comp.Amount / periodDays, 4, MidpointRounding.AwayFromZero);
                 lines.Add(new PayRunLine(worker.Id, basic.Id, basic.Code, PayCodeKind.Earning,
-                    1m, comp.Amount, decimal.Round(comp.Amount, 2, MidpointRounding.AwayFromZero), comp.Currency, null));
+                    workedDays, dailyRate, salary, comp.Currency, null));
+            }
             var otHours = entries.Sum(e => e.OvertimeHours);
             if (otHours > 0 && overtime is not null)
             {
@@ -211,7 +275,8 @@ public sealed class PayrollService(
 
     // R-PEO2: the flat multiplier is finance data (finance_settings), defaulting to 1.5
     private decimal OtMultiplier() =>
-        decimal.TryParse(settings.Get(OtMultiplierSetting)?.Value, out var value) && value > 0 ? value : DefaultOtMultiplier;
+        decimal.TryParse(settings.Get(OtMultiplierSetting)?.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            && value > 0 ? value : DefaultOtMultiplier;
 
     // ---- preflight validations (046) --------------------------------------------------
 
@@ -220,7 +285,7 @@ public sealed class PayrollService(
         var run = people.FindPayRun(runId);
         if (run is null) return (null, "PAYRUN_NOT_FOUND", "Pay run not found.");
         var period = FiscalPeriodOf(run);
-        var population = people.WorkersInGroup(run.PayGroupId);
+        var population = people.WorkersInGroup(run.PayGroupId, period.StartDate, period.EndDate);
 
         var blocking = BlockingValidations(run, period, population);
         var warnings = Warnings(run, period, population);
@@ -230,8 +295,11 @@ public sealed class PayrollService(
     }
 
     // shared by the dashboard and the approval gate — blockers always block both identically
-    private List<object> BlockingValidations(PayRun run) =>
-        BlockingValidations(run, FiscalPeriodOf(run), people.WorkersInGroup(run.PayGroupId));
+    private List<object> BlockingValidations(PayRun run)
+    {
+        var period = FiscalPeriodOf(run);
+        return BlockingValidations(run, period, people.WorkersInGroup(run.PayGroupId, period.StartDate, period.EndDate));
+    }
 
     private List<object> BlockingValidations(PayRun run, FiscalPeriod period, List<Employment> population)
     {
@@ -256,10 +324,10 @@ public sealed class PayrollService(
                 ownerRole = "time:approve" });
         }
 
-        var missingComp = population.Where(w => people.ApplicableCompensation(w.Id, period.EndDate) is null).ToList();
+        var missingComp = population.Where(w => people.ApplicableCompensation(w.Id, WindowEnd(w, period)) is null).ToList();
         if (missingComp.Count > 0)
             blocking.Add(new { code = "WORKER_NO_COMPENSATION", workerCount = missingComp.Count,
-                message = $"{missingComp.Count} worker(s) without compensation effective at period end: {string.Join(", ", missingComp.Select(w => $"{w.Id} ({w.FullName})"))}.",
+                message = $"{missingComp.Count} worker(s) without compensation effective at their period-window end: {string.Join(", ", missingComp.Select(w => $"{w.Id} ({w.FullName})"))}.",
                 ownerRole = "workers:write" });
 
         // mapping gates (053 AC2): required earning codes plus every deduction code
@@ -274,14 +342,33 @@ public sealed class PayrollService(
     private List<object> Warnings(PayRun run, FiscalPeriod period, List<Employment> population)
     {
         var warnings = new List<object>();
-        var missingCompIds = population.Where(w => people.ApplicableCompensation(w.Id, period.EndDate) is null)
+        var missingCompIds = population.Where(w => people.ApplicableCompensation(w.Id, WindowEnd(w, period)) is null)
             .Select(w => w.Id).ToHashSet();
         var zeroPay = population.Where(w => !missingCompIds.Contains(w.Id) && !run.Lines.Any(l => l.EmploymentId == w.Id)).ToList();
         if (zeroPay.Count > 0)
             warnings.Add(new { code = "ZERO_PAY_WORKERS", workerCount = zeroPay.Count,
                 message = $"{zeroPay.Count} worker(s) with no payable lines (zero-pay): {string.Join(", ", zeroPay.Select(w => w.Id))}." });
+
+        // fix R4-1: a worker whose approved in-window time earned NO lines is surfaced loudly —
+        // exclusion for any reason is never silent
+        var populationIds = population.Select(w => w.Id).ToList();
+        var withTime = people.TimeInWindow(period.StartDate, period.EndDate, TimeEntryStatus.Approved, populationIds)
+            .Select(t => t.EmploymentId).Distinct();
+        var excludedWithTime = withTime
+            .Where(id => !run.Lines.Any(l => l.EmploymentId == id && l.Kind == PayCodeKind.Earning)).ToList();
+        if (excludedWithTime.Count > 0)
+            warnings.Add(new { code = "EXCLUDED_WITH_TIME", workerCount = excludedWithTime.Count,
+                message = $"Worker(s) with approved in-window time earned no pay lines: {string.Join(", ", excludedWithTime)} " +
+                    "— their compensation does not cover the days worked; resolve before relying on this run." });
         return warnings;
     }
+
+    // a worker's payable window inside the run period: hire date raises the start, termination lowers the end
+    private static DateOnly WindowStart(Employment w, FiscalPeriod period) =>
+        w.HireDate > period.StartDate ? w.HireDate : period.StartDate;
+
+    private static DateOnly WindowEnd(Employment w, FiscalPeriod period) =>
+        w.Status == EmploymentStatus.Terminated && w.TerminationDate is { } t && t < period.EndDate ? t : period.EndDate;
 
     private void CheckPayCode(EarningDeductionCode? code, bool required, string label, List<string> populationIds, List<object> blocking)
     {
@@ -314,7 +401,7 @@ public sealed class PayrollService(
             return (null, "PAYRUN_NOT_CALCULATED", $"Run {runId} has no calculated lines yet; run a calculation first (047).");
 
         var period = FiscalPeriodOf(run);
-        var population = people.WorkersInGroup(run.PayGroupId).ToDictionary(w => w.Id);
+        var population = people.WorkersInGroup(run.PayGroupId, period.StartDate, period.EndDate).ToDictionary(w => w.Id);
         var lines = run.Lines.OrderBy(l => l.EmploymentId).ThenBy(l => l.PayCode)
             .ThenBy(l => l.SourceEntryId ?? string.Empty).ToList();
 
@@ -361,12 +448,12 @@ public sealed class PayrollService(
     {
         var run = people.FindPayRun(runId);
         if (run is null) return (null, "PAYRUN_NOT_FOUND", "Pay run not found.");
+        if (!approver.Has("payroll:approve")) return (null, "FORBIDDEN", "payroll:approve permission required.");
         if (run.Status != PayRunStatus.Calculated)
             return (null, "PAYRUN_STATE_ERROR",
                 run.Status == PayRunStatus.Approved || run.Status == PayRunStatus.Posted
                     ? $"Run {runId} is already {run.Status}; a second approval would double-apply the snapshot (048)."
                     : $"Only calculated runs can be approved (current: {run.Status}).");
-        if (!approver.Has("payroll:approve")) return (null, "FORBIDDEN", "payroll:approve permission required.");
         if (run.CalculatedBy == approver.Id)
             return (null, "PAYROLL_APPROVAL_ERROR",
                 "Maker-checker: the calculator cannot approve their own run (048 AC1).");
@@ -384,7 +471,16 @@ public sealed class PayrollService(
         {
             runId, approver = approver.Id, reason, gross = run.GrossTotal, deductions = run.DeductionTotal, net = run.NetTotal,
         });
-        people.Save();
+        try
+        {
+            people.Save();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // review-1a mechanism: a concurrent approval won the guarded update; nothing commits
+            return (null, "PAYRUN_ALREADY_APPROVED",
+                $"Run {runId} was already approved by another officer; the retry carried a stale snapshot and wrote nothing.");
+        }
         return (run, null, null);
     }
 
@@ -394,13 +490,13 @@ public sealed class PayrollService(
     {
         var run = people.FindPayRun(runId);
         if (run is null) return (null, "PAYRUN_NOT_FOUND", "Pay run not found.");
+        if (!approver.Has("payroll:approve")) return (null, "FORBIDDEN", "payroll:approve permission required.");
         if (run.Status == PayRunStatus.Posted)
             return (null, "PAYRUN_ALREADY_POSTED", $"Run {runId} is already posted (journal {run.JournalId}); a retry cannot post twice (049 AC2).");
         if (run.Status is PayRunStatus.Reversed)
             return (null, "PAYRUN_ALREADY_REVERSED", $"Run {runId} is reversed; posting is closed.");
         if (run.Status != PayRunStatus.Approved)
             return (null, "PAYRUN_STATE_ERROR", $"Only approved runs can post (current: {run.Status}).");
-        if (!approver.Has("payroll:approve")) return (null, "FORBIDDEN", "payroll:approve permission required.");
 
         // R-PEO11: the period guard evaluates the run's entered PayDate — FIRST of the posting checks
         var (guardCode, guardMsg) = FinanceGuards.EnsurePeriodOpen(db, ec, run.PayDate);
@@ -408,6 +504,29 @@ public sealed class PayrollService(
 
         var mappingError = EnsureRunMappings(run);
         if (mappingError is not null) return (null, mappingError.Value.code, mappingError.Value.message);
+
+        // R4 minor: an all-zero run records WITHOUT a journal — no 0/0 line in the ledger
+        if (run.GrossTotal == 0m && run.DeductionTotal == 0m && run.NetTotal == 0m)
+        {
+            people.MarkPosted(run, journalId: null, approver.Id, DateTimeOffset.UtcNow);
+            audit.Log(approver, "post", "pay_run", run.Id,
+                $"Pay run {run.Id} posted with zero totals; no journal written (0/0 entries are not recorded)");
+            audit.Emit(approver, "people.payrun.posted", new
+            {
+                runId = run.Id, journalId = (string?)null, periodId = run.PeriodId, payDate = run.PayDate,
+                gross = run.GrossTotal, deductions = run.DeductionTotal, net = run.NetTotal, currency = run.Currency, zeroPay = true,
+            });
+            try
+            {
+                people.Save();
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                return (null, "PAYRUN_ALREADY_POSTED",
+                    $"Run {runId} was already posted by another officer; the retry carried a stale snapshot and wrote nothing.");
+            }
+            return (new { run = ProjectRun(people.FindPayRun(runId)!), journal = (object?)null }, null, null);
+        }
 
         // 053 AC1: ONE balanced journal — Dr 6100 gross / Cr 2310 deductions / Cr 2300 net,
         // zero-value legs omitted when a total is empty
@@ -489,11 +608,17 @@ public sealed class PayrollService(
         var period = FiscalPeriodOf(run);
         var gross = decimal.Round(lines.Where(l => l.Kind == PayCodeKind.Earning).Sum(l => l.Amount), 2, MidpointRounding.AwayFromZero);
         var ded = decimal.Round(lines.Where(l => l.Kind == PayCodeKind.Deduction).Sum(l => l.Amount), 2, MidpointRounding.AwayFromZero);
+        var reversalRun = run.Status == PayRunStatus.Reversed
+            ? people.AllPayRuns(null, null).FirstOrDefault(r => r.ReversalOfRunId == run.Id)
+            : null; // 056: the reversal is shown as a separate linked entry, never by rewriting this slip's history
         return (new
         {
             runId, workerId, workerNo = worker.WorkerNo, name = worker.FullName,
             period = new { id = period.Id, name = period.Name, startDate = period.StartDate, endDate = period.EndDate },
             payDate = run.PayDate, currency = run.Currency, gross, deductions = ded, net = decimal.Round(gross - ded, 2, MidpointRounding.AwayFromZero),
+            runStatus = run.Status.ToString(),
+            reversed = run.Status == PayRunStatus.Reversed, // R4 minor: an explicit REVERSED marker on the slip
+            reversalRunId = reversalRun?.Id,
             lines,
         }, null, null);
     }
@@ -506,11 +631,11 @@ public sealed class PayrollService(
         if (run is null) return (null, "PAYRUN_NOT_FOUND", "Pay run not found.");
         if (string.IsNullOrWhiteSpace(request.Reason) || request.FundsReleased is null)
             return (null, "VALIDATION_ERROR", "A reversal requires both a Reason and the FundsReleased flag (055 AC2).");
+        if (!approver.Has("payroll:approve")) return (null, "FORBIDDEN", "payroll:approve permission required.");
         if (run.Status == PayRunStatus.Reversed)
             return (null, "PAYRUN_ALREADY_REVERSED", $"Run {runId} is already reversed; a retry cannot reverse it twice.");
         if (run.Status != PayRunStatus.Posted)
             return (null, "PAYRUN_STATE_ERROR", $"Only posted runs can be reversed (current: {run.Status}).");
-        if (!approver.Has("payroll:approve")) return (null, "FORBIDDEN", "payroll:approve permission required.");
 
         // 055 AC2: the compensating posting needs a reason and the funds-released flag
         var payDate = DateOnly.FromDateTime(DateTime.UtcNow); // the reversal posts at today (R9d precedent)

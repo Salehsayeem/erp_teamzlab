@@ -9,8 +9,8 @@ namespace Erp.Api.Services;
 // future-dated events never apply before their date (024); pay-group membership is one-active-
 // per-worker (035 AC2). Terminations close future terms but never delete history.
 public sealed class WorkerService(
-    IPeopleRepository people, IAccountRepository accounts, INumberSeries numbers,
-    IAuditRepository audit, EntityContext ec) : IWorkerService
+    IPeopleRepository people, IAccountRepository accounts, IIdentityRepository identities,
+    INumberSeries numbers, IAuditRepository audit, EntityContext ec) : IWorkerService
 {
     // legal lifecycle map (007 AC1); Terminated is terminal — rescission would be a new event
     // (deferred, R-PEO10 spirit) and is not modeled in the pilot
@@ -31,6 +31,18 @@ public sealed class WorkerService(
     // existing worker returns 409 PERSON_DUPLICATE with the candidate id; never auto-merge
     public (Employment? worker, string? code, string? message) Create(CurrentUser user, Dtos.CreateWorkerRequest request)
     {
+        // R4 minor: the attesting manager must be an active user holding time:approve
+        if (request.ManagerUserId is { Length: > 0 } managerId)
+        {
+            var manager = identities.FindActiveUserById(managerId);
+            var membership = manager is null ? null : identities.MembershipFor(manager.Id, ec.TenantId, ec.EntityId);
+            var role = membership is null ? null : identities.RoleById(membership.RoleId);
+            var canApprove = role is not null && (role.Permissions.Contains("*") || role.Permissions.Contains("time:approve"));
+            if (manager is null || role is null || !canApprove)
+                return (null, "VALIDATION_ERROR",
+                    $"ManagerUserId {managerId} must reference an active user holding time:approve (only that manager's attestations pre-approve time).");
+        }
+
         var nationalId = Normalize(request.NationalId);
         var email = Normalize(request.Email);
         var existing = (nationalId is not null ? people.FindByNationalId(nationalId) : null)
@@ -64,7 +76,8 @@ public sealed class WorkerService(
             return (null, "WORKER_NO_COMPENSATION",
                 $"Worker {workerId} has no compensation event effective on {request.EffectiveDate:yyyy-MM-dd}; Active requires effective terms (007 AC1).");
 
-        var isTermination = request.Status == EmploymentStatus.Terminated;
+        var previousStatus = worker.Status; // fix R4-4: capture BEFORE mutation so the audit/outbox
+        var isTermination = request.Status == EmploymentStatus.Terminated; // carry the true from-state
         people.SetWorkerStatus(worker, request.Status,
             isTermination ? request.EffectiveDate : null,
             isTermination ? request.Reason : null);
@@ -75,14 +88,23 @@ public sealed class WorkerService(
                 people.CloseCompensation(evt, request.EffectiveDate);
 
         audit.Log(user, "transition", "worker", workerId,
-            $"Worker {workerId} {worker.Status} → {request.Status} effective {request.EffectiveDate:yyyy-MM-dd}" +
+            $"Worker {workerId} {previousStatus} → {request.Status} effective {request.EffectiveDate:yyyy-MM-dd}" +
             (request.Reason is null ? "" : $" — {request.Reason}"));
         audit.Emit(user, "people.worker.transitioned", new
         {
-            workerId, from = worker.Status.ToString(), to = request.Status.ToString(),
+            workerId, from = previousStatus.ToString(), to = request.Status.ToString(),
             effectiveDate = request.EffectiveDate, reason = request.Reason,
         });
-        people.Save();
+        try
+        {
+            people.Save();
+        }
+        catch (Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException)
+        {
+            // review-1a mechanism: a concurrent transition won the guarded update; nothing commits
+            return (null, "WORKER_TRANSITION_ERROR",
+                $"Worker {workerId} was transitioned concurrently; the retry carried a stale snapshot and wrote nothing.");
+        }
         return (worker, null, null);
     }
 
@@ -176,11 +198,15 @@ public sealed class WorkerService(
         return (group, null, null);
     }
 
-    public object ListPayGroups(CurrentUser user) => people.AllPayGroups().Select(g => new
+    public object ListPayGroups(CurrentUser user)
     {
-        g.Id, g.Code, g.Name, g.Frequency, g.Active,
-        members = people.WorkersInGroup(g.Id).Select(w => w.Id).ToList(),
-    }).ToList();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        return people.AllPayGroups().Select(g => new
+        {
+            g.Id, g.Code, g.Name, g.Frequency, g.Active,
+            members = people.WorkersInGroup(g.Id, today, today).Select(w => w.Id).ToList(),
+        }).ToList();
+    }
 
     // 056: approved (posted) results reproduced as issued; reversal runs listed separately
     public (object? data, string? code, string? message) PayHistory(CurrentUser user, string workerId)

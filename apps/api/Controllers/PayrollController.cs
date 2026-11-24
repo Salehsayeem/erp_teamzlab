@@ -35,6 +35,8 @@ public sealed class PayCodesController(IPayrollService payroll) : ControllerBase
             ?? (request.Kind == PayCodeKind.Deduction && request.CalcBasis == "Hours"
                 ? "Deduction codes cannot use the Hours basis." : null)
             ?? (request.CalcBasis == "Percent" && request.RatePct is null ? "Percent codes need a RatePct." : null)
+            ?? (request.CalcBasis == "Amount" && (request.RatePct is null || request.RatePct < 0)
+                ? "Amount-basis codes need a non-negative RatePct (fix R4-5)." : null)
             ?? (request.RatePct is { } rate && (rate < 0 || rate > 100) && request.CalcBasis == "Percent"
                 ? "Percent RatePct must be between 0 and 100." : null);
         if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
@@ -42,6 +44,32 @@ public sealed class PayCodesController(IPayrollService payroll) : ControllerBase
         if (!u.Has("paycodes:write")) return (Envelope.FailBody("FORBIDDEN", "paycodes:write permission required."), 403);
         var (code, errorCode, message) = payroll.CreatePayCode(u, request);
         return errorCode is null ? (Envelope.OkBody(code!), 201) : (Envelope.FailBody(errorCode, message!), ErrorStatus.StatusFor(errorCode));
+    });
+
+    // fix R4-6: correct a typo'd mapping/rate/basis; posted runs keep their frozen lines
+    [HttpPost("{code}/updates")]
+    public IResult Update(string code, Dtos.UpdatePayCodeRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var err = (request.Name is { Length: > 200 } ? "Name must be at most 200 characters." : null)
+            ?? (request.CalcBasis is not null && request.CalcBasis is not ("Hours" or "Amount" or "Percent")
+                ? "CalcBasis must be Hours, Amount or Percent." : null)
+            ?? (request.CalcBasis == "Amount" && request.RatePct < 0
+                ? "Amount-basis codes need a non-negative RatePct." : null);
+        if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("paycodes:write")) return (Envelope.FailBody("FORBIDDEN", "paycodes:write permission required."), 403);
+        var (data, errorCode, message) = payroll.UpdatePayCode(u, code, request);
+        return errorCode is null ? (Envelope.OkBody(data!), 200) : (Envelope.FailBody(errorCode, message!), ErrorStatus.StatusFor(errorCode));
+    });
+
+    // fix R4-6: deactivation stops consumption in new calculations; closed runs untouched
+    [HttpPost("{code}/deactivations")]
+    public IResult Deactivate(string code) => Idem.Wrap(HttpContext, new { code }, () =>
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("paycodes:write")) return (Envelope.FailBody("FORBIDDEN", "paycodes:write permission required."), 403);
+        var (data, errorCode, message) = payroll.DeactivatePayCode(u, code);
+        return errorCode is null ? (Envelope.OkBody(data!), 200) : (Envelope.FailBody(errorCode, message!), ErrorStatus.StatusFor(errorCode));
     });
 }
 

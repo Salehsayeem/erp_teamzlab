@@ -1037,14 +1037,15 @@ public class PeoplePayrollPostingTests : PeopleTestBase
         await ApproveRun(runB);
         await PostRun(runB);
 
-        // old run unchanged (frozen lines), new run uses the new value
+        // old run unchanged (frozen lines), new run uses the new value. FLAT-100 (seeded by the
+        // Correction test earlier in this database) is also active: run A = 50+100, run B = 75+100
         var runs = await GetAsync("/api/v1/pay-runs", Fin);
         var oldRun = runs.GetProperty("data").EnumerateArray().First(r => r.GetProperty("id").GetString() == runA);
-        Assert.Equal(50m, oldRun.GetProperty("deductionTotal").GetDecimal());
+        Assert.Equal(150m, oldRun.GetProperty("deductionTotal").GetDecimal());
         var newRun = runs.GetProperty("data").EnumerateArray().First(r => r.GetProperty("id").GetString() == runB);
-        Assert.Equal(375m, newRun.GetProperty("deductionTotal").GetDecimal()); // 5h × 100 × 75%
+        Assert.Equal(175m, newRun.GetProperty("deductionTotal").GetDecimal()); // 5h × 100 × 75% + 100 flat
 
-        // deactivation stops consumption
+        // deactivation stops consumption (only FLAT-100 remains: 100 flat on 400 gross)
         var deactivate = await PostAsync("/api/v1/pay-codes/FLAT-50/deactivations", new { }, Fin);
         Assert.Equal(HttpStatusCode.OK, deactivate.StatusCode);
 
@@ -1056,7 +1057,7 @@ public class PeoplePayrollPostingTests : PeopleTestBase
         Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/pay-runs/{runC}/calculations", new { }, Hr)).StatusCode);
         runs = await GetAsync("/api/v1/pay-runs", Fin);
         var finalRun = runs.GetProperty("data").EnumerateArray().First(r => r.GetProperty("id").GetString() == runC);
-        Assert.Equal(0m, finalRun.GetProperty("deductionTotal").GetDecimal()); // deactivated → excluded
+        Assert.Equal(100m, finalRun.GetProperty("deductionTotal").GetDecimal()); // FLAT-50 excluded, FLAT-100 remains
 
         // the change and the deactivation are audited and emitted
         var outbox = await GetAsync("/api/v1/outbox", Admin);

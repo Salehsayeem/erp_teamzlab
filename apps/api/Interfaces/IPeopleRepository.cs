@@ -28,7 +28,11 @@ public interface IPeopleRepository
     void AddPayGroup(PayGroup group);
     List<WorkerPayGroup> MembershipsFor(string employmentId);
     void AddMembership(WorkerPayGroup membership);
-    List<Employment> WorkersInGroup(string payGroupId);
+    // run population: memberships whose employment OVERLAPPED the period window — still-employed
+    // workers plus mid-period leavers (termination on/after period start keeps their earned pay)
+    List<Employment> WorkersInGroup(string payGroupId, DateOnly periodStart, DateOnly periodEnd);
+    void UpdatePayCode(EarningDeductionCode code, string? name, decimal? ratePct, string? calcBasis);
+    void SetPayCodeActive(EarningDeductionCode code, bool active);
 
     // time capture (026)
     void AddTimeEntry(TimeEntry entry);
