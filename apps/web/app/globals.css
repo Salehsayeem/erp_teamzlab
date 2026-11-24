@@ -24,7 +24,7 @@
   --accent: #5d87ff;
   --destructive: #ef4444;
   --border: #dfe5ef;
-  --input: #e5e7eb;
+  --input: #5a6a85;
   --ring: #5d87ff;
   --success: #13deb9;
   --warning: #f6b51e;
@@ -49,7 +49,7 @@ html.dark {
   --muted: #2a3851;
   --muted-foreground: #7c8fac;
   --border: #333f55;
-  --input: #333f55;
+  --input: #7c8fac;
   --sidebar: #1c2536;
   --sidebar-foreground: #7c8fac;
   --page: color-mix(in srgb, var(--background) 72%, #000);
