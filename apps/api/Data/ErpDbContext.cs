@@ -255,7 +255,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         mb.Entity<DepreciationRun>(e =>
         {
             e.ToTable("depreciation_runs");
-            e.HasKey(x => x.Id);
+            // composite PK (R-T4l): the run id is the client's Idempotency-Key — without the
+            // tenant/entity columns in the key, a second entity reusing "2026-11" hits 23505
+            e.HasKey(x => new { x.Id, x.TenantId, x.LegalEntityId });
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PeriodId });
             e.HasOne<Journal>().WithMany().HasForeignKey(x => x.JournalId).OnDelete(DeleteBehavior.Restrict);

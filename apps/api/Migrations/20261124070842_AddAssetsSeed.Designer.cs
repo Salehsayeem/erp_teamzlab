@@ -280,7 +280,7 @@ partial class _20261124070842_AddAssetsSeed
                     .HasColumnType("numeric")
                     .HasColumnName("total_amount");
 
-                b.HasKey("Id");
+                b.HasKey("Id", "TenantId", "LegalEntityId");
 
                 b.HasIndex("JournalId");
 

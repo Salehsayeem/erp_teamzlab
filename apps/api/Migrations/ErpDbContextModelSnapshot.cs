@@ -282,7 +282,7 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .HasColumnType("numeric")
                     .HasColumnName("total_amount");
 
-                b.HasKey("Id");
+                b.HasKey("Id", "TenantId", "LegalEntityId");
 
                 b.HasIndex("JournalId");
 

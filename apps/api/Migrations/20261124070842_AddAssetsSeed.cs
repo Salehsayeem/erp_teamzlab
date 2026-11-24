@@ -44,7 +44,7 @@ public partial class _20261124070842_AddAssetsSeed : Migration
             },
             constraints: table =>
             {
-                table.PrimaryKey("PK_depreciation_runs", x => x.id);
+                table.PrimaryKey("PK_depreciation_runs", x => new { x.id, x.tenant_id, x.legal_entity_id });
                 table.ForeignKey(
                     name: "FK_depreciation_runs_journals_journal_id",
                     column: x => x.journal_id,
