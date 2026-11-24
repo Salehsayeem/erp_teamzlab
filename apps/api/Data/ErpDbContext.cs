@@ -46,6 +46,13 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     public DbSet<StockTransfer> Transfers => Set<StockTransfer>();
     public DbSet<StockCount> Counts => Set<StockCount>();
     public DbSet<StockAdjustment> Adjustments => Set<StockAdjustment>();
+    public DbSet<BomRevision> BomRevisions => Set<BomRevision>();
+    public DbSet<BomLine> BomLines => Set<BomLine>();
+    public DbSet<ProductionOrder> ProductionOrders => Set<ProductionOrder>();
+    public DbSet<OrderAmendment> OrderAmendments => Set<OrderAmendment>();
+    public DbSet<MaterialIssue> MaterialIssues => Set<MaterialIssue>();
+    public DbSet<CompletionReport> CompletionReports => Set<CompletionReport>();
+    public DbSet<ScrapReport> ScrapReports => Set<ScrapReport>();
     public DbSet<Journal> Journals => Set<Journal>();
     public DbSet<FixedAsset> Assets => Set<FixedAsset>();
     public DbSet<AssetEvent> AssetEvents => Set<AssetEvent>();
@@ -69,6 +76,7 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         ConfigureProcurement(mb);
         ConfigureSales(mb);
         ConfigureInventory(mb);
+        ConfigureManufacturing(mb);
         ConfigureFinance(mb);
         ConfigureAssets(mb);
         ConfigureIdentity(mb);
@@ -525,6 +533,91 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         });
     }
 
+    // --- MFG deep (ERP-MFG-007/008/010/013/014/015/022/041/042/043/067/069) — tenant+entity
+    // scope on every table from day one (R14), every FK indexed (CLAUDE.md). production_orders
+    // carries a unique order_no per tenant/entity and status as a concurrency token (T7 review 1a:
+    // a stale second transition updates ZERO rows instead of double-posting). MFG tables reference
+    // bom_revisions twice (planned + released) — both nullable FKs, Restrict deletes.
+    private static void ConfigureManufacturing(ModelBuilder mb)
+    {
+        mb.Entity<BomRevision>(e =>
+        {
+            e.ToTable("bom_revisions");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OutputSku }); // effective-resolution scans
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OutputSku, x.Revision }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status }); // list w/ status filter
+        });
+
+        mb.Entity<BomLine>(e =>
+        {
+            e.ToTable("bom_lines");
+            e.HasKey(x => x.Id); // natural key {bomRevisionId}:{componentSku}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.BomRevisionId);
+            e.HasOne<BomRevision>().WithMany().HasForeignKey(x => x.BomRevisionId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ProductionOrder>(e =>
+        {
+            e.ToTable("production_orders");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OutputSku });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderNo }).IsUnique();
+            // status is a concurrency token — every guarded transition carries WHERE status = <original>
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasOne<BomRevision>().WithMany().HasForeignKey(x => x.PlannedBomRevisionId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<BomRevision>().WithMany().HasForeignKey(x => x.ReleasedBomRevisionId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<OrderAmendment>(e =>
+        {
+            e.ToTable("order_amendments");
+            e.HasKey(x => x.Id); // natural key {orderId}:v{n}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.OrderId);
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<MaterialIssue>(e =>
+        {
+            e.ToTable("material_issues");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ComponentSku }); // per-sku consumption scans
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.LinkedIssueId }); // returnable-qty lookups
+            e.HasIndex(x => x.JournalId);
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Journal>().WithMany().HasForeignKey(x => x.JournalId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<CompletionReport>(e =>
+        {
+            e.ToTable("completion_reports");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasIndex(x => x.JournalId);
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Journal>().WithMany().HasForeignKey(x => x.JournalId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ScrapReport>(e =>
+        {
+            e.ToTable("scrap_reports");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasIndex(x => x.JournalId);
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Journal>().WithMany().HasForeignKey(x => x.JournalId).OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
     private static void ConfigureFinance(ModelBuilder mb)
     {
         mb.Entity<Journal>(e =>
@@ -716,7 +809,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                      "lead", "int", "cc", "opp", "inv", "crd", "dbt", "rem", "dsp",
                      // task-6 procurement deep prefixes (brief R-T6 list) — ship with the code that
                      // calls them in AddProcurementDeepSeed, since NumberSeries.Next throws if missing
-                     "ev", "lot", "qa", "bid", "awd", "ctr", "amd", "obl" })
+                     "ev", "lot", "qa", "bid", "awd", "ctr", "amd", "obl",
+                     // MFG deep prefixes (BOM/MFO/ISS/CPL/SCR) — ship with AddManufacturingDeepSeed
+                     "bom", "mfo", "iss", "cpl", "scr" })
             mb.HasSequence<long>($"doc_{prefix}");
         mb.HasSequence<long>("doc_a", s => s.StartsAt(2));
     }
@@ -750,7 +845,12 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                     "invoices:read", "invoices:write", "collections:read", "collections:write" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-ASSETS", Name = "assets_officer", Permissions = new[] { "assets:read", "assets:write", "assets:approve", "projects:write", "projects:approve", "cases:write", "cases:read" }, TenantId = t, LegalEntityId = le },
             // task-6: independent evaluators (031 AC1) — read + score only, no buyer permissions
-            new { Id = "R-EVAL", Name = "evaluator", Permissions = new[] { "sourcing:read", "sourcing:evaluate" }, TenantId = t, LegalEntityId = le });
+            new { Id = "R-EVAL", Name = "evaluator", Permissions = new[] { "sourcing:read", "sourcing:evaluate" }, TenantId = t, LegalEntityId = le },
+            // MFG deep (R-MFG9): every MFG gate sits on R-MFG — approver ≠ actor on boms:approve,
+            // mfg:release and mfg:close; journals post service-side with the period guard only
+            new { Id = "R-MFG", Name = "manufacturing_officer",
+                Permissions = new[] { "boms:read", "boms:write", "boms:approve", "mfg:read", "mfg:write", "mfg:release", "mfg:override", "mfg:close", "mfg:reopen" },
+                TenantId = t, LegalEntityId = le });
 
         mb.Entity<User>().HasData(
             new { Id = "U-001", Email = "admin@teamzlab.dev", DisplayName = "Tenant Admin", Active = true, TenantId = t, LegalEntityId = le },
@@ -758,7 +858,8 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new { Id = "U-003", Email = "finance@teamzlab.dev", DisplayName = "Finance Officer", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-004", Email = "sales@teamzlab.dev", DisplayName = "Sales Officer", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-005", Email = "assets@teamzlab.dev", DisplayName = "Assets Officer", Active = true, TenantId = t, LegalEntityId = le },
-            new { Id = "U-006", Email = "evaluator@teamzlab.dev", DisplayName = "Independent Evaluator", Active = true, TenantId = t, LegalEntityId = le });
+            new { Id = "U-006", Email = "evaluator@teamzlab.dev", DisplayName = "Independent Evaluator", Active = true, TenantId = t, LegalEntityId = le },
+            new { Id = "U-008", Email = "mfg@teamzlab.dev", DisplayName = "Manufacturing Officer", Active = true, TenantId = t, LegalEntityId = le });
 
         mb.Entity<Membership>().HasData(
             new Membership("U-001", t, le, "R-ADMIN"),
@@ -766,7 +867,8 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new Membership("U-003", t, le, "R-FIN"),
             new Membership("U-004", t, le, "R-SALES"),
             new Membership("U-005", t, le, "R-ASSETS"),
-            new Membership("U-006", t, le, "R-EVAL"));
+            new Membership("U-006", t, le, "R-EVAL"),
+            new Membership("U-008", t, le, "R-MFG"));
 
         mb.Entity<AuditEvent>().HasData(new
         {

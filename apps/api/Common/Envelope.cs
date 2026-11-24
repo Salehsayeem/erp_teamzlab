@@ -12,5 +12,14 @@ public static class Envelope
     // payload forms for Idem.Wrap (serialized once, stored, replayed verbatim)
     public static object OkBody<T>(T data) => new { success = true, data };
     public static object FailBody(string code, string message) => new { success = false, error = new { code, message } };
+
+    // gate rejections (010/013) carry the machine-readable failure list INSIDE the error object:
+    // the release gate names its failed prerequisites, the close gate names each unreconciled item
+    public static object FailBodyPrerequisites(string code, string message, object[] prerequisites) =>
+        new { success = false, error = new { code, message, prerequisites } };
+
+    public static object FailBodyItems(string code, string message, object[] items) =>
+        new { success = false, error = new { code, message, items } };
+
     public static IResult From(object body, int status) => Results.Json(body, statusCode: status);
 }
