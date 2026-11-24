@@ -18,6 +18,18 @@ const NAV = [
     ],
   },
   {
+    heading: "Sales",
+    items: [
+      { href: "sales/leads", label: "Leads" },
+      { href: "sales/crm", label: "CRM" },
+      { href: "sales/opportunities", label: "Opportunities" },
+      { href: "sales/orders", label: "Sales orders" },
+      { href: "sales/invoices", label: "Invoices" },
+      { href: "sales/collections", label: "Collections" },
+      { href: "sales/customers", label: "Customers" },
+    ],
+  },
+  {
     heading: "Inventory",
     items: [
       { href: "inventory", label: "Stock" },
