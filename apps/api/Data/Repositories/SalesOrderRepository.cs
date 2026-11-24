@@ -53,11 +53,15 @@ public sealed class SalesOrderRepository(ErpDbContext db, EntityContext ec) : IS
 
     public Dictionary<string, decimal> ShippedBySku(string soId)
     {
-        var sums = db.Shipments.Where(sh => sh.TenantId == ec.TenantId && sh.LegalEntityId == ec.EntityId && sh.SalesOrderId == soId)
-            .GroupBy(sh => sh.ItemSku).ToDictionary(g => g.Key, g => g.Sum(x => x.Qty));
-        // shipments added earlier in this request are tracked but unsaved — include them too
+        var rows = db.Shipments.Where(sh => sh.TenantId == ec.TenantId && sh.LegalEntityId == ec.EntityId && sh.SalesOrderId == soId)
+            .Select(sh => new { sh.Id, sh.ItemSku, sh.Qty }).ToList();
+        var sums = rows.GroupBy(sh => sh.ItemSku).ToDictionary(g => g.Key, g => g.Sum(x => x.Qty));
+        // same hazard as ReceivedBySku: the query materializes committed shipments into .Local —
+        // merge only rows it did not already return or later shipments flip the SO Shipped early
+        var seen = rows.Select(sh => sh.Id).ToHashSet();
         foreach (var sh in db.Shipments.Local.Where(sh => sh.TenantId == ec.TenantId && sh.LegalEntityId == ec.EntityId && sh.SalesOrderId == soId))
-            sums[sh.ItemSku] = sums.GetValueOrDefault(sh.ItemSku) + sh.Qty;
+            if (seen.Add(sh.Id))
+                sums[sh.ItemSku] = sums.GetValueOrDefault(sh.ItemSku) + sh.Qty;
         return sums;
     }
 

@@ -125,6 +125,76 @@ public class ReviewFixTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Created, (await PostAsync("/api/v1/receipts", new { purchaseOrderId = poId, itemSku = "OVR-1", qty = 4m }, proc)).StatusCode);
     }
 
+    // T3 finding: ReceivedBySku/ShippedBySku merge db.Receipts.Local on top of a query whose own
+    // rows are tracked entities — committed receipts land in .Local via materialization and are
+    // counted AGAIN, so a later receipt request can flip the PO to Received before it is actually
+    // fully received (which then state-blocks receiving the remainder forever).
+    [Fact]
+    public async Task Keyed_partial_receipt_keeps_po_Approved_until_fully_received()
+    {
+        var proc = "U-002"; var admin = "U-001";
+        var (poId, _) = await SeedApprovedPo("KPO-1", 10m, 2.00m);
+
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync("/api/v1/receipts",
+            new { purchaseOrderId = poId, itemSku = "KPO-1", qty = 3m }, proc, $"idem-kpo1a-{Guid.NewGuid():N}")).StatusCode);
+        // real total 9 of 10 — but the double-count computes 3 (query) + 3 (local dup) + 6 = 12
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync("/api/v1/receipts",
+            new { purchaseOrderId = poId, itemSku = "KPO-1", qty = 6m }, proc, $"idem-kpo1b-{Guid.NewGuid():N}")).StatusCode);
+
+        var list = await GetAsync("/api/v1/purchase-orders", admin);
+        var po = list.GetProperty("data").EnumerateArray()
+            .First(p => p.GetProperty("id").GetString() == poId);
+        Assert.Equal("Approved", po.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Keyed_receipts_can_complete_the_order_across_requests()
+    {
+        var proc = "U-002"; var admin = "U-001";
+        var (poId, _) = await SeedApprovedPo("KPO-2", 20m, 2.00m);
+
+        // 10 of 20 — the premature flip (Received) state-blocked the remaining half forever
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync("/api/v1/receipts",
+            new { purchaseOrderId = poId, itemSku = "KPO-2", qty = 10m }, proc, $"idem-kpo2a-{Guid.NewGuid():N}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync("/api/v1/receipts",
+            new { purchaseOrderId = poId, itemSku = "KPO-2", qty = 10m }, proc, $"idem-kpo2b-{Guid.NewGuid():N}")).StatusCode);
+
+        var list = await GetAsync("/api/v1/purchase-orders", admin);
+        var po = list.GetProperty("data").EnumerateArray()
+            .First(p => p.GetProperty("id").GetString() == poId);
+        Assert.Equal("Received", po.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Partial_shipments_do_not_mark_so_Shipped_early()
+    {
+        var proc = "U-002"; var sales = "U-004"; var admin = "U-001";
+        var (poId, _) = await SeedApprovedPo("KSO-1", 10m, 2.00m);
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync("/api/v1/receipts",
+            new { purchaseOrderId = poId, itemSku = "KSO-1", qty = 10m }, proc, $"idem-kso1-{Guid.NewGuid():N}")).StatusCode);
+
+        var res = await PostAsync("/api/v1/customers", new { name = "Ship Co", taxId = "TRX-KSO1", email = "ship@cust.test" }, sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var customerId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        res = await PostAsync("/api/v1/sales-orders", new
+        {
+            customerId,
+            lines = new[] { new { itemSku = "KSO-1", description = "Item", qty = 10m, unitPrice = 3.00m } },
+        }, sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var soId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/sales-orders/{soId}/submit", new { }, sales)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/sales-orders/{soId}/approvals", new { reason = (string?)null }, admin)).StatusCode);
+
+        // 8 of 10 shipped — the double-count computes 4 (query) + 4 (local dup) + 4 = 12 >= 10
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = "KSO-1", qty = 4m }, sales)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = "KSO-1", qty = 4m }, sales)).StatusCode);
+
+        var list = await GetAsync("/api/v1/sales-orders", admin);
+        var so = list.GetProperty("data").EnumerateArray().First(s => s.GetProperty("id").GetString() == soId);
+        Assert.Equal("Confirmed", so.GetProperty("status").GetString());
+    }
+
     [Fact]
     public async Task Idempotency_key_replays_receipt_without_second_write()
     {

@@ -55,12 +55,17 @@ public sealed class PurchaseOrderRepository(ErpDbContext db, EntityContext ec) :
 
     public Dictionary<string, decimal> ReceivedBySku(string poId)
     {
-        var sums = ReceiptsScoped().Where(r => r.PurchaseOrderId == poId)
-            .GroupBy(r => r.ItemSku).ToDictionary(g => g.Key, g => g.Sum(x => x.Qty));
-        // receipts added earlier in this request are tracked but unsaved — include them like the
-        // in-memory list did
+        var rows = ReceiptsScoped().Where(r => r.PurchaseOrderId == poId)
+            .Select(r => new { r.Id, r.ItemSku, r.Qty }).ToList();
+        var sums = rows.GroupBy(r => r.ItemSku).ToDictionary(g => g.Key, g => g.Sum(x => x.Qty));
+        // receipts added earlier in this request are tracked locally, and the query above
+        // MATERIALIZES committed receipts as tracked entities too — they reappear in .Local.
+        // Merge only rows the query did not already return, or every later receipt request
+        // double-counts committed receipts and flips the PO Received before it is full (T3).
+        var seen = rows.Select(r => r.Id).ToHashSet();
         foreach (var r in db.Receipts.Local.Where(r => r.TenantId == ec.TenantId && r.LegalEntityId == ec.EntityId && r.PurchaseOrderId == poId))
-            sums[r.ItemSku] = sums.GetValueOrDefault(r.ItemSku) + r.Qty;
+            if (seen.Add(r.Id))
+                sums[r.ItemSku] = sums.GetValueOrDefault(r.ItemSku) + r.Qty;
         return sums;
     }
 
