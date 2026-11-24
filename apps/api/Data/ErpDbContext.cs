@@ -533,6 +533,12 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
             e.HasIndex(x => x.ReversalOfId);
+            // money-hardening (same family as invoices/sales_adjustments review 1a): status is a
+            // concurrency token — every journal UPDATE carries WHERE status = <original>, so a
+            // stale second approval of one Pending journal updates ZERO rows and
+            // DbUpdateConcurrencyException surfaces as 409 JOURNAL_ALREADY_POSTED (no duplicate
+            // control lines, no double approval trail)
+            e.Property(x => x.Status).IsConcurrencyToken();
             e.HasOne<Journal>().WithMany().HasForeignKey(x => x.ReversalOfId).OnDelete(DeleteBehavior.Restrict);
             e.OwnsMany(x => x.Lines, l =>
             {

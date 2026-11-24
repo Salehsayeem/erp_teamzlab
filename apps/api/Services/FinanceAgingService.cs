@@ -5,11 +5,14 @@ namespace Erp.Api.Services;
 
 // AR aging (FINANCE-031; R9a: no payables aging — no spec card mandates it). Open AR = debit lines
 // on the AR control account across posted journals, less allocations (net credit journals) applied
-// FIFO oldest-invoice-first. Bucket boundaries and credit terms come from the finance_settings row
-// seeded per ruling R9b — never code constants. basis=due ages by due date (invoice + terms);
-// basis=invoice ages by the invoice date itself.
+// FIFO oldest-invoice-first. Bucket boundaries come from the finance_settings row seeded per
+// ruling R9b — never code constants. basis=due ages by due date; basis=invoice ages by the invoice
+// date itself. R-T7j follow-up: invoice-backed journals age by the invoice's FROZEN DueDate
+// (053 AC2) so the aging surface agrees with the T7 collections worklist for every payment term;
+// journal-only AR entries (no invoice document exists) keep the R9b terms-derived date.
 public sealed class FinanceAgingService(
-    IJournalRepository journals, ISalesOrderRepository orders, IFinanceSettingRepository settings) : IFinanceAgingService
+    IJournalRepository journals, ISalesOrderRepository orders, IFinanceSettingRepository settings,
+    IInvoiceRepository invoices) : IFinanceAgingService
 {
     private const string ArAccount = "1200";
     private const string SettingsKey = "aging";
@@ -33,8 +36,9 @@ public sealed class FinanceAgingService(
             return (null, "FINANCE_SETTINGS_MISSING", $"Finance setting '{SettingsKey}' has no bucket boundaries configured.");
         var dueBasis = !basis.Equals("invoice", StringComparison.OrdinalIgnoreCase);
 
+        var frozenDue = FrozenDueDates();
         var entries = OpenItems()
-            .Select(r => Entry(r.Journal, r.Remaining, asOf, cfg.CreditTermsDays, dueBasis))
+            .Select(r => Entry(r.Journal, r.Remaining, asOf, cfg.CreditTermsDays, dueBasis, frozenDue))
             .OrderBy(e => e.DueDate)
             .ToList();
 
@@ -90,14 +94,27 @@ public sealed class FinanceAgingService(
         return rows.Where(r => r.Remaining > 0).ToList();
     }
 
-    private AgingEntry Entry(Journal j, decimal amount, DateOnly asOf, int termsDays, bool dueBasis)
+    // R-T7j follow-up: an invoice document ages by its FROZEN DueDate (053 AC2 — resolved from
+    // the customer's payment term at posting, never recomputed), so a NET60 invoice buckets on
+    // its real terms instead of the global credit-terms setting. Every invoice posted through
+    // InvoiceService carries a non-null frozen DueDate; journal-only AR entries (manual journals,
+    // receipts, depreciation — no invoice document exists) fall back to EffectiveDate + terms.
+    private AgingEntry Entry(Journal j, decimal amount, DateOnly asOf, int termsDays, bool dueBasis,
+        IReadOnlyDictionary<string, DateOnly> frozenDue)
     {
         var invoiceDate = j.EffectiveDate;
-        var dueDate = invoiceDate.AddDays(termsDays);
+        var dueDate = frozenDue.TryGetValue(j.Id, out var frozen) ? frozen : invoiceDate.AddDays(termsDays);
         var anchor = dueBasis ? dueDate : invoiceDate;
         return new AgingEntry(j, decimal.Round(amount, 2, MidpointRounding.AwayFromZero),
             invoiceDate, dueDate, asOf.DayNumber - anchor.DayNumber, CustomerFor(j));
     }
+
+    // journal id → frozen due date, from the posted invoice documents
+    private Dictionary<string, DateOnly> FrozenDueDates() =>
+        invoices.AllInvoices(InvoiceStatus.Posted, null)
+            .Where(i => i.JournalId is not null && i.DueDate is not null)
+            .GroupBy(i => i.JournalId!)
+            .ToDictionary(g => g.Key, g => g.First().DueDate!.Value);
 
     private static List<BucketView> BuildBuckets(int[] boundaries, List<AgingEntry> entries)
     {
