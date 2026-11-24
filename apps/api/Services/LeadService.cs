@@ -30,10 +30,12 @@ public sealed class LeadService(
 
     public (Lead? lead, string? code, string? message) Create(CurrentUser user, Dtos.CreateLeadRequest request)
     {
-        // 003 AC1: the server records the receipt time — client-supplied timestamps are ignored
+        // 003 AC1: the server records the receipt time — client-supplied timestamps are ignored.
+        // review 7a: a blank tax id is absent — normalized to null so duplicate matching skips it
         var lead = new Lead(numbers.Next("LEAD"), ec.TenantId, ec.EntityId, request.Company, request.ContactName,
             request.Email, request.Phone, request.Source, request.SourceRef, LeadStatus.New, null, user.Id,
-            DateTimeOffset.UtcNow, user.Id, DateTimeOffset.UtcNow, request.TaxId);
+            DateTimeOffset.UtcNow, user.Id, DateTimeOffset.UtcNow,
+            string.IsNullOrWhiteSpace(request.TaxId) ? null : request.TaxId.Trim());
         leads.Add(lead);
         audit.Log(user, "create", "lead", lead.Id,
             $"Lead captured via {request.Source} for '{request.Company ?? request.ContactName ?? "anonymous inquiry"}'");
@@ -66,12 +68,14 @@ public sealed class LeadService(
         if (lead.Status != LeadStatus.Qualified)
             return (null, "LEAD_CONVERSION_ERROR", $"Only qualified leads can be converted (current: {lead.Status}).");
 
-        if (lead.TaxId is not null && customers.FindByNormalizedTaxId(lead.TaxId) is { } candidate)
+        // review 7a: blank = absent — no duplicate lookup, no empty-string tax id on the customer
+        var leadTaxId = string.IsNullOrWhiteSpace(lead.TaxId) ? null : lead.TaxId.Trim();
+        if (leadTaxId is not null && customers.FindByNormalizedTaxId(leadTaxId) is { } candidate)
             return (null, "CUSTOMER_DUPLICATE",
                 $"A customer with this tax id already exists ({candidate.Id}, '{candidate.Name}'); merge manually — conversion never auto-merges.");
 
         var name = lead.Company ?? lead.ContactName ?? $"Lead {lead.Id}";
-        var customer = new Customer(numbers.Next("CUS"), ec.TenantId, ec.EntityId, name, lead.TaxId ?? "",
+        var customer = new Customer(numbers.Next("CUS"), ec.TenantId, ec.EntityId, name, leadTaxId ?? "",
             lead.Email ?? "", DateTimeOffset.UtcNow, user.Id);
         customers.Add(customer);
 

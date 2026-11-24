@@ -12,9 +12,12 @@ public sealed class CustomersController(ICustomerService customers, ICollectionS
     public IResult List() => Envelope.Ok<object>(customers.List());
 
     [HttpPost]
-    public IResult Create(CreateCustomerRequest request) => Idem.Wrap(HttpContext, () =>
+    public IResult Create(CreateCustomerRequest request) => Idem.Wrap(HttpContext, request, () =>
     {
-        var err = Guards.Check(request.Name, "Name") ?? Guards.Check(request.TaxId, "TaxId") ?? Guards.CheckEmail(request.Email);
+        // review 7b: the extension fields are guarded when supplied (absent stays defaulted)
+        var err = Guards.Check(request.Name, "Name") ?? Guards.Check(request.TaxId, "TaxId") ?? Guards.CheckEmail(request.Email)
+            ?? (request.CreditLimit is < 0 ? "CreditLimit must be >= 0." : null)
+            ?? (request.PaymentTermNetDays is < 1 ? "PaymentTermNetDays must be >= 1." : null);
         if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
         var u = CurrentUser.From(HttpContext);
         if (!u.Has("customers:write")) return (Envelope.FailBody("FORBIDDEN", "customers:write permission required."), 403);

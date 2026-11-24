@@ -41,7 +41,7 @@ public static class Idem
         var scope = services.GetRequiredService<EntityContext>();
         var store = services.GetRequiredService<IIdempotencyStore>();
         var db = services.GetRequiredService<ErpDbContext>();
-        var hash = HashOf(payload);
+        var hash = HashOf(ctx, payload);
         if (store.TryGet(scope.TenantId, scope.EntityId, key) is { } stored)
             return Conflicts(stored.RequestHash, hash)
                 ? ConflictResult()
@@ -83,10 +83,17 @@ public static class Idem
         Results.Json(Envelope.FailBody("IDEMPOTENCY_CONFLICT",
             "This Idempotency-Key was already used with a different request payload."), statusCode: 409);
 
-    private static string? HashOf(object? payload)
+    // review 4a (fix round 1): the hash covers ROUTE + METHOD, not just the payload — empty-body
+    // POSTs to two different resources (e.g. /invoices/{a}/postings vs /invoices/{b}/postings)
+    // would otherwise hash identically and a reused key would replay the WRONG document's
+    // response. Note: rows stored before this change keep their old hashes — retrying one of
+    // those keys now returns 409 IDEMPOTENCY_CONFLICT instead of a replay (accepted for the
+    // pilot; stored rows live only in throwaway test databases).
+    private static string? HashOf(HttpContext ctx, object? payload)
     {
         if (payload is null) return null;
         var json = System.Text.Json.JsonSerializer.Serialize(payload, Opts);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(json)));
+        var material = $"{ctx.Request.Method} {ctx.Request.Path.Value}{json}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 }

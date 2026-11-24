@@ -23,9 +23,10 @@ public sealed class InvoiceRepository(ErpDbContext db, EntityContext ec) : IInvo
             .Where(i => customerId == null || i.CustomerId == customerId)
             .Include(i => i.Lines).OrderBy(i => i.Id).ToList();
 
-    // 042 AC2: one draft per shipment source event — the unique index backs the service check up
+    // 042 AC2: one live invoice per shipment source event — the partial unique index backs the
+    // service check up under concurrency. DISCARDED drafts release their source event (1b).
     public Invoice? FindBySourceEvent(string sourceEventId) =>
-        InvoiceScope().FirstOrDefault(i => i.SourceEventId == sourceEventId);
+        InvoiceScope().FirstOrDefault(i => i.SourceEventId == sourceEventId && i.Status != InvoiceStatus.Discarded);
 
     public void AddInvoice(Invoice invoice)
     {
@@ -48,6 +49,8 @@ public sealed class InvoiceRepository(ErpDbContext db, EntityContext ec) : IInvo
 
     public void MarkInvoicePosted(Invoice invoice, string journalId, string postedBy, DateOnly dueDate, decimal taxTotal, decimal total)
     {
+        // Status is a concurrency token (review 1a): the UPDATE carries WHERE status =
+        // <original>, so a stale concurrent poster updates zero rows and SaveChanges throws
         db.Entry(invoice).Property(nameof(Invoice.Status)).CurrentValue = InvoiceStatus.Posted;
         db.Entry(invoice).Property(nameof(Invoice.JournalId)).CurrentValue = journalId;
         db.Entry(invoice).Property(nameof(Invoice.PostedBy)).CurrentValue = postedBy;
@@ -56,6 +59,10 @@ public sealed class InvoiceRepository(ErpDbContext db, EntityContext ec) : IInvo
         db.Entry(invoice).Property(nameof(Invoice.TaxTotal)).CurrentValue = taxTotal;
         db.Entry(invoice).Property(nameof(Invoice.Total)).CurrentValue = total;
     }
+
+    // review 1b: terminal — frees the source event (partial index + FindBySourceEvent skip it)
+    public void MarkInvoiceDiscarded(Invoice invoice) =>
+        db.Entry(invoice).Property(nameof(Invoice.Status)).CurrentValue = InvoiceStatus.Discarded;
 
     public List<AdjustmentDocument> AdjustmentsForInvoice(string invoiceId) =>
         AdjustmentScope().Where(a => a.InvoiceId == invoiceId)

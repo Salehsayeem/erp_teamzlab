@@ -1,4 +1,5 @@
 using Erp.Api.Data;
+using Microsoft.EntityFrameworkCore;
 using Erp.Api.Interfaces;
 
 namespace Erp.Api.Services;
@@ -56,6 +57,16 @@ public sealed class SalesOrderService(
             return (so, null, null);
         }
 
+        // review 2a: the exposure check and the approval commit are serialized per customer —
+        // SELECT … FOR UPDATE on the customer row inside the approval transaction means a
+        // concurrent approval for the same customer waits, then re-reads fresh balances.
+        // Without this, two officers approving together could both pass the limit check
+        // against committed state and both confirm. When Idem.Wrap already opened the request
+        // transaction, we join it instead of nesting a second one.
+        var ownsTx = db.Database.CurrentTransaction is null;
+        using var tx = ownsTx ? db.Database.BeginTransaction() : null;
+        LockCustomerForExposure(so.CustomerId);
+
         var (overLimit, exposure) = ExposureIfApproved(so);
         if (overLimit)
         {
@@ -63,6 +74,7 @@ public sealed class SalesOrderService(
             audit.Log(approver, "credit_hold", "sales_order", so.Id,
                 $"SO approved but held: exposure {exposure:0.00} exceeds the customer credit limit");
             orders.Save();
+            if (ownsTx) tx!.Commit();
             return (so, null, null);
         }
 
@@ -70,6 +82,7 @@ public sealed class SalesOrderService(
         audit.Log(approver, "approve", "sales_order", so.Id, $"SO approved by {approver.Email}");
         audit.Emit(approver, "sales.so.approved", new { soId = so.Id, approver = approver.Id });
         orders.Save();
+        if (ownsTx) tx!.Commit();
         return (so, null, null);
     }
 
@@ -146,4 +159,11 @@ public sealed class SalesOrderService(
     internal decimal OpenInvoiced(string customerId) =>
         invoiceDocs.AllInvoices(InvoiceStatus.Posted, customerId)
             .Sum(i => CreditMath.InvoiceOpen(i, invoiceDocs.AdjustmentsForInvoice(i.Id)));
+
+    // review 2a: parameterized row lock — the caller's transaction holds it until commit, so
+    // exposure computation and commit are serialized per customer (pair with ExposureIfApproved)
+    private void LockCustomerForExposure(string customerId) =>
+        db.Customers
+            .FromSql($"SELECT * FROM customers WHERE id = {customerId} AND tenant_id = {ec.TenantId} AND legal_entity_id = {ec.EntityId} FOR UPDATE")
+            .ToList();
 }
