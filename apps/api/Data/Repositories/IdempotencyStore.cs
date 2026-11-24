@@ -6,18 +6,17 @@ namespace Erp.Api.Data.Repositories;
 
 // Task-2 §7 + review C1: reservation and completion run inside the caller's transaction, so the
 // idempotency row commits atomically WITH the business write — no second-SaveChanges crash window.
+// Task-5 (011 AC2): the row also carries the request payload hash so a reused key with a different
+// payload can be detected at replay time.
 public sealed class IdempotencyStore(ErpDbContext db) : IIdempotencyStore
 {
-    public (int Status, string Body)? TryGet(string tenantId, string entityId, string key)
-    {
-        var hit = db.Idempotency.Find(tenantId, entityId, key); // PK is (tenant_id, legal_entity_id, key)
-        return hit is null ? null : (hit.Status, hit.Body);
-    }
+    public IdempotencyRecord? TryGet(string tenantId, string entityId, string key) =>
+        db.Idempotency.Find(tenantId, entityId, key); // PK is (tenant_id, legal_entity_id, key)
 
-    public void Reserve(string tenantId, string entityId, string key)
+    public void Reserve(string tenantId, string entityId, string key, string? requestHash = null)
     {
         // status 0 / empty body = pending; always replaced by Complete before the tx commits
-        db.Idempotency.Add(new IdempotencyRecord(tenantId, entityId, key, 0, string.Empty, DateTimeOffset.UtcNow));
+        db.Idempotency.Add(new IdempotencyRecord(tenantId, entityId, key, 0, string.Empty, DateTimeOffset.UtcNow, requestHash));
         try { db.SaveChanges(); }
         catch (DbUpdateException ex) when (ex.InnerException is NpgsqlException { SqlState: "23505" })
         {
@@ -27,11 +26,11 @@ public sealed class IdempotencyStore(ErpDbContext db) : IIdempotencyStore
         }
     }
 
-    public void Complete(string tenantId, string entityId, string key, int status, string body)
+    public void Complete(string tenantId, string entityId, string key, int status, string body, string? requestHash = null)
     {
         var pending = db.Idempotency.Find(tenantId, entityId, key);
         if (pending is not null) db.Idempotency.Remove(pending);
-        db.Idempotency.Add(new IdempotencyRecord(tenantId, entityId, key, status, body, DateTimeOffset.UtcNow));
+        db.Idempotency.Add(new IdempotencyRecord(tenantId, entityId, key, status, body, DateTimeOffset.UtcNow, requestHash));
         db.SaveChanges(); // EF batches the same-PK delete before the insert
     }
 }
