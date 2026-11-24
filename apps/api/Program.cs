@@ -24,8 +24,14 @@ builder.Services.AddControllers(o => o.SuppressImplicitRequiredAttributeForNonNu
     .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 // Strict CORS (CLAUDE.md security rules): only listed browser origins may call the API.
 // Default covers the dev frontend; override with the CorsOrigins env var (comma-separated).
-var corsOrigins = (builder.Configuration["CorsOrigins"] ?? "http://localhost:3000")
-    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+// Null OR set-but-empty/whitespace both fall back to the default (CorsOrigins= in .env must not
+// silently block every browser call), and trailing slashes are trimmed because Origin headers
+// never carry one (fetch spec).
+var corsConfig = builder.Configuration["CorsOrigins"];
+var corsOrigins = (string.IsNullOrWhiteSpace(corsConfig) ? "http://localhost:3000" : corsConfig)
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    .Select(o => o.TrimEnd('/'))
+    .ToArray();
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
     .WithOrigins(corsOrigins)
     .AllowAnyHeader()
