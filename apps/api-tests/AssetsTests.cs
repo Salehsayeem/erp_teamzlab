@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Npgsql;
 using Xunit;
 
 // ASSETS slice (ERP-ASSETS-001/002/003/019/023/024/026/037/041/043/044/046/047/048/051/053/055/056):
@@ -177,7 +178,7 @@ public class AssetsTests : IClassFixture<TestApiFactory>
         var key = "DEP-RUN-T4";
 
         var journalsBefore = (await GetAsync("/api/v1/journals", Checker)).GetProperty("data").GetArrayLength();
-        var res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2026-11" }, Checker, key);
+        var res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2026-11-T4" }, Checker, key);
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         var first = (await Json(res)).GetProperty("data");
         Assert.Equal(key, first.GetProperty("id").GetString()); // Idempotency-Key IS the run id (048 AC1)
@@ -194,7 +195,7 @@ public class AssetsTests : IClassFixture<TestApiFactory>
         Assert.Equal(journalsBefore + 1, journalsAfterRun);
 
         // same key → replayed response, one journal total (048 AC1)
-        res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2026-11" }, Checker, key);
+        res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2026-11-T4" }, Checker, key);
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         var replay = (await Json(res)).GetProperty("data");
         Assert.Equal(key, replay.GetProperty("id").GetString());
@@ -235,7 +236,7 @@ public class AssetsTests : IClassFixture<TestApiFactory>
 
         // one month of straight-line depreciation first (10.00 each) so the disposal carries
         // accumulated depreciation — the representative at-loss case
-        var res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2026-11" }, Checker, "DEP-RUN-T6-PRE");
+        var res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2026-11-T6" }, Checker, "DEP-RUN-T6-PRE");
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
 
         // dispose asset1 with proceeds 100 → carrying 590, loss 490 (055 AC2 preview + 056 handoff)
@@ -266,7 +267,7 @@ public class AssetsTests : IClassFixture<TestApiFactory>
             l => l.GetProperty("accountCode").GetString() == "6100");
 
         // disposal is terminal and stops depreciation: a run now excludes the disposed asset
-        res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2026-12" }, Checker, "DEP-RUN-T6");
+        res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2026-12-T6" }, Checker, "DEP-RUN-T6");
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         var run = (await Json(res)).GetProperty("data");
         var lines = run.GetProperty("lines").EnumerateArray().ToList();
@@ -330,8 +331,8 @@ public class AssetsTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
         var caseId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
 
-        // Open → Resolved skips triage (024 AC1)
-        res = await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "Resolved", reason = (string?)null }, Writer);
+        // Open → Resolved skips triage even with a resolution code (024 AC1)
+        res = await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "Resolved", reason = (string?)null, resolutionCode = "PARTS_REPLACED" }, Writer);
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         Assert.Equal("CASE_TRANSITION_ERROR", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
 
@@ -340,7 +341,7 @@ public class AssetsTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Conflict, (await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "Closed", reason = (string?)null }, Writer)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "Waiting", reason = "Waiting for parts" }, Writer)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "InProgress", reason = (string?)null }, Writer)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "Resolved", reason = (string?)null }, Writer)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "Resolved", reason = (string?)null, resolutionCode = "PARTS_REPLACED" }, Writer)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "Open", reason = "Reopened by customer" }, Writer)).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, (await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "Closed", reason = (string?)null }, Writer)).StatusCode); // Open → Closed illegal
     }
@@ -425,7 +426,8 @@ public class AssetsTests : IClassFixture<TestApiFactory>
         Assert.Equal(450m, preview.GetProperty("resultingAmount").GetDecimal());
         var eventId = proposed.GetProperty("data").GetProperty("event").GetProperty("id").GetString()!;
 
-        // maker-checker, then journal Dr 6600 / Cr 1600
+        // maker-checker, then journal Dr 6600 / Cr 1500 (R-T4k: crediting accumulated
+        // depreciation lets the disposal write-off cancel exactly — Cr 1600 would strand the loss)
         res = await PostAsync($"/api/v1/assets/{assetId}/impairments/{eventId}/approvals", new { }, Writer);
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         Assert.Equal("APPROVAL_MAKER_CHECKER", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
@@ -437,7 +439,7 @@ public class AssetsTests : IClassFixture<TestApiFactory>
         var jrn = journals.GetProperty("data").EnumerateArray()
             .First(j => j.GetProperty("memo").GetString()!.Contains(eventId, StringComparison.Ordinal));
         Assert.Equal(150m, SumLines(jrn, "debit", "6600"));
-        Assert.Equal(150m, SumLines(jrn, "credit", "1600"));
+        Assert.Equal(150m, SumLines(jrn, "credit", "1500"));
         Assert.Equal(450m, AssetRow(await GetAsync("/api/v1/assets", Checker), assetId).GetProperty("bookValue").GetDecimal());
 
         var outbox = await GetAsync("/api/v1/outbox", Checker);
@@ -469,5 +471,98 @@ public class AssetsTests : IClassFixture<TestApiFactory>
         { toLocationId = "LOC-B1", effectiveAt = "2026-11-24T11:00:00+00:00" }, Writer);
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
         Assert.Equal("VALIDATION_ERROR", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    // Fix round 1 — finding 2: approvals re-enforce the propose-time state guards
+    [Fact]
+    public async Task Impairment_Approval_After_Disposal_Rejected_With_ASSET_STATE_ERROR()
+    {
+        var assetId = await SeedActiveAsset("IMPD-T14", 600m);
+
+        // both proposals pending: impairment then disposal on the same asset
+        var res = await PostAsync($"/api/v1/assets/{assetId}/impairments", new { amount = 100m, reason = "Damage" }, Writer);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var impairEventId = (await Json(res)).GetProperty("data").GetProperty("event").GetProperty("id").GetString()!;
+        res = await PostAsync($"/api/v1/assets/{assetId}/disposals", new { proceeds = 50m, reason = "Scrapped" }, Writer);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var disposeEventId = (await Json(res)).GetProperty("data").GetProperty("event").GetProperty("id").GetString()!;
+
+        // disposal approved first → the asset is Disposed
+        res = await PostAsync($"/api/v1/assets/{assetId}/disposals/{disposeEventId}/approvals", new { }, Checker);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+
+        // the stale impairment approval must NOT post against a disposed asset
+        var journalsBefore = (await GetAsync("/api/v1/journals", Checker)).GetProperty("data").GetArrayLength();
+        res = await PostAsync($"/api/v1/assets/{assetId}/impairments/{impairEventId}/approvals", new { }, Checker);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("ASSET_STATE_ERROR", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(journalsBefore, (await GetAsync("/api/v1/journals", Checker)).GetProperty("data").GetArrayLength());
+    }
+
+    // Fix round 1 — finding 3 (R-T4l): run ids are entity-scoped, so the table PK is composite —
+    // two legal entities may reuse the same run key without a PK collision
+    [Fact]
+    public async Task Depreciation_Runs_Table_Has_Composite_Entity_Scoped_PK()
+    {
+        // cheapest honest proof: the harness cannot switch legal entity per request (every seeded
+        // membership is LE-001, no entity-creation API exists), so assert the composite PK
+        // directly on this class's throwaway test database via raw Npgsql
+        await using var conn = new NpgsqlConnection(_factory.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "select pg_get_constraintdef(oid) from pg_constraint where conrelid = 'depreciation_runs'::regclass and contype = 'p'", conn);
+        var def = (string?)(await cmd.ExecuteScalarAsync()) ?? "";
+        Assert.Contains("id", def);
+        Assert.Contains("tenant_id", def);
+        Assert.Contains("legal_entity_id", def);
+    }
+
+    // Fix round 1 — finding 4: one period cannot be posted twice, no matter the run key
+    [Fact]
+    public async Task Depreciation_Run_Same_Period_Twice_Rejected_With_DEPRECIATION_PERIOD_ALREADY_POSTED()
+    {
+        var assetId = await SeedActiveAsset("DEP-T15", 600m);
+        var res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2026-11-F4" }, Checker, "DEP-RUN-F4-A");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+
+        var journalsAfterFirst = (await GetAsync("/api/v1/journals", Checker)).GetProperty("data").GetArrayLength();
+        var accumAfterFirst = AssetRow(await GetAsync("/api/v1/assets", Checker), assetId)
+            .GetProperty("accumulatedDepreciation").GetDecimal();
+
+        // same period, different key → rejected before any write
+        res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2026-11-F4" }, Checker, "DEP-RUN-F4-B");
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        var body = await Json(res);
+        Assert.Equal("DEPRECIATION_PERIOD_ALREADY_POSTED", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Contains("2026-11-F4", body.GetProperty("error").GetProperty("message").GetString());
+        Assert.Equal(journalsAfterFirst, (await GetAsync("/api/v1/journals", Checker)).GetProperty("data").GetArrayLength());
+        Assert.Equal(accumAfterFirst, AssetRow(await GetAsync("/api/v1/assets", Checker), assetId)
+            .GetProperty("accumulatedDepreciation").GetDecimal());
+    }
+
+    // Fix round 1 — minor: 024 AC2 holds on the transitions path too
+    [Fact]
+    public async Task Case_Transition_To_Resolved_Requires_Resolution_Code()
+    {
+        var res = await PostAsync("/api/v1/service-cases", new
+        { title = "Valve stuck F16", channel = "portal", requesterId = "U-004", priority = "Medium" }, Writer);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var caseId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "InProgress", reason = (string?)null }, Writer)).StatusCode);
+
+        // InProgress → Resolved without a code is rejected (024 AC2)
+        res = await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "Resolved", reason = (string?)null }, Writer);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal("VALIDATION_ERROR", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
+
+        res = await PostAsync($"/api/v1/service-cases/{caseId}/transitions", new { status = "Resolved", reason = (string?)null, resolutionCode = "FIRMWARE_UPDATE" }, Writer);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var data = (await Json(res)).GetProperty("data");
+        Assert.Equal("Resolved", data.GetProperty("status").GetString());
+        Assert.Equal("FIRMWARE_UPDATE", data.GetProperty("resolutionCode").GetString());
+
+        var outbox = await GetAsync("/api/v1/outbox", Checker);
+        Assert.Contains("assets.case.resolved", outbox.GetProperty("data").EnumerateArray()
+            .Select(e => e.GetProperty("type").GetString()).ToList());
     }
 }
