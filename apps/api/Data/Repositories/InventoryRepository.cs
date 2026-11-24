@@ -102,7 +102,8 @@ public sealed class InventoryRepository(ErpDbContext db, EntityContext ec) : IIn
         Set(row, nameof(StockLevel.QtyOnHand), qty);
 
     public StockLocation DefaultReceivingLocation() =>
-        LocationsScoped().OrderBy(l => l.Id).First(); // seeded LOC-A1 — receipts land here (task-1 seed order)
+        LocationsScoped().FirstOrDefault(l => l.Id == "LOC-A1") // task-1 seed: the receiving dock
+        ?? LocationsScoped().OrderBy(l => l.Id).First(); // LOC-A1 never drifted silently again (T3): created ids (LOC-00xx) used to sort first and steal receiving
 
     public int Save() => db.SaveChanges();
 

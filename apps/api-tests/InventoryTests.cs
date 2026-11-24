@@ -197,4 +197,28 @@ public class InventoryTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
         Assert.Equal("FORBIDDEN", (await Json(forbidden)).GetProperty("error").GetProperty("code").GetString());
     }
+
+    // T3 finding: DefaultReceivingLocation() = OrderBy(Id).First(), and API-created location ids
+    // (LOC-00xx) sort before the seeded dock LOC-A1 — so the first created location silently
+    // became the receiving dock and receipts stopped landing at LOC-A1.
+    [Fact]
+    public async Task Receipts_still_land_at_seeded_receiving_dock_after_new_locations_exist()
+    {
+        var proc = "U-002";
+        var res = await PostAsync("/api/v1/warehouses", new { code = $"WH-{Guid.NewGuid():N}"[..12], name = "Drift WH" }, proc);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var whId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        res = await PostAsync("/api/v1/locations", new { warehouseId = whId, code = $"L-{Guid.NewGuid():N}"[..12], name = "Drift dock" }, proc);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var newLocId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+
+        var sku = $"RCV-{Guid.NewGuid():N}"[..10];
+        await SeedStock(sku, 2m, 1.00m); // receipt must land at LOC-A1 despite the new lower-sorting id
+
+        var transfer = await PostAsync("/api/v1/stock/transfers", new
+        {
+            fromLocationId = "LOC-A1", toLocationId = newLocId, itemSku = sku, qty = 1m,
+        }, proc);
+        Assert.Equal(HttpStatusCode.Created, transfer.StatusCode);
+    }
 }
