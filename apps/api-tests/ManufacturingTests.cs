@@ -590,7 +590,8 @@ public class ManufacturingTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
         Assert.Equal("VALIDATION_ERROR", ErrCode(res));
 
-        // disposal: physical stock −2, journal Dr 5200 4.00 / Cr 1400 4.00
+        // disposal: physical stock −2; the scrapped component's cost leaves WIP —
+        // journal Dr 5200 4.00 / Cr 1420 4.00 (fix round 1: disposal flows THROUGH WIP)
         res = await PostAsync($"/api/v1/production-orders/{orderId}/scrap-reports", new
         {
             itemSku = comp, qty = 2m, reasonCode = "DAMAGED", disposition = "Disposal",
@@ -601,7 +602,7 @@ public class ManufacturingTests : IClassFixture<TestApiFactory>
         var journal = await JournalFor(scrapId);
         Assert.Equal("5200", journal.GetProperty("lines")[0].GetProperty("accountCode").GetString());
         Assert.Equal(4.00m, journal.GetProperty("lines")[0].GetProperty("debit").GetDecimal());
-        Assert.Equal("1400", journal.GetProperty("lines")[1].GetProperty("accountCode").GetString());
+        Assert.Equal("1420", journal.GetProperty("lines")[1].GetProperty("accountCode").GetString());
         Assert.Equal(4.00m, journal.GetProperty("lines")[1].GetProperty("credit").GetDecimal());
 
         // return-to-stock: no movement, no journal
@@ -632,32 +633,43 @@ public class ManufacturingTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/production-orders/{orderId}/material-issues", new { componentSku = comp, qty = 4m }, Mfg)).StatusCode);
         Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/production-orders/{orderId}/completions", new { qty = 5m }, Mfg)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/production-orders/{orderId}/transitions", new { status = "InProcess" }, Mfg)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/production-orders/{orderId}/transitions", new { status = "Completed" }, Mfg)).StatusCode);
 
-        // the creator cannot close their own order (maker-checker on mfg:close)
-        var res = await PostAsync($"/api/v1/production-orders/{orderId}/closures", new { }, Mfg);
-        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
-        Assert.Equal("MFG_CLOSE_ERROR", ErrCode(res));
-
-        // the close-check names the shortage one by one
-        var checkRes = await GetAsync($"/api/v1/production-orders/{orderId}/close-check", Admin);
-        var check = checkRes.GetProperty("data");
-        Assert.True(check.GetProperty("open").GetBoolean());
-        var items = check.GetProperty("items").EnumerateArray().Select(i => i.GetProperty("code").GetString()!).ToList();
-        Assert.Contains($"consumption:{comp}", items);
-        Assert.Contains("WIP_REMAINDER", items); // the unbalanced ledger is named alongside the shortage
-
-        // close is blocked with the same machine-readable list
-        res = await PostAsync($"/api/v1/production-orders/{orderId}/closures", new { }, Admin);
+        // fix round 1 (F2.1): the InProcess → Completed transition is GATED on consumption
+        // reconciliation — the report-all-then-stall trap is refused at the gate, naming the mismatch
+        var res = await PostAsync($"/api/v1/production-orders/{orderId}/transitions", new { status = "Completed" }, Mfg);
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         var blocked = Error(res);
         Assert.Equal("MFG_CLOSE_BLOCKED", blocked.GetProperty("code").GetString());
         Assert.Contains(blocked.GetProperty("items").EnumerateArray()
             .Select(i => i.GetProperty("code").GetString()!), c => c == $"consumption:{comp}");
 
-        // the last unit is issued → everything reconciles, and the balanced ledger closes without a residual
-        // (the clean close itself is exercised by Closed_Order_Rejects / Debit_Wip_Remainder / Reopen tests;
-        // reporting is frozen once the order is Completed, so this order stays blocked by design)
+        // and the close itself refuses too — the order is still InProcess, not Completed
+        res = await PostAsync($"/api/v1/production-orders/{orderId}/closures", new { }, Admin);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("MFG_STATE_ERROR", ErrCode(res));
+
+        // repair while InProcess: the last unit is issued, the gate passes
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/production-orders/{orderId}/material-issues", new { componentSku = comp, qty = 1m }, Mfg)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/production-orders/{orderId}/transitions", new { status = "Completed" }, Mfg)).StatusCode);
+
+        // Completed orders are not a trap anymore: reporting stays open for reconciliation, so a
+        // drift AT Completed (an extra issue here) is repairable at Completed — the close still gates
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/production-orders/{orderId}/material-issues", new { componentSku = comp, qty = 1m }, Mfg)).StatusCode);
+        res = await PostAsync($"/api/v1/production-orders/{orderId}/closures", new { }, Admin);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Contains(Error(res).GetProperty("items").EnumerateArray()
+            .Select(i => i.GetProperty("code").GetString()!), c => c == $"consumption:{comp}");
+
+        // repair AT Completed: the matching completion reconciles the drifted ledger
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/production-orders/{orderId}/completions", new { qty = 1m }, Mfg)).StatusCode);
+
+        // everything reconciles → the balanced ledger closes without a residual (maker-checker: the
+        // creator cannot close their own order, so the checker does)
+        var checkRes = await GetAsync($"/api/v1/production-orders/{orderId}/close-check", Admin);
+        var check = checkRes.GetProperty("data");
+        Assert.False(check.GetProperty("open").GetBoolean());
+        Assert.Equal(0m, check.GetProperty("wipRemainder").GetDecimal());
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/production-orders/{orderId}/closures", new { }, Admin)).StatusCode);
         Assert.True(await OutboxHas("mfg.issue.posted"));
     }
 
@@ -830,10 +842,10 @@ public class ManufacturingTests : IClassFixture<TestApiFactory>
         Assert.Equal(0m, check.GetProperty("wipDebits").GetDecimal()); // no journal written
     }
 
-    // ---- 16. negative (R-MFG6): a CREDIT WIP remainder blocks close — no auto negative scrap ----
+    // ---- 16. negative (R-MFG6): a CREDIT WIP remainder blocks the Completed transition ----
 
     [Fact]
-    public async Task Credit_WIP_Remainder_At_Close_Returns_409_MFG_CLOSE_WIP_ERROR()
+    public async Task Credit_WIP_Remainder_Blocks_The_Completed_Transition()
     {
         var output = Tag("FG");
         var a = Tag("RM");
@@ -849,16 +861,25 @@ public class ManufacturingTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/production-orders/{orderId}/material-issues", new { componentSku = b, qty = 1m }, Mfg)).StatusCode);
         Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/production-orders/{orderId}/completions", new { qty = 1m }, Mfg)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/production-orders/{orderId}/transitions", new { status = "InProcess" }, Mfg)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/production-orders/{orderId}/transitions", new { status = "Completed" }, Mfg)).StatusCode);
 
         var check = (await GetAsync($"/api/v1/production-orders/{orderId}/close-check", Admin)).GetProperty("data");
         Assert.Equal(-0.01m, check.GetProperty("wipRemainder").GetDecimal());
 
-        // R-MFG6: block — even the residual acknowledgment may not paper over a credit WIP
-        var res = await PostAsync($"/api/v1/production-orders/{orderId}/closures", new { residualAcknowledgment = "try anyway" }, Admin);
+        // fix round 1 (F2.1): the credit remainder is caught at the Completed gate — the order can
+        // no longer BECOME unclosable; R-MFG6's close-level MFG_CLOSE_WIP_ERROR stays as defense
+        // in depth behind the gate
+        var res = await PostAsync($"/api/v1/production-orders/{orderId}/transitions", new { status = "Completed" }, Mfg);
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
-        Assert.Equal("MFG_CLOSE_WIP_ERROR", ErrCode(res));
-        Assert.Equal("Completed", (await GetOrder(orderId)).GetProperty("status").GetString()); // not closed
+        var gateError = Error(res); // the response body is read once — code and items off one parse
+        Assert.Equal("MFG_CLOSE_BLOCKED", gateError.GetProperty("code").GetString());
+        Assert.Contains(gateError.GetProperty("items").EnumerateArray()
+            .Select(i => i.GetProperty("code").GetString()!), c => c == "WIP_REMAINDER");
+        Assert.Equal("InProcess", (await GetOrder(orderId)).GetProperty("status").GetString()); // gate held
+
+        // and close refuses outright — the order never reached Completed
+        res = await PostAsync($"/api/v1/production-orders/{orderId}/closures", new { }, Admin);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("MFG_STATE_ERROR", ErrCode(res));
     }
 
     // ---- 17. negative (015 edge): a retired revision blocks NEW planning, released orders keep theirs ----

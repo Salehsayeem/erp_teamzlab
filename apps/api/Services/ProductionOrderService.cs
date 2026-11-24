@@ -94,7 +94,7 @@ public sealed class ProductionOrderService(
             mfg.SetOrderPlannedQty(order, newQty);
             audit.Log(user, "amend", "production_order", order.Id,
                 $"PlannedQty {order.PlannedQty} → {newQty} before release (no amendment row)");
-            if (SaveOrder(order) is { } preErr) return preErr;
+            if (SaveOrder(order, "AMENDMENT_CONFLICT") is { } preErr) return preErr;
             return (new { order = ProjOrder(order), amendment = (object?)null }, null, null);
         }
 
@@ -106,7 +106,7 @@ public sealed class ProductionOrderService(
         mfg.SetOrderPlannedQty(order, newQty);
         audit.Log(user, "amend", "production_order", order.Id,
             $"PlannedQty amended {amendment.OldValue} → {amendment.NewValue}: {request.Reason} (008 AC3)");
-        if (SaveOrder(order) is { } postErr) return postErr;
+        if (SaveOrder(order, "AMENDMENT_CONFLICT") is { } postErr) return postErr;
         return (new { order = ProjOrder(order), amendment }, null, null);
     }
 
@@ -129,6 +129,29 @@ public sealed class ProductionOrderService(
 
         if (target == ProductionOrderStatus.Cancelled && string.IsNullOrWhiteSpace(reason))
             return (null, "VALIDATION_ERROR", "A cancellation reason is required (007).");
+
+        // fix round 1 (F2.1): InProcess → Completed is gated on consumption reconciliation — an
+        // order may not BECOME unclosable. Zero quantity mismatch AND zero credit-WIP remainder,
+        // else 409 listing the mismatches; a debit WIP remainder may still pass (it closes later
+        // as the acknowledged residual). Shortfall is deliberately not gated here: Completed
+        // orders keep reporting open (ReportingScope) so it stays repairable before close.
+        if (target == ProductionOrderStatus.Completed && order.Status == ProductionOrderStatus.InProcess)
+        {
+            var (gateItems, _, _, gateWipRemainder, _, _) = Reconcile(order);
+            var mismatches = gateItems.Where(i => i.Code.StartsWith("consumption:", StringComparison.Ordinal)).ToList();
+            if (mismatches.Count > 0 || gateWipRemainder < 0)
+            {
+                var detail = mismatches.Count > 0
+                    ? "unreconciled consumption: " + string.Join("; ", mismatches.Select(m => m.Code))
+                    : "";
+                if (gateWipRemainder < 0)
+                    detail += (detail.Length > 0 ? "; " : "") +
+                        $"credit WIP remainder {gateWipRemainder:0.00} (R-MFG6 — credits exceed debits)";
+                return (gateItems.Select(i => (object)new { code = i.Code, detail = i.Detail, qty = i.Qty }).ToArray(),
+                    "MFG_CLOSE_BLOCKED",
+                    "Completion gate blocked — " + detail + ".");
+            }
+        }
 
         if (target == ProductionOrderStatus.Cancelled) mfg.SetOrderCancelled(order, reason!);
         else mfg.SetOrderStatus(order, target);
@@ -225,11 +248,6 @@ public sealed class ProductionOrderService(
         var periodError = GuardPeriod();
         if (periodError is not null) return (null, periodError.Value.Code, periodError.Value.Message);
 
-        var onHand = inventory.QtyOf(request.ComponentSku);
-        if (onHand < request.Qty)
-            return (null, "INSUFFICIENT_STOCK",
-                $"Insufficient stock for {request.ComponentSku}: {onHand} on hand, {request.Qty} requested (042 AC1).");
-
         var value = decimal.Round(request.Qty * line.UnitCost, 2, MidpointRounding.AwayFromZero);
 
         // the stock check and the drain serialize on the order row so two concurrent issues
@@ -237,6 +255,19 @@ public sealed class ProductionOrderService(
         var ownsTx = db.Database.CurrentTransaction is null;
         using var tx = ownsTx ? db.Database.BeginTransaction() : null;
         LockOrderRow(order.Id);
+        // fix round 1 (F2.2): availability is read INSIDE the lock from committed state — a
+        // concurrent drain that committed before the lock is seen here, not silently raced past
+        var onHand = inventory.QtyOf(request.ComponentSku);
+        if (onHand < request.Qty)
+            return (null, "INSUFFICIENT_STOCK",
+                $"Insufficient stock for {request.ComponentSku}: {onHand} on hand, {request.Qty} requested (042 AC1).");
+        // fix round 1 (F2.2): availability is re-read INSIDE the lock — the pre-lock check above
+        // only short-circuits; the committed on-hand under the lock is the one that gates the drain
+        onHand = inventory.QtyOf(request.ComponentSku);
+        if (onHand < request.Qty)
+            return (null, "INSUFFICIENT_STOCK",
+                $"Insufficient stock for {request.ComponentSku}: {onHand} on hand, {request.Qty} requested (042 AC1).");
+
         var issueId = numbers.Next("ISS");
         var journal = NewJournal(numbers.Next("J"), user,
             $"Material issue {issueId} on {orderId} ({request.ComponentSku} x{request.Qty} @ {line.UnitCost:0.00})",
@@ -269,20 +300,22 @@ public sealed class ProductionOrderService(
         if (source is null || source.Kind != MovementKind.Issue)
             return (null, "ISSUE_NOT_FOUND", $"Issue {request.IssueId} was not found on order {orderId}.");
 
-        var returnable = source.Qty - mfg.ReturnedQtyFor(source.Id);
-        if (request.Qty > returnable)
-            return (null, "ISSUE_RETURN_OVER",
-                $"Return of {request.Qty} exceeds the {returnable} still returnable on issue {source.Id} (issued {source.Qty}, already returned {source.Qty - returnable}) (042 AC3).");
-
         var periodError = GuardPeriod();
         if (periodError is not null) return (null, periodError.Value.Code, periodError.Value.Message);
 
         var value = decimal.Round(request.Qty * source.UnitCost, 2, MidpointRounding.AwayFromZero);
 
-        // the returnable re-check and the write serialize on the order row (042 AC3 under races)
+        // the returnable re-check and the write serialize on the order row (042 AC3 under races);
+        // fix round 1 (F2.2): the bound itself is computed INSIDE the lock from committed returns —
+        // a concurrent return can no longer slip past the pre-flight check
         var ownsTx = db.Database.CurrentTransaction is null;
         using var tx = ownsTx ? db.Database.BeginTransaction() : null;
         LockOrderRow(order.Id);
+        var returnable = source.Qty - mfg.ReturnedQtyFor(source.Id);
+        if (request.Qty > returnable)
+            return (null, "ISSUE_RETURN_OVER",
+                $"Return of {request.Qty} exceeds the {returnable} still returnable on issue {source.Id} (issued {source.Qty}, already returned {source.Qty - returnable}) (042 AC3).");
+
         var returnId = numbers.Next("ISS");
         var journal = NewJournal(numbers.Next("J"), user,
             $"Material return {returnId} of issue {source.Id} on {orderId} ({source.ComponentSku} x{request.Qty})",
@@ -313,13 +346,6 @@ public sealed class ProductionOrderService(
         var (revision, lines, code, message) = ReportingScope(order);
         if (code is not null) return (null, code, message);
 
-        // 008 AC2: over-tolerance completion needs mfg:override
-        var ceiling = order.PlannedQty * (1 + order.OverTolerancePct / 100m);
-        if (order.CompletedQty + request.Qty > ceiling && !user.Has("mfg:override"))
-            return (null, "MFG_OVER_TOLERANCE",
-                $"Completion of {request.Qty} would take completed to {order.CompletedQty + request.Qty}, over the " +
-                $"{ceiling} ceiling (planned {order.PlannedQty} + {order.OverTolerancePct}% tolerance); mfg:override required.");
-
         var periodError = GuardPeriod();
         if (periodError is not null) return (null, periodError.Value.Code, periodError.Value.Message);
 
@@ -328,31 +354,43 @@ public sealed class ProductionOrderService(
         var backflush = lines.Where(l => l.IssuePolicy == IssuePolicy.Backflush)
             .Select(l => (Line: l, Qty: request.Qty * l.QtyPer / revision.OutputQtyPer)).ToList();
 
-        // stock availability is checked before anything is tracked — the idempotency store
-        // shares this context, so an error return must leave nothing behind
+        var ownsTx = db.Database.CurrentTransaction is null;
+        using var tx = ownsTx ? db.Database.BeginTransaction() : null;
+        LockOrderRow(order.Id);
+        // fix round 1 (F2.2): the order row is locked FIRST, then re-read — the ceiling,
+        // CompletedQty accumulation and stock availability below all run against committed
+        // state inside the lock, so concurrent completions can no longer lose ledger updates
+        db.Entry(order).Reload();
+
+        // 008 AC2: over-tolerance completion needs mfg:override (re-checked under the lock)
+        var ceiling = order.PlannedQty * (1 + order.OverTolerancePct / 100m);
+        if (order.CompletedQty + request.Qty > ceiling && !user.Has("mfg:override"))
+            return (null, "MFG_OVER_TOLERANCE",
+                $"Completion of {request.Qty} would take completed to {order.CompletedQty + request.Qty}, over the " +
+                $"{ceiling} ceiling (planned {order.PlannedQty} + {order.OverTolerancePct}% tolerance); mfg:override required.");
+
         foreach (var (line, qty) in backflush)
             if (inventory.QtyOf(line.ComponentSku) < qty)
                 return (null, "INSUFFICIENT_STOCK",
                     $"Backflush cannot consume {qty} x {line.ComponentSku}: {inventory.QtyOf(line.ComponentSku)} on hand (043).");
 
-        var ownsTx = db.Database.CurrentTransaction is null;
-        using var tx = ownsTx ? db.Database.BeginTransaction() : null;
-        LockOrderRow(order.Id);
-
         var completionId = numbers.Next("CPL");
-        decimal backflushTotal = 0;
+        // fix round 1 (F1.2): backflush line VALUES are allocated off the completion credit basis —
+        // per-line proportional, the last line as plug — so Σ debit equals the credit exactly and a
+        // fully reconciled pure-backflush order closes at zero instead of stranding a rounded cent
+        var backflushValues = AllocateBackflushValues(value, backflush, lines);
+        var backflushTotal = backflushValues.Sum();
         if (backflush.Count > 0)
         {
-            backflushTotal = decimal.Round(backflush.Sum(b => decimal.Round(b.Qty * b.Line.UnitCost, 2, MidpointRounding.AwayFromZero)), 2, MidpointRounding.AwayFromZero);
             var bfJournal = NewJournal(numbers.Next("J"), user,
                 $"Backflush consumption for completion {completionId} on {orderId}",
                 [new JournalLine(WipAccount, WipAccountName, backflushTotal, 0), new JournalLine(InventoryAccount, InventoryAccountName, 0, backflushTotal)]);
             journals.Add(bfJournal);
-            foreach (var (line, qty) in backflush)
+            for (var i = 0; i < backflush.Count; i++)
             {
-                var lineValue = decimal.Round(qty * line.UnitCost, 2, MidpointRounding.AwayFromZero);
+                var (line, qty) = backflush[i];
                 mfg.AddIssue(new MaterialIssue(numbers.Next("ISS"), ec.TenantId, ec.EntityId, orderId, line.ComponentSku,
-                    MovementKind.Issue, qty, line.UnitCost, lineValue, null, bfJournal.Id, user.Id, DateTimeOffset.UtcNow, completionId));
+                    MovementKind.Issue, qty, line.UnitCost, backflushValues[i], null, bfJournal.Id, user.Id, DateTimeOffset.UtcNow, completionId));
                 inventory.DrawStock(line.ComponentSku, qty);
             }
         }
@@ -366,6 +404,11 @@ public sealed class ProductionOrderService(
         mfg.AddCompletion(completion);
         mfg.SetOrderCompletedQty(order, order.CompletedQty + request.Qty);
 
+        // fix round 1 (F1.1): the completion RECEIPTS the output sku — the GL said inventory grew,
+        // /stock must agree; the receipt commits with the same SaveChanges as the journal
+        var dock = inventory.DefaultReceivingLocation();
+        inventory.ApplyStock(dock.WarehouseId, dock.Id, order.OutputSku, request.Qty);
+
         audit.Log(user, "complete", "completion_report", completion.Id,
             $"Completed {request.Qty} x {order.OutputSku} on {order.OrderNo} @ {plannedUnitCost:0.00} = {value:0.00}; journal {completionJournal.Id}" +
             (backflush.Count > 0 ? $"; backflush {backflush.Count} line(s) = {backflushTotal:0.00}" : ""));
@@ -374,10 +417,10 @@ public sealed class ProductionOrderService(
             orderId, completionId, orderNo = order.OrderNo, outputSku = order.OutputSku, qty = request.Qty,
             plannedUnitCost, value, journalId = completionJournal.Id,
             backflushBomRevisionId = revision.Id,
-            backflush = backflush.Select(b => new
+            backflush = backflush.Select((b, i) => new
             {
                 componentSku = b.Line.ComponentSku, qty = b.Qty, unitCost = b.Line.UnitCost,
-                lineValue = decimal.Round(b.Qty * b.Line.UnitCost, 2, MidpointRounding.AwayFromZero),
+                lineValue = backflushValues[i],
             }),
             completedQty = order.CompletedQty, reportedBy = user.Id,
         });
@@ -389,10 +432,10 @@ public sealed class ProductionOrderService(
             completion,
             journal = completionJournal,
             plannedUnitCost,
-            backflush = backflush.Select(b => new
+            backflush = backflush.Select((b, i) => new
             {
                 componentSku = b.Line.ComponentSku, qty = b.Qty, unitCost = b.Line.UnitCost,
-                lineValue = decimal.Round(b.Qty * b.Line.UnitCost, 2, MidpointRounding.AwayFromZero),
+                lineValue = backflushValues[i],
             }),
         }, null, null);
     }
@@ -434,10 +477,16 @@ public sealed class ProductionOrderService(
                     $"Cannot dispose {request.Qty} x {request.ItemSku}: {onHand} on hand.");
 
             var value = decimal.Round(request.Qty * unitCost.Value, 2, MidpointRounding.AwayFromZero);
+            // fix round 1 (F4.1): a COMPONENT's disposal flows THROUGH WIP — the scrapped cost
+            // leaves the 1420 accumulator at the component's issue cost basis (Dr 5200 / Cr 1420);
+            // the OUTPUT's disposal credits 1400 — its cost already left WIP via the completion
+            var wipResident = line is not null;
+            var creditAccount = wipResident ? WipAccount : InventoryAccount;
+            var creditAccountName = wipResident ? WipAccountName : InventoryAccountName;
             var scrapId = numbers.Next("SCR");
             journal = NewJournal(numbers.Next("J"), user,
                 $"Scrap {scrapId} on {orderId} ({request.ItemSku} x{request.Qty}, {request.ReasonCode})",
-                [new JournalLine(ScrapAccount, ScrapAccountName, value, 0), new JournalLine(InventoryAccount, InventoryAccountName, 0, value)]);
+                [new JournalLine(ScrapAccount, ScrapAccountName, value, 0), new JournalLine(creditAccount, creditAccountName, 0, value)]);
             journals.Add(journal);
             inventory.DrawStock(request.ItemSku, request.Qty); // physical disposal leaves inventory
             var scrap = new ScrapReport(scrapId, ec.TenantId, ec.EntityId, orderId, request.ItemSku,
@@ -574,16 +623,18 @@ public sealed class ProductionOrderService(
         return guardCode is null ? null : (guardCode, guardMsg);
     }
 
-    // routine reporting scope: orders report only while Released/InProcess against the FROZEN
-    // released revision — a closed order is frozen outright (013 AC2), retirement does not matter
+    // routine reporting scope: orders report while Released/InProcess against the FROZEN released
+    // revision; fix round 1 (F2.1) adds Completed — reconciliation reporting stays open so a
+    // mismatch surfaced at the Completed gate is always repairable; a closed order is frozen
+    // outright (013 AC2)
     private (BomRevision? Revision, List<BomLine> Lines, string? Code, string? Message) ReportingScope(ProductionOrder order)
     {
         if (order.Status == ProductionOrderStatus.Closed)
             return (null, new List<BomLine>(), "ORDER_CLOSED",
                 $"Order {order.OrderNo} is closed; routine reporting is frozen (013 AC2) — reopen first.");
-        if (order.Status is not (ProductionOrderStatus.Released or ProductionOrderStatus.InProcess))
+        if (order.Status is not (ProductionOrderStatus.Released or ProductionOrderStatus.InProcess or ProductionOrderStatus.Completed))
             return (null, new List<BomLine>(), "MFG_STATE_ERROR",
-                $"Order {order.OrderNo} must be Released or InProcess for reporting (current: {order.Status}).");
+                $"Order {order.OrderNo} must be Released, InProcess or Completed for reporting (current: {order.Status}).");
         if (order.ReleasedBomRevisionId is not { } revisionId)
             return (null, new List<BomLine>(), "MFG_STATE_ERROR", $"Order {order.OrderNo} has no frozen BOM revision.");
         var revision = mfg.FindBom(revisionId);
@@ -640,7 +691,15 @@ public sealed class ProductionOrderService(
                     actual - expected));
         }
 
-        var wipDebits = decimal.Round(issues.Where(i => i.Kind == MovementKind.Issue).Sum(i => i.LineValue), 2, MidpointRounding.AwayFromZero);
+        // fix round 1 (F4.1): a component's scrap disposal flows THROUGH WIP — the ledger carries
+        // the disposed cost as a WIP debit (at the issue cost basis, mirroring the Dr 5200 /
+        // Cr 1420 journal) while the completion still credits the FULL BOM cost, so the scrapped
+        // portion reconciles to zero instead of stranding a hard-blocked remainder
+        var componentSkus = lines.Select(l => l.ComponentSku).ToHashSet();
+        var disposalThroughWip = decimal.Round(scraps
+            .Where(s => s.Disposition == ScrapDisposition.Disposal && componentSkus.Contains(s.ItemSku))
+            .Sum(s => decimal.Round(s.Qty * s.UnitCost, 2, MidpointRounding.AwayFromZero)), 2, MidpointRounding.AwayFromZero);
+        var wipDebits = decimal.Round(issues.Where(i => i.Kind == MovementKind.Issue).Sum(i => i.LineValue) + disposalThroughWip, 2, MidpointRounding.AwayFromZero);
         var wipCredits = decimal.Round(
             issues.Where(i => i.Kind == MovementKind.Return).Sum(i => i.LineValue)
             + (revision is null ? 0m : completions.Sum(c => CompletionValue(c.Qty, lines, revision.OutputQtyPer))),
@@ -688,7 +747,10 @@ public sealed class ProductionOrderService(
             },
             cost = new
             {
-                material = decimal.Round(wipDebits - (wipCredits - completionTotal), 2, MidpointRounding.AwayFromZero),
+                // material issued to WIP net of returns — component scrap disposals are reported
+                // once, in `scrap` (fix round 1: they are WIP debits in the ledger, not material)
+                material = decimal.Round(issues.Where(i => i.Kind == MovementKind.Issue).Sum(i => i.LineValue)
+                    - issues.Where(i => i.Kind == MovementKind.Return).Sum(i => i.LineValue), 2, MidpointRounding.AwayFromZero),
                 scrap = scrapTotal,
                 residual = wipRemainder > 0 ? wipRemainder : 0m,
                 plannedUnitCost = revision is null ? 0m : PlannedUnitCost(lines, revision.OutputQtyPer),
@@ -722,15 +784,45 @@ public sealed class ProductionOrderService(
     private static decimal CompletionValue(decimal qty, IReadOnlyList<BomLine> lines, decimal outputQtyPer) =>
         decimal.Round(qty * BatchCostSum(lines) / outputQtyPer, 2, MidpointRounding.AwayFromZero);
 
+    // the scalar lock gains the tenant+entity predicates (fix round 1, minor a — mirrors
+    // SalesOrderService.LockCustomerForExposure): the lock, the re-reads and the commit all
+    // serialize on the same scoped row
     private void LockOrderRow(string orderId) =>
-        db.Database.SqlQuery<string>($"SELECT id AS \"Value\" FROM production_orders WHERE id = {orderId} FOR UPDATE").Single();
+        db.Database.SqlQuery<string>(
+            $"SELECT id AS \"Value\" FROM production_orders WHERE id = {orderId} AND tenant_id = {ec.TenantId} AND legal_entity_id = {ec.EntityId} FOR UPDATE").Single();
+
+    // fix round 1 (F1.2): backflush line values are allocated off the completion credit basis —
+    // each line takes its proportional share of the credit attributable to backflush lines, the
+    // LAST line plugs the remainder — so Σ line debit equals the credit basis exactly. Per-line
+    // raw rounding used to leave a cents-level CREDIT remainder that R-MFG6 hard-blocked forever.
+    private static List<decimal> AllocateBackflushValues(decimal completionValue,
+        List<(BomLine Line, decimal Qty)> backflush, IReadOnlyList<BomLine> allLines)
+    {
+        var raw = backflush.Select(b => decimal.Round(b.Qty * b.Line.UnitCost, 2, MidpointRounding.AwayFromZero)).ToList();
+        var rawSum = raw.Sum();
+        var backflushCost = backflush.Sum(b => b.Line.QtyPer * b.Line.UnitCost);
+        var allCost = allLines.Sum(l => l.QtyPer * l.UnitCost);
+        var target = allCost == 0 ? 0m : decimal.Round(completionValue * backflushCost / allCost, 2, MidpointRounding.AwayFromZero);
+
+        var values = new List<decimal>();
+        var assigned = 0m;
+        for (var i = 0; i < backflush.Count; i++)
+        {
+            var share = i == backflush.Count - 1
+                ? target - assigned // the plug: Σ values == target, exactly
+                : rawSum == 0 ? 0m : decimal.Round(target * raw[i] / rawSum, 2, MidpointRounding.AwayFromZero);
+            values.Add(share);
+            assigned += share;
+        }
+        return values;
+    }
 
     // the tokenized UPDATE matched zero rows — a stale retry wrote nothing (T7 review 1a)
     private (object? data, string? code, string? message) Concurrency() =>
         (null, "MFG_CONCURRENCY_ERROR",
             "The order changed under a stale snapshot — the guarded status UPDATE matched zero rows and nothing was written; reload and retry.");
 
-    private (object? data, string? code, string? message)? SaveOrder(ProductionOrder order)
+    private (object? data, string? code, string? message)? SaveOrder(ProductionOrder order, string? uniqueConflictCode = null)
     {
         try
         {
@@ -741,7 +833,19 @@ public sealed class ProductionOrderService(
         {
             return Concurrency();
         }
+        // fix round 1 (minor b): concurrent post-release amendments both compute {orderId}:v{n}
+        // from the same count — the loser's natural-key insert collides and maps to an explicit
+        // 409 instead of an unhandled exception
+        catch (DbUpdateException ex) when (uniqueConflictCode is not null && IsUniqueViolation(ex))
+        {
+            return (null, uniqueConflictCode,
+                "Another amendment claimed the same version of this order at the same moment — the amendment " +
+                $"natural key {order.Id}:vN collided; reload the order and retry with the current planned quantity.");
+        }
     }
+
+    private static bool IsUniqueViolation(DbUpdateException ex) =>
+        ex.InnerException is Npgsql.PostgresException { SqlState: "23505" };
 
     private void EmitIssue(CurrentUser user, ProductionOrder order, MaterialIssue issue, string kind)
     {
