@@ -216,14 +216,22 @@ public class AssetsTests : IClassFixture<TestApiFactory>
         Assert.Equal(590.00m, row.GetProperty("bookValue").GetDecimal());
     }
 
-    [Fact(Skip = "blocked on T5 periods — ERP-ASSETS-048 AC2 needs the periods table; the pilot guard "
-        + "AssetsPeriods.IsOpen treats every period as Open (Depreciation_Run_Replay_Same_Key_Posts_One_Journal "
-        + "pins that contract). When T5 lands: create a closed period, POST a run into it, assert 409 PERIOD_LOCKED.")]
+    // 048 AC2 on the real periods table (T5): a run whose target label names a fiscal period that
+    // is SoftClosed/Closed is rejected with PERIOD_LOCKED; the books must also be open today.
+    [Fact]
     public async Task Depreciation_Run_Into_Closed_Period_Returns_409_PERIOD_LOCKED()
     {
         await SeedActiveAsset("DEP-T5", 600m);
-        // once periods exist: mark period "2026-12" Closed, then this run must 409 with PERIOD_LOCKED
-        var res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2026-12" }, Checker);
+        // a dedicated future fiscal period — outside the seeded 13-month window, so no overlap
+        var create = await PostAsync("/api/v1/fiscal-periods",
+            new { name = "2027-01", startDate = "2027-01-01", endDate = "2027-01-31" }, Checker);
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        var periodId = (await Json(create)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK,
+            (await PostAsync($"/api/v1/fiscal-periods/{periodId}/close", new { }, Checker)).StatusCode);
+
+        var res = await PostAsync("/api/v1/assets/depreciation-runs", new { periodId = "2027-01" },
+            Checker, $"DEP-LOCK-{Guid.NewGuid():N}");
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         Assert.Equal("PERIOD_LOCKED", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
     }

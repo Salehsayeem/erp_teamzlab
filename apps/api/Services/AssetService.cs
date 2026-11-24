@@ -1,23 +1,18 @@
+using Erp.Api.Data;
 using Erp.Api.Dtos;
 using Erp.Api.Interfaces;
 
 namespace Erp.Api.Services;
 
-// ERP-ASSETS-048 AC2 period control — pilot seam: every period is Open until the task-5 periods
-// table lands, which replaces IsOpen with a real book/period/close-state lookup. Tests pin this
-// contract (Depreciation_Run_Replay_Same_Key_Posts_One_Journal asserts periodState "Open").
-internal static class AssetsPeriods
-{
-    public const string PilotState = "Open";
-    public static bool IsOpen(string periodId) => true; // T5: replace with periods-table lookup
-}
+// ERP-ASSETS-048 AC2 period control: RunDepreciation uses the shared FinanceGuards lock (T5) —
+// today's books must be Open, and a target label naming a real fiscal period must be Open too.
 
 // Fixed-asset register: create (draft) → capitalization proposal + checker approval (CIP → Active,
 // journal Dr 1600 / Cr 1610) → monthly straight-line runs (Dr 6400 / Cr 1500), transfers with
 // history, impairment (Dr 6600 / Cr 1500 per R-T4k) and disposal with gain/loss handoff (055/056).
 public sealed class AssetService(
     IAssetsRepository assets, IJournalRepository journals, INumberSeries numbers,
-    IAuditRepository audit, EntityContext ec) : IAssetService
+    IAuditRepository audit, EntityContext ec, ErpDbContext db) : IAssetService
 {
     public const int DepreciationMonths = 60; // R8e: 5-year straight line, zero residual — pilot policy
 
@@ -85,8 +80,14 @@ public sealed class AssetService(
     // one balanced journal per run; the Idempotency-Key IS the run id (048 AC1)
     public (object? data, string? code, string? message) RunDepreciation(CurrentUser user, string? idempotencyKey, string periodId)
     {
-        if (!AssetsPeriods.IsOpen(periodId))
-            return (null, "PERIOD_LOCKED", $"Period {periodId} is closed for depreciation posting (048 AC2).");
+        // 048 AC2 on the real periods table (T5): the run posts into today's books — they must be
+        // Open (fail-closed when unbooked) — and a target label naming a real fiscal period must
+        // be Open too. Labels with no fiscal period keep working (arbitrary run tags).
+        var (periodCode, periodMessage) = FinanceGuards.EnsurePeriodOpen(db, ec, DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime));
+        if (periodCode is not null) return (null, periodCode, periodMessage);
+        var target = db.FiscalPeriods.FirstOrDefault(p => p.TenantId == ec.TenantId && p.LegalEntityId == ec.EntityId && p.Name == periodId);
+        if (target is { Status: PeriodStatus.SoftClosed or PeriodStatus.Closed })
+            return (null, "PERIOD_LOCKED", $"Period {periodId} is {target.Status} for depreciation posting (048 AC2).");
         if (assets.DepreciationPeriodAlreadyPosted(periodId))
             return (null, "DEPRECIATION_PERIOD_ALREADY_POSTED", $"Period {periodId} already has a posted depreciation run.");
         var eligible = assets.DepreciableAssets();
@@ -122,7 +123,7 @@ public sealed class AssetService(
         {
             id = runId,
             periodId,
-            periodState = AssetsPeriods.PilotState,
+            periodState = target?.Status.ToString() ?? "Open", // only Open-labeled runs reach here
             totalAmount = total,
             journalId = journal.Id,
             lines = posted.Select(p => new { assetId = p.Asset.Id, amount = p.Amount }).ToList(),
