@@ -15,7 +15,7 @@ namespace Erp.Api.Tests;
 // TESTPGHOST/TESTPGPORT/TESTPGUSER/TESTPGPASSWORD. The repo .env points at the remote Default
 // server, which is unreachable and never targeted by tests. These databases are created and
 // destroyed by tests only and never contain user data; nothing ever runs against Default.
-public sealed class TestApiFactory : WebApplicationFactory<Program>
+public class TestApiFactory : WebApplicationFactory<Program>
 {
     private static string Env(string key, string fallback) =>
         Environment.GetEnvironmentVariable(key) is { Length: > 0 } v ? v : fallback;
@@ -34,6 +34,8 @@ public sealed class TestApiFactory : WebApplicationFactory<Program>
 
     /// Self-owned fixture: creates a fresh erp_test_&lt;8hex&gt; database, drops it on dispose.
     /// Single public constructor — xUnit class fixtures may define only one.
+    /// Intentionally not sealed: subclasses extend ConfigureWebHost with extra host settings
+    /// (e.g. CorsOriginTests adds a per-case CorsOrigins).
     public TestApiFactory() : this(databaseName: null) { }
 
     /// Borrowing factory: reuses an existing throwaway database (created by another instance),
