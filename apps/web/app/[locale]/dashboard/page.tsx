@@ -80,6 +80,26 @@ export default function DashboardPage() {
           </Link>
         </div>
       </section>
+      <section>
+        <h2 className="t-title">{t.nav.inventory}</h2>
+        <div className="stack">
+          <Link className="card" href={`/${locale}/inventory`}>
+            {t.nav.stockOverview}
+          </Link>
+          <Link className="card" href={`/${locale}/inventory/warehouses`}>
+            {t.nav.warehouses}
+          </Link>
+          <Link className="card" href={`/${locale}/inventory/transfers`}>
+            {t.nav.transfers}
+          </Link>
+          <Link className="card" href={`/${locale}/inventory/counts`}>
+            {t.nav.counts}
+          </Link>
+          <Link className="card" href={`/${locale}/inventory/valuation`}>
+            {t.nav.valuation}
+          </Link>
+        </div>
+      </section>
     </div>
   );
 }

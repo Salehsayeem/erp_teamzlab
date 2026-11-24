@@ -1,6 +1,6 @@
 "use client";
 
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from "react";
 
 // Plain typed components; all styling lives in app/globals.css tokens/classes.
 
@@ -43,6 +43,43 @@ export function Input({ label, error, id, className, ...rest }: InputProps) {
         aria-describedby={errorId}
         {...rest}
       />
+      {error ? (
+        <p className="field__error" id={errorId}>
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+export type SelectOption = { value: string; label: string };
+
+type SelectProps = SelectHTMLAttributes<HTMLSelectElement> & {
+  label: string;
+  error?: string;
+  options: SelectOption[];
+  placeholder?: string;
+};
+
+export function Select({ label, error, id, options, placeholder, className, ...rest }: SelectProps) {
+  const errorId = error ? `${id}-error` : undefined;
+  return (
+    <div className={error ? "field field--error" : "field"}>
+      <label htmlFor={id}>{label}</label>
+      <select
+        id={id}
+        className={className ?? "input"}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={errorId}
+        {...rest}
+      >
+        {placeholder ? <option value="">{placeholder}</option> : null}
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
       {error ? (
         <p className="field__error" id={errorId}>
           {error}
