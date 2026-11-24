@@ -5,6 +5,7 @@ import { DM_Sans } from "next/font/google";
 import { getDictionary, isLocale, LOCALES } from "@/lib/i18n";
 import { LocaleSwitch } from "@/components/locale-switch";
 import ThemeToggle from "@/components/theme-toggle";
+import AppSidebar from "@/components/app-sidebar";
 import "../globals.css";
 
 // Reference theme typography: DM Sans variable (loaded via next/font, no runtime fetch).
@@ -23,39 +24,6 @@ export async function generateMetadata({ params }: { params: Promise<{ locale: s
   return { title: t.meta.appTitle };
 }
 
-// Sidebar nav groups — routes are locale-prefixed at render time below.
-const NAV = [
-  {
-    heading: "Overview",
-    items: [{ href: "dashboard", label: "Dashboard" }],
-  },
-  {
-    heading: "Procurement",
-    items: [
-      { href: "procurement/suppliers", label: "Suppliers" },
-      { href: "procurement/purchase-orders", label: "Purchase orders" },
-    ],
-  },
-  {
-    heading: "Inventory",
-    items: [
-      { href: "inventory", label: "Stock" },
-      { href: "inventory/warehouses", label: "Warehouses" },
-      { href: "inventory/transfers", label: "Transfers" },
-      { href: "inventory/counts", label: "Counts" },
-      { href: "inventory/valuation", label: "Valuation" },
-    ],
-  },
-  {
-    heading: "Finance",
-    items: [{ href: "finance/journals", label: "Journals" }],
-  },
-  {
-    heading: "System",
-    items: [{ href: "design", label: "Design system" }],
-  },
-];
-
 export default async function LocaleLayout({ children, params }: { children: ReactNode; params: Promise<{ locale: string }> }) {
   const { locale: raw } = await params;
   const locale = isLocale(raw) ? raw : "en";
@@ -70,21 +38,7 @@ export default async function LocaleLayout({ children, params }: { children: Rea
       <body className={dmSans.className}>
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
         <div className="app-shell">
-          <aside className="sidebar">
-            <Link href={`/${locale}`} className="sidebar__brand">
-              TeamZlab<span>ERP</span>
-            </Link>
-            {NAV.map((group) => (
-              <nav key={group.heading} className="sidebar__group" aria-label={group.heading}>
-                <p className="sidebar__heading">{group.heading}</p>
-                {group.items.map((item) => (
-                  <Link key={item.href} href={`/${locale}/${item.href}`} className="sidebar__link">
-                    {item.label}
-                  </Link>
-                ))}
-              </nav>
-            ))}
-          </aside>
+          <AppSidebar locale={locale} />
           <div className="shell__main">
             <header className="topbar">
               <Link href={`/${locale}`} className="topbar__title">

@@ -114,8 +114,13 @@ req POST "/api/v1/sales-orders/$SO/shipments" "$SALES" "{\"itemSku\":\"$SKU\",\"
 expect_status 201 "POST /sales-orders/{id}/shipments (COGS journal posted)"
 req GET /api/v1/stock "$ADMIN"
 expect_json "(j.data.find(s=>s.itemSku==='$SKU')||{}).qtyOnHand" "7" "shipment drew stock down 10 -> 7"
-req POST "/api/v1/sales-orders/$SO/invoices" "$SALES" '{}'
-expect_status 201 "POST /sales-orders/{id}/invoices (AR journal)"
+# R-T7f: the journal-only invoice endpoint is retired — invoices are documents now:
+# SALES drafts from the shipment source event, FINANCE (checker) posts the AR journal
+req POST "/api/v1/sales-orders/$SO/invoice-drafts" "$SALES" '{}'
+expect_status 201 "POST /sales-orders/{id}/invoice-drafts (invoice document draft)"
+INV=$(printf '%s' "$BODY" | jget 'j.data.id' 2>/dev/null || echo "")
+req POST "/api/v1/invoices/$INV/postings" "$FIN" '{}'
+expect_status 200 "POST /invoices/{id}/postings (checker posts the AR journal)"
 
 say "inventory: warehouses, locations, transfers, counts"
 req POST /api/v1/warehouses "$PROC" "{\"code\":\"WH-S-$RUN\",\"name\":\"Smoke WH\"}"

@@ -33,6 +33,9 @@
   --sidebar-foreground: #2a3547;
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
   --radius: 10px;
+  /* page tone vs card tone: light uses muted; dark derives a deeper shade of the
+     background token (the reference dashboard reads darker-page/lighter-card) */
+  --page: var(--muted);
 }
 
 /* ---- dark overrides (reference html.dark block) ---- */
@@ -49,6 +52,7 @@ html.dark {
   --input: #333f55;
   --sidebar: #1c2536;
   --sidebar-foreground: #7c8fac;
+  --page: color-mix(in srgb, var(--background) 72%, #000);
 }
 
 /* legacy aliases — component classes below speak these; values point at the
@@ -91,7 +95,7 @@ html.dark {
 /* ---- page foundation ---- */
 body {
   margin: 0;
-  background: var(--background);
+  background: var(--page);
   color: var(--foreground);
   font-family: var(--font-sans);
   font-size: 14px;
@@ -111,6 +115,7 @@ a:hover { text-decoration: underline; }
 /* ---- utilities ---- */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
 .mono { font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Menlo, monospace; font-size: 13px; line-height: 20px; }
+::selection { background: color-mix(in srgb, var(--primary) 30%, transparent); }
 
 /* ---- app shell: sidebar (sidebar token) + topbar (card token) + content ---- */
 .app-shell { display: flex; min-height: 100vh; }
