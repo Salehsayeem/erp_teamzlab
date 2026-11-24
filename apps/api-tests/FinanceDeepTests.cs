@@ -111,6 +111,37 @@ public class FinanceDeepTests : IClassFixture<TestApiFactory>
     private static JsonElement LineOf(JsonElement journal, string accountCode) =>
         journal.GetProperty("lines").EnumerateArray().First(l => l.GetProperty("accountCode").GetString() == accountCode);
 
+    private static decimal StockOf(JsonElement stock, string sku) =>
+        stock.GetProperty("data").EnumerateArray()
+            .First(s => s.GetProperty("itemSku").GetString() == sku)
+            .GetProperty("qtyOnHand").GetDecimal();
+
+    // Fix round 1 — reversing a source twice posted two reversal journals and unwound receipt
+    // stock twice; a retry/double-click must hit JOURNAL_ALREADY_REVERSED with nothing written
+    [Fact]
+    public async Task Double_Reversal_Of_Source_Returns_409_JOURNAL_ALREADY_REVERSED()
+    {
+        var poId = await SeedApprovedPo("DBLREV-1", 8m, 3.00m);
+        var res = await PostAsync("/api/v1/receipts", new { purchaseOrderId = poId, itemSku = "DBLREV-1", qty = 8m }, Proc);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var journalId = (await Json(res)).GetProperty("data").GetProperty("journal").GetProperty("id").GetString()!;
+
+        res = await PostAsync($"/api/v1/journals/{journalId}/reversals", new { }, Fin);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var stockAfterFirst = StockOf(await GetAsync("/api/v1/stock", Admin), "DBLREV-1");
+        var countAfterFirst = (await GetAsync("/api/v1/journals", Admin)).GetProperty("data").GetArrayLength();
+
+        res = await PostAsync($"/api/v1/journals/{journalId}/reversals", new { }, Fin);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        var body = await Json(res);
+        Assert.Equal("JOURNAL_ALREADY_REVERSED", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Contains(journalId, body.GetProperty("error").GetProperty("message").GetString());
+
+        // the rejected second reversal wrote nothing: no second reversal journal, no stock change
+        Assert.Equal(countAfterFirst, (await GetAsync("/api/v1/journals", Admin)).GetProperty("data").GetArrayLength());
+        Assert.Equal(stockAfterFirst, StockOf(await GetAsync("/api/v1/stock", Admin), "DBLREV-1"));
+    }
+
     // 005 AC1 — the centralized period lock rejects approvals AND receipts into closed months
     [Fact]
     public async Task Posting_Into_Closed_Period_Returns_409_PERIOD_LOCKED()

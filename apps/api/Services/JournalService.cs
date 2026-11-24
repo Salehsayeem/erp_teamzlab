@@ -66,6 +66,8 @@ public sealed class JournalService(
         if (j is null) return (null, "JOURNAL_NOT_FOUND", "Journal not found.");
         if (j.Status != JournalStatus.Posted) return (null, "JOURNAL_REVERSAL_ERROR", "Only posted journals can be reversed.");
         if (j.ReversalOfId is not null) return (null, "JOURNAL_REVERSAL_ERROR", "A reversal journal cannot be reversed.");
+        if (journals.HasReversal(journalId))
+            return (null, "JOURNAL_ALREADY_REVERSED", $"Journal {journalId} has already been reversed; a retry must not reverse it twice.");
         if (!user.Has("journals:approve")) return (null, "FORBIDDEN", "journals:approve permission required.");
 
         // a reversal posts at today — the same lock applies (R9d: no posting into any closed month)

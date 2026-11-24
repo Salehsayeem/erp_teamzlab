@@ -16,6 +16,11 @@ public sealed class JournalRepository(ErpDbContext db, EntityContext ec) : IJour
 
     public List<Journal> All() => Ordered(Scoped());
 
+    // fix round 1: any journal pointing back at this one means it was already reversed — a retry
+    // must not reverse the source twice (second stock unwind / double revenue reversal)
+    public bool HasReversal(string journalId) =>
+        Scoped().Any(j => j.ReversalOfId == journalId);
+
     public void Add(Journal journal)
     {
         db.Journals.Add(journal);
