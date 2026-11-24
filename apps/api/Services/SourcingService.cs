@@ -22,6 +22,52 @@ public sealed class SourcingService(
             ? sourcing.AllEvents(status, eventType).Select(ProjEvent).ToList()
             : sourcing.EventsForEvaluator(user.Id, status, eventType).Select(ProjEvent).ToList();
 
+    // Composition read for the event screen (page reload): header + publication state + lots +
+    // frozen criteria + invitations (decorated with the supplier's current gates) + Q&A + bids +
+    // award summary. Visibility mirrors bids/score-summary; sealedness mirrors ListBids EXACTLY
+    // (FIX 1): without sourcing:approve, bid prices AND contentDigest stay hidden until an
+    // approved opening stamps who/when — the same rule strips the award unitPrice.
+    public (object? data, string? code, string? message) GetEvent(CurrentUser user, string eventId)
+    {
+        var evt = sourcing.FindEvent(eventId);
+        if (evt is null) return (null, "EVENT_NOT_FOUND", "Sourcing event not found.");
+        if (!CanSeeEverything(user) && sourcing.FindAssignment(eventId, user.Id) is null)
+            return (null, "FORBIDDEN", "Only assigned evaluators can view this event.");
+
+        var isApprover = user.Has("sourcing:approve");
+        var bids = sourcing.BidsForEvent(eventId)
+            .Select(b =>
+            {
+                var unsealed = isApprover || b.OpenedAt is not null;
+                return ProjBid(b, sourcing.LinesForBid(b.Id).Select(l => ProjLine(l, unsealed)).ToList(), unsealed);
+            })
+            .ToList();
+        var pricesUnsealed = isApprover || sourcing.BidsForEvent(eventId).Any(b => b.OpenedAt is not null);
+        return (new
+        {
+            @event = ProjEvent(evt),
+            publication = ProjPublication(evt),
+            lots = sourcing.LotsForEvent(eventId).Select(ProjLot).ToList(),
+            criteria = sourcing.CriteriaForEvent(eventId).Select(ProjCriterion).ToList(),
+            invitations = sourcing.InvitationsForEvent(eventId).Select(ProjInvitationDecorated).ToList(),
+            qa = sourcing.QaForEvent(eventId).Select(ProjQa).ToList(),
+            bids,
+            awards = sourcing.AwardsForEvent(eventId).Select(a => ProjAwardSummary(a, pricesUnsealed)).ToList(),
+        }, null, null);
+    }
+
+    // GET /api/v1/awards?eventId= — the event's award summary; embedded prices follow the same
+    // sealed-phase rule as the event detail (hidden until the approver view or an opening)
+    public (object? data, string? code, string? message) AwardsFor(CurrentUser user, string eventId)
+    {
+        var evt = sourcing.FindEvent(eventId);
+        if (evt is null) return (null, "EVENT_NOT_FOUND", "Sourcing event not found.");
+        if (!CanSeeEverything(user) && sourcing.FindAssignment(eventId, user.Id) is null)
+            return (null, "FORBIDDEN", "Only assigned evaluators can view the awards of this event.");
+        var reveal = user.Has("sourcing:approve") || sourcing.BidsForEvent(eventId).Any(b => b.OpenedAt is not null);
+        return (sourcing.AwardsForEvent(eventId).Select(a => ProjAwardSummary(a, reveal)).ToList(), null, null);
+    }
+
     public (object? data, string? code, string? message) Create(CurrentUser user, CreateEventRequest request)
     {
         var lot = new SourcingEvent(numbers.Next("EV"), ec.TenantId, ec.EntityId, request.Title,
@@ -583,6 +629,29 @@ public sealed class SourcingService(
         i.Id, i.EventId, i.SupplierId, i.Status, i.Channel, i.SentAt, i.FailureReason, i.WarningGates,
     };
 
+    // event-detail decoration: the recorded warning gates PLUS the supplier's current gate rows
+    // (status/exception windows) so the screen can render live eligibility, not just invite-time
+    private object ProjInvitationDecorated(EventInvitation i) => new
+    {
+        i.Id, i.EventId, i.SupplierId, i.Status, i.Channel, i.SentAt, i.FailureReason, i.WarningGates,
+        supplierStatus = suppliers.Find(i.SupplierId)?.Status,
+        gates = suppliers.GatesFor(i.SupplierId).Select(ProjGateRow).ToList(),
+    };
+
+    private static object ProjGateRow(SupplierGate g) => new
+    {
+        g.Id, g.SupplierId, g.GateCode, g.Severity, g.EffectiveFrom, g.EffectiveTo, g.EvidenceRef,
+        g.ExceptionBy, g.ExceptionUntil,
+    };
+
+    // publication state lives on the event row: Draft = unpublished; anything else is published
+    // with lots/criteria frozen at Version (bumped by published event-wide Q&A, 027 AC3)
+    private static object ProjPublication(SourcingEvent e) => new
+    {
+        published = e.Status is not SourcingEventStatus.Draft,
+        criteriaVersion = e.Version,
+    };
+
     private static object ProjQa(EventQa q) => new
     {
         q.Id, q.EventId, q.SupplierId, q.Question, q.Answer, q.Scope, q.Published, q.PublishedAt, q.AnsweredBy,
@@ -607,4 +676,17 @@ public sealed class SourcingService(
         a.Id, a.EventId, a.LotId, a.SupplierId, a.Qty, a.UnitPrice, a.Status, a.BasisEventVersion,
         a.Recommendation, a.CreatedBy, a.ApprovedBy, a.ApprovedAt, a.RejectionReason, a.CreatedAt,
     };
+
+    // read summary (event detail + awards list): while sealed (no sourcing:approve, no approved
+    // opening) the unitPrice is stripped exactly like the bid lines (FIX 1)
+    private static object ProjAwardSummary(Award a, bool reveal) => reveal
+        ? new
+        {
+            a.Id, a.EventId, a.LotId, a.SupplierId, a.Qty, a.UnitPrice, a.Status, a.BasisEventVersion,
+            a.CreatedBy, a.ApprovedBy, a.ApprovedAt, a.RejectionReason,
+        }
+        : (object)new
+        {
+            a.Id, a.EventId, a.LotId, a.SupplierId, a.Qty, a.Status, a.BasisEventVersion, a.CreatedBy,
+        };
 }

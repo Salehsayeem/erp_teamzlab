@@ -3,6 +3,8 @@ namespace Erp.Api.Interfaces;
 public interface IInvoiceService
 {
     object List(InvoiceStatus? status, string? customerId);
+    // 046 read: the invoice's credit/debit adjustment history (page reload)
+    (object? data, string? code, string? message) AdjustmentsFor(string invoiceId);
     (Invoice? invoice, string? code, string? message) DraftFromShipments(CurrentUser user, string soId, DateOnly? invoiceDate);
     (object? data, string? code, string? message) Post(CurrentUser approver, string invoiceId);
     (AdjustmentDocument? adjustment, string? code, string? message) CreateAdjustment(CurrentUser user, Dtos.CreateAdjustmentRequest request);
