@@ -37,6 +37,19 @@ import type { Column } from "@/components/uikit";
 import { fmtDay, hasPermission, mfgActionError, mfgStatusLabel, mfgTone, useMfgMe } from "../../_lib/helpers";
 
 type SessionIssue = { id: string; componentSku: string; qty: number; value: number; journalId: string | null };
+
+// The posting endpoints answer NESTED payloads ({ issue, journal } / { completion, journal } /
+// { scrap, journal }) — never read them flat. Tolerant narrowers keep `any` out and degrade to
+// the submitted form values when a field is missing.
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
+}
+function strOf(v: unknown): string | null {
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+function numOf(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
 type SessionCompletion = { id: string; qty: number; note: string | null; journalId: string | null };
 type SessionScrap = { id: string; itemSku: string; qty: number; reasonCode: string; disposition: string; journalId: string | null };
 
@@ -221,8 +234,18 @@ export default function ProductionOrderDetailPage() {
       setActionError(mfgActionError(t, res.code, res.message));
       return;
     }
-    const row = res.data as { id: string; componentSku: string; qty: number; lineValue: number; journalId: string | null };
-    setSessionIssues((prev) => [{ id: row.id, componentSku: row.componentSku, qty: row.qty, value: row.lineValue ?? row.qty * 0, journalId: row.journalId }, ...prev]);
+    const root = asRecord(res.data);
+    const issue = asRecord(root?.issue);
+    const journal = asRecord(root?.journal);
+    const unitCost = numOf(issue?.unitCost) ?? 0;
+    const row: SessionIssue = {
+      id: strOf(issue?.id) ?? "—",
+      componentSku: strOf(issue?.componentSku) ?? issueForm.componentSku.trim(),
+      qty,
+      value: numOf(issue?.lineValue) ?? qty * unitCost,
+      journalId: strOf(journal?.id) ?? strOf(issue?.journalId),
+    };
+    setSessionIssues((prev) => [row, ...prev]);
     pushToast("success", tc.issuedNote);
     setIssueForm({ componentSku: "", qty: "" });
     await load();
@@ -268,8 +291,16 @@ export default function ProductionOrderDetailPage() {
       setActionError(mfgActionError(t, res.code, res.message));
       return;
     }
-    const row = res.data as { id: string; qty: number; note: string | null; journalId: string | null };
-    setSessionCompletions((prev) => [{ id: row.id, qty: row.qty, note: row.note, journalId: row.journalId }, ...prev]);
+    const root = asRecord(res.data);
+    const completion = asRecord(root?.completion);
+    const journal = asRecord(root?.journal);
+    const row: SessionCompletion = {
+      id: strOf(completion?.id) ?? "—",
+      qty: numOf(completion?.qty) ?? qty,
+      note: strOf(completion?.note) ?? (completionForm.note.trim() || null),
+      journalId: strOf(journal?.id) ?? strOf(completion?.journalId),
+    };
+    setSessionCompletions((prev) => [row, ...prev]);
     pushToast("success", tc.reportedNote);
     setCompletionForm({ qty: "", note: "" });
     await load();
@@ -296,8 +327,18 @@ export default function ProductionOrderDetailPage() {
       setActionError(mfgActionError(t, res.code, res.message));
       return;
     }
-    const row = res.data as { id: string; itemSku: string; qty: number; reasonCode: string; disposition: string; journalId: string | null };
-    setSessionScraps((prev) => [{ id: row.id, itemSku: row.itemSku, qty: row.qty, reasonCode: row.reasonCode, disposition: row.disposition, journalId: row.journalId }, ...prev]);
+    const root = asRecord(res.data);
+    const scrap = asRecord(root?.scrap);
+    const journal = asRecord(root?.journal);
+    const row: SessionScrap = {
+      id: strOf(scrap?.id) ?? "—",
+      itemSku: strOf(scrap?.itemSku) ?? scrapForm.itemSku.trim(),
+      qty: numOf(scrap?.qty) ?? qty,
+      reasonCode: strOf(scrap?.reasonCode) ?? scrapForm.reasonCode.trim(),
+      disposition: strOf(scrap?.disposition) ?? scrapForm.disposition,
+      journalId: strOf(journal?.id) ?? strOf(scrap?.journalId),
+    };
+    setSessionScraps((prev) => [row, ...prev]);
     pushToast("success", tc.scrapReportedNote);
     setScrapForm({ itemSku: "", qty: "", reasonCode: "", disposition: "Disposal" });
     await load();
