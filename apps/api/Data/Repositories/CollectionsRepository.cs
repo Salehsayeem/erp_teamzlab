@@ -11,6 +11,11 @@ public sealed class CollectionsRepository(ErpDbContext db, EntityContext ec) : I
     // 058 AC2: reminders are an append-only history — no update/delete path exists
     public void AddReminder(CollectionReminder reminder) => db.CollectionReminders.Add(reminder);
 
+    public List<CollectionReminder> RemindersForInvoice(string invoiceId) =>
+        db.CollectionReminders
+            .Where(r => r.TenantId == ec.TenantId && r.LegalEntityId == ec.EntityId && r.InvoiceId == invoiceId)
+            .OrderBy(r => r.Id).ToList();
+
     public List<Dispute> DisputesForInvoice(string invoiceId) =>
         DisputeScope().Where(d => d.InvoiceId == invoiceId).OrderBy(d => d.Id).ToList();
 

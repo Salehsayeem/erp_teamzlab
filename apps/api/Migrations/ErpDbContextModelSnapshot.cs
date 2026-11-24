@@ -16,7 +16,7 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
     // If you encounter a merge conflict in the line below, it means you need to
     // discard one of the migration branches and recreate its migrations on top of
     // the other branch. See https://aka.ms/efcore-docs-migrations-conflicts for more info.
-    public override string LastMigrationId => "20261124114854_FixContractAmendmentGuards";
+    public override string LastMigrationId => "20261124213000_AddFinInvoiceRead";
 
     protected override void BuildModel(ModelBuilder modelBuilder)
     {
@@ -38,11 +38,17 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
 
         modelBuilder.HasSequence("doc_bid");
 
+        modelBuilder.HasSequence("doc_bom");
+
         modelBuilder.HasSequence("doc_case");
 
         modelBuilder.HasSequence("doc_cc");
 
+        modelBuilder.HasSequence("doc_cmp");
+
         modelBuilder.HasSequence("doc_cnt");
+
+        modelBuilder.HasSequence("doc_cpl");
 
         modelBuilder.HasSequence("doc_crd");
 
@@ -68,6 +74,8 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
 
         modelBuilder.HasSequence("doc_inv");
 
+        modelBuilder.HasSequence("doc_iss");
+
         modelBuilder.HasSequence("doc_j");
 
         modelBuilder.HasSequence("doc_lead");
@@ -76,13 +84,19 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
 
         modelBuilder.HasSequence("doc_lot");
 
+        modelBuilder.HasSequence("doc_mfo");
+
         modelBuilder.HasSequence("doc_obl");
 
         modelBuilder.HasSequence("doc_opp");
 
+        modelBuilder.HasSequence("doc_per");
+
         modelBuilder.HasSequence("doc_po");
 
         modelBuilder.HasSequence("doc_prj");
+
+        modelBuilder.HasSequence("doc_prn");
 
         modelBuilder.HasSequence("doc_qa");
 
@@ -90,17 +104,25 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
 
         modelBuilder.HasSequence("doc_rem");
 
+        modelBuilder.HasSequence("doc_scr");
+
         modelBuilder.HasSequence("doc_shp");
 
         modelBuilder.HasSequence("doc_so");
 
         modelBuilder.HasSequence("doc_sup");
 
+        modelBuilder.HasSequence("doc_tmc");
+
+        modelBuilder.HasSequence("doc_tme");
+
         modelBuilder.HasSequence("doc_trf");
 
         modelBuilder.HasSequence("doc_tsk");
 
         modelBuilder.HasSequence("doc_wh");
+
+        modelBuilder.HasSequence("doc_wkr");
 
         modelBuilder.Entity("Erp.Api.Account", b =>
             {
@@ -161,6 +183,36 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .IsUnique();
 
                 b.ToTable("accounts");
+
+                b.HasData(
+                    new
+                    {
+                        Id = "ACC-2300",
+                        Code = "2300",
+                        CreatedAt = new DateTimeOffset(new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                        CreatedBy = "system",
+                        DirectPostingAllowed = true,
+                        LegalEntityId = "LE-001",
+                        Name = "Salaries Payable",
+                        NormalBalance = 1,
+                        TenantId = "T-001",
+                        Type = 1,
+                        Version = 1
+                    },
+                    new
+                    {
+                        Id = "ACC-2310",
+                        Code = "2310",
+                        CreatedAt = new DateTimeOffset(new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                        CreatedBy = "system",
+                        DirectPostingAllowed = true,
+                        LegalEntityId = "LE-001",
+                        Name = "Payroll Deductions Payable",
+                        NormalBalance = 1,
+                        TenantId = "T-001",
+                        Type = 1,
+                        Version = 1
+                    });
             });
 
         modelBuilder.Entity("Erp.Api.AdjustmentDocument", b =>
@@ -569,6 +621,130 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.ToTable("bid_lines");
             });
 
+        modelBuilder.Entity("Erp.Api.BomLine", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<string>("BomRevisionId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("bom_revision_id");
+
+                b.Property<string>("ComponentSku")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("component_sku");
+
+                b.Property<int>("IssuePolicy")
+                    .HasColumnType("integer")
+                    .HasColumnName("issue_policy");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<decimal>("QtyPer")
+                    .HasColumnType("numeric")
+                    .HasColumnName("qty_per");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<string>("Unit")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("unit");
+
+                b.Property<decimal>("UnitCost")
+                    .HasColumnType("numeric")
+                    .HasColumnName("unit_cost");
+
+                b.HasKey("Id");
+
+                b.HasIndex("BomRevisionId");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.ToTable("bom_lines");
+            });
+
+        modelBuilder.Entity("Erp.Api.BomRevision", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<DateTimeOffset?>("ApprovedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("approved_at");
+
+                b.Property<string>("ApprovedBy")
+                    .HasColumnType("text")
+                    .HasColumnName("approved_by");
+
+                b.Property<DateTimeOffset>("CreatedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("created_at");
+
+                b.Property<string>("CreatedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("created_by");
+
+                b.Property<DateOnly>("EffectiveFrom")
+                    .HasColumnType("date")
+                    .HasColumnName("effective_from");
+
+                b.Property<DateOnly?>("EffectiveTo")
+                    .HasColumnType("date")
+                    .HasColumnName("effective_to");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<decimal>("OutputQtyPer")
+                    .HasColumnType("numeric")
+                    .HasColumnName("output_qty_per");
+
+                b.Property<string>("OutputSku")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("output_sku");
+
+                b.Property<int>("Revision")
+                    .HasColumnType("integer")
+                    .HasColumnName("revision");
+
+                b.Property<int>("Status")
+                    .HasColumnType("integer")
+                    .HasColumnName("status");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "OutputSku");
+
+                b.HasIndex("TenantId", "LegalEntityId", "Status");
+
+                b.HasIndex("TenantId", "LegalEntityId", "OutputSku", "Revision")
+                    .IsUnique();
+
+                b.ToTable("bom_revisions");
+            });
+
         modelBuilder.Entity("Erp.Api.CollectionReminder", b =>
             {
                 b.Property<string>("Id")
@@ -622,6 +798,134 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.HasIndex("TenantId", "LegalEntityId", "InvoiceId");
 
                 b.ToTable("collection_reminders");
+            });
+
+        modelBuilder.Entity("Erp.Api.CompensationEvent", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<decimal>("Amount")
+                    .HasColumnType("numeric")
+                    .HasColumnName("amount");
+
+                b.Property<string>("ApprovedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("approved_by");
+
+                b.Property<DateTimeOffset>("CreatedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("created_at");
+
+                b.Property<string>("CreatedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("created_by");
+
+                b.Property<string>("Currency")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("currency");
+
+                b.Property<DateOnly>("EffectiveFrom")
+                    .HasColumnType("date")
+                    .HasColumnName("effective_from");
+
+                b.Property<DateOnly?>("EffectiveTo")
+                    .HasColumnType("date")
+                    .HasColumnName("effective_to");
+
+                b.Property<string>("EmploymentId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("employment_id");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("PayBasis")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("pay_basis");
+
+                b.Property<string>("Reason")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("reason");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.HasKey("Id");
+
+                b.HasIndex("EmploymentId");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "EmploymentId", "EffectiveFrom");
+
+                b.ToTable("compensation_events");
+            });
+
+        modelBuilder.Entity("Erp.Api.CompletionReport", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<string>("JournalId")
+                    .HasColumnType("text")
+                    .HasColumnName("journal_id");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("Note")
+                    .HasColumnType("text")
+                    .HasColumnName("note");
+
+                b.Property<string>("OrderId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("order_id");
+
+                b.Property<decimal>("Qty")
+                    .HasColumnType("numeric")
+                    .HasColumnName("qty");
+
+                b.Property<DateTimeOffset>("ReportedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("reported_at");
+
+                b.Property<string>("ReportedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("reported_by");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.HasKey("Id");
+
+                b.HasIndex("JournalId");
+
+                b.HasIndex("OrderId");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "OrderId");
+
+                b.ToTable("completion_reports");
             });
 
         modelBuilder.Entity("Erp.Api.Contract", b =>
@@ -1135,6 +1439,187 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.ToTable("disputes");
             });
 
+        modelBuilder.Entity("Erp.Api.EarningDeductionCode", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<bool>("Active")
+                    .HasColumnType("boolean")
+                    .HasColumnName("active");
+
+                b.Property<string>("CalcBasis")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("calc_basis");
+
+                b.Property<string>("Code")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("code");
+
+                b.Property<DateTimeOffset>("CreatedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("created_at");
+
+                b.Property<string>("CreatedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("created_by");
+
+                b.Property<string>("CreditAccount")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("credit_account");
+
+                b.Property<string>("DebitAccount")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("debit_account");
+
+                b.Property<DateOnly>("EffectiveFrom")
+                    .HasColumnType("date")
+                    .HasColumnName("effective_from");
+
+                b.Property<int>("Kind")
+                    .HasColumnType("integer")
+                    .HasColumnName("kind");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("Name")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("name");
+
+                b.Property<decimal?>("RatePct")
+                    .HasColumnType("numeric")
+                    .HasColumnName("rate_pct");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<int>("Version")
+                    .HasColumnType("integer")
+                    .HasColumnName("version");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "Code")
+                    .IsUnique();
+
+                b.HasIndex("TenantId", "LegalEntityId", "Kind");
+
+                b.ToTable("earning_deduction_codes");
+            });
+
+        modelBuilder.Entity("Erp.Api.Employment", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<string>("CategoryCode")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("category_code");
+
+                b.Property<DateTimeOffset>("CreatedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("created_at");
+
+                b.Property<string>("CreatedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("created_by");
+
+                b.Property<string>("Email")
+                    .HasColumnType("text")
+                    .HasColumnName("email");
+
+                b.Property<string>("FullName")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("full_name");
+
+                b.Property<DateOnly>("HireDate")
+                    .HasColumnType("date")
+                    .HasColumnName("hire_date");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("LocationId")
+                    .HasColumnType("text")
+                    .HasColumnName("location_id");
+
+                b.Property<string>("ManagerUserId")
+                    .HasColumnType("text")
+                    .HasColumnName("manager_user_id");
+
+                b.Property<string>("NationalId")
+                    .HasColumnType("text")
+                    .HasColumnName("national_id");
+
+                b.Property<string>("Phone")
+                    .HasColumnType("text")
+                    .HasColumnName("phone");
+
+                b.Property<string>("PreferredName")
+                    .HasColumnType("text")
+                    .HasColumnName("preferred_name");
+
+                b.Property<int>("Status")
+                    .IsConcurrencyToken()
+                    .HasColumnType("integer")
+                    .HasColumnName("status");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<DateOnly?>("TerminationDate")
+                    .HasColumnType("date")
+                    .HasColumnName("termination_date");
+
+                b.Property<string>("TerminationReason")
+                    .HasColumnType("text")
+                    .HasColumnName("termination_reason");
+
+                b.Property<decimal>("WeeklyPlannedHours")
+                    .HasColumnType("numeric")
+                    .HasColumnName("weekly_planned_hours");
+
+                b.Property<string>("WorkerNo")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("worker_no");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "NationalId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "Status");
+
+                b.HasIndex("TenantId", "LegalEntityId", "WorkerNo")
+                    .IsUnique();
+
+                b.ToTable("employments");
+            });
+
         modelBuilder.Entity("Erp.Api.EvalCriterion", b =>
             {
                 b.Property<string>("Id")
@@ -1424,6 +1909,16 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .IsUnique();
 
                 b.ToTable("finance_settings");
+
+                b.HasData(
+                    new
+                    {
+                        Id = "FS-payroll-ot",
+                        Key = "payroll.ot_multiplier",
+                        LegalEntityId = "LE-001",
+                        TenantId = "T-001",
+                        Value = "1.5"
+                    });
             });
 
         modelBuilder.Entity("Erp.Api.FiscalPeriod", b =>
@@ -1805,6 +2300,7 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .HasColumnName("reversal_of_id");
 
                 b.Property<int>("Status")
+                    .IsConcurrencyToken()
                     .HasColumnType("integer")
                     .HasColumnName("status");
 
@@ -1902,6 +2398,86 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.ToTable("leads");
             });
 
+        modelBuilder.Entity("Erp.Api.MaterialIssue", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<string>("ComponentSku")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("component_sku");
+
+                b.Property<string>("JournalId")
+                    .HasColumnType("text")
+                    .HasColumnName("journal_id");
+
+                b.Property<int>("Kind")
+                    .HasColumnType("integer")
+                    .HasColumnName("kind");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<decimal>("LineValue")
+                    .HasColumnType("numeric")
+                    .HasColumnName("line_value");
+
+                b.Property<string>("LinkedCompletionId")
+                    .HasColumnType("text")
+                    .HasColumnName("linked_completion_id");
+
+                b.Property<string>("LinkedIssueId")
+                    .HasColumnType("text")
+                    .HasColumnName("linked_issue_id");
+
+                b.Property<string>("OrderId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("order_id");
+
+                b.Property<decimal>("Qty")
+                    .HasColumnType("numeric")
+                    .HasColumnName("qty");
+
+                b.Property<DateTimeOffset>("ReportedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("reported_at");
+
+                b.Property<string>("ReportedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("reported_by");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<decimal>("UnitCost")
+                    .HasColumnType("numeric")
+                    .HasColumnName("unit_cost");
+
+                b.HasKey("Id");
+
+                b.HasIndex("JournalId");
+
+                b.HasIndex("OrderId");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "ComponentSku");
+
+                b.HasIndex("TenantId", "LegalEntityId", "LinkedIssueId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "OrderId");
+
+                b.ToTable("material_issues");
+            });
+
         modelBuilder.Entity("Erp.Api.Membership", b =>
             {
                 b.Property<string>("UserId")
@@ -1969,6 +2545,20 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                         TenantId = "T-001",
                         LegalEntityId = "LE-001",
                         RoleId = "R-EVAL"
+                    },
+                    new
+                    {
+                        UserId = "U-008",
+                        TenantId = "T-001",
+                        LegalEntityId = "LE-001",
+                        RoleId = "R-MFG"
+                    },
+                    new
+                    {
+                        UserId = "U-007",
+                        TenantId = "T-001",
+                        LegalEntityId = "LE-001",
+                        RoleId = "R-HR"
                     });
             });
 
@@ -2064,6 +2654,65 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.ToTable("opportunities");
             });
 
+        modelBuilder.Entity("Erp.Api.OrderAmendment", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<DateTimeOffset>("ChangedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("changed_at");
+
+                b.Property<string>("ChangedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("changed_by");
+
+                b.Property<string>("Field")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("field");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("NewValue")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("new_value");
+
+                b.Property<string>("OldValue")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("old_value");
+
+                b.Property<string>("OrderId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("order_id");
+
+                b.Property<string>("Reason")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("reason");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.HasKey("Id");
+
+                b.HasIndex("OrderId");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.ToTable("order_amendments");
+            });
+
         modelBuilder.Entity("Erp.Api.OutboxMessage", b =>
             {
                 b.Property<string>("Id")
@@ -2107,6 +2756,294 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.HasIndex("TenantId", "LegalEntityId");
 
                 b.ToTable("outbox_messages");
+            });
+
+        modelBuilder.Entity("Erp.Api.PayGroup", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<bool>("Active")
+                    .HasColumnType("boolean")
+                    .HasColumnName("active");
+
+                b.Property<string>("Code")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("code");
+
+                b.Property<string>("Frequency")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("frequency");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("Name")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("name");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "Code")
+                    .IsUnique();
+
+                b.ToTable("pay_groups");
+
+                b.HasData(
+                    new
+                    {
+                        Id = "PG-001",
+                        Active = true,
+                        Code = "PG-001",
+                        Frequency = "Monthly",
+                        LegalEntityId = "LE-001",
+                        Name = "Monthly Staff",
+                        TenantId = "T-001"
+                    });
+            });
+
+        modelBuilder.Entity("Erp.Api.PayRun", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<DateTimeOffset?>("ApprovedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("approved_at");
+
+                b.Property<string>("ApprovedBy")
+                    .HasColumnType("text")
+                    .HasColumnName("approved_by");
+
+                b.Property<DateTimeOffset?>("CalculatedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("calculated_at");
+
+                b.Property<string>("CalculatedBy")
+                    .HasColumnType("text")
+                    .HasColumnName("calculated_by");
+
+                b.Property<DateTimeOffset>("CreatedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("created_at");
+
+                b.Property<string>("CreatedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("created_by");
+
+                b.Property<string>("Currency")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("currency");
+
+                b.Property<decimal>("DeductionTotal")
+                    .HasColumnType("numeric")
+                    .HasColumnName("deduction_total");
+
+                b.Property<bool?>("FundsReleased")
+                    .HasColumnType("boolean")
+                    .HasColumnName("funds_released");
+
+                b.Property<decimal>("GrossTotal")
+                    .HasColumnType("numeric")
+                    .HasColumnName("gross_total");
+
+                b.Property<string>("JournalId")
+                    .HasColumnType("text")
+                    .HasColumnName("journal_id");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<decimal>("NetTotal")
+                    .HasColumnType("numeric")
+                    .HasColumnName("net_total");
+
+                b.Property<DateOnly>("PayDate")
+                    .HasColumnType("date")
+                    .HasColumnName("pay_date");
+
+                b.Property<string>("PayGroupId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("pay_group_id");
+
+                b.Property<string>("PeriodId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("period_id");
+
+                b.Property<DateTimeOffset?>("PostedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("posted_at");
+
+                b.Property<string>("PostedBy")
+                    .HasColumnType("text")
+                    .HasColumnName("posted_by");
+
+                b.Property<string>("ReversalOfRunId")
+                    .HasColumnType("text")
+                    .HasColumnName("reversal_of_run_id");
+
+                b.Property<string>("ReversalReason")
+                    .HasColumnType("text")
+                    .HasColumnName("reversal_reason");
+
+                b.Property<int>("Status")
+                    .IsConcurrencyToken()
+                    .HasColumnType("integer")
+                    .HasColumnName("status");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.HasKey("Id");
+
+                b.HasIndex("PayGroupId");
+
+                b.HasIndex("PeriodId");
+
+                b.HasIndex("ReversalOfRunId");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "Status");
+
+                b.HasIndex("TenantId", "LegalEntityId", "PayGroupId", "PeriodId")
+                    .IsUnique()
+                    .HasFilter("status <> 4");
+
+                b.ToTable("pay_runs");
+            });
+
+        modelBuilder.Entity("Erp.Api.ProductionOrder", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<string>("CancelReason")
+                    .HasColumnType("text")
+                    .HasColumnName("cancel_reason");
+
+                b.Property<DateTimeOffset?>("ClosedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("closed_at");
+
+                b.Property<string>("ClosedBy")
+                    .HasColumnType("text")
+                    .HasColumnName("closed_by");
+
+                b.Property<decimal>("CompletedQty")
+                    .HasColumnType("numeric")
+                    .HasColumnName("completed_qty");
+
+                b.Property<DateTimeOffset>("CreatedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("created_at");
+
+                b.Property<string>("CreatedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("created_by");
+
+                b.Property<decimal>("DemandedQty")
+                    .HasColumnType("numeric")
+                    .HasColumnName("demanded_qty");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("OrderNo")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("order_no");
+
+                b.Property<string>("OutputSku")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("output_sku");
+
+                b.Property<decimal>("OverTolerancePct")
+                    .HasColumnType("numeric")
+                    .HasColumnName("over_tolerance_pct");
+
+                b.Property<string>("PlannedBomRevisionId")
+                    .HasColumnType("text")
+                    .HasColumnName("planned_bom_revision_id");
+
+                b.Property<decimal>("PlannedQty")
+                    .HasColumnType("numeric")
+                    .HasColumnName("planned_qty");
+
+                b.Property<string>("ReleasedBomRevisionId")
+                    .HasColumnType("text")
+                    .HasColumnName("released_bom_revision_id");
+
+                b.Property<decimal>("ReleasedQty")
+                    .HasColumnType("numeric")
+                    .HasColumnName("released_qty");
+
+                b.Property<DateTimeOffset?>("ReopenedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("reopened_at");
+
+                b.Property<string>("ReopenedBy")
+                    .HasColumnType("text")
+                    .HasColumnName("reopened_by");
+
+                b.Property<int>("Status")
+                    .IsConcurrencyToken()
+                    .HasColumnType("integer")
+                    .HasColumnName("status");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<string>("Unit")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("unit");
+
+                b.HasKey("Id");
+
+                b.HasIndex("PlannedBomRevisionId");
+
+                b.HasIndex("ReleasedBomRevisionId");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "OrderNo")
+                    .IsUnique();
+
+                b.HasIndex("TenantId", "LegalEntityId", "OutputSku");
+
+                b.HasIndex("TenantId", "LegalEntityId", "Status");
+
+                b.ToTable("production_orders");
             });
 
         modelBuilder.Entity("Erp.Api.Project", b =>
@@ -2374,7 +3311,7 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                         Id = "R-FIN",
                         LegalEntityId = "LE-001",
                         Name = "finance_officer",
-                        Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:approve" },
+                        Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write" },
                         TenantId = "T-001"
                     },
                     new
@@ -2399,6 +3336,22 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                         LegalEntityId = "LE-001",
                         Name = "evaluator",
                         Permissions = new[] { "sourcing:read", "sourcing:evaluate" },
+                        TenantId = "T-001"
+                    },
+                    new
+                    {
+                        Id = "R-MFG",
+                        LegalEntityId = "LE-001",
+                        Name = "manufacturing_officer",
+                        Permissions = new[] { "boms:read", "boms:write", "boms:approve", "mfg:read", "mfg:write", "mfg:release", "mfg:override", "mfg:close", "mfg:reopen" },
+                        TenantId = "T-001"
+                    },
+                    new
+                    {
+                        Id = "R-HR",
+                        LegalEntityId = "LE-001",
+                        Name = "hr_officer",
+                        Permissions = new[] { "workers:read", "workers:write", "time:read", "time:write", "time:approve", "payroll:read", "payroll:calculate" },
                         TenantId = "T-001"
                     });
             });
@@ -2525,6 +3478,75 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.HasIndex("TenantId", "LegalEntityId");
 
                 b.ToTable("score_cards");
+            });
+
+        modelBuilder.Entity("Erp.Api.ScrapReport", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<int>("Disposition")
+                    .HasColumnType("integer")
+                    .HasColumnName("disposition");
+
+                b.Property<string>("ItemSku")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("item_sku");
+
+                b.Property<string>("JournalId")
+                    .HasColumnType("text")
+                    .HasColumnName("journal_id");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("OrderId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("order_id");
+
+                b.Property<decimal>("Qty")
+                    .HasColumnType("numeric")
+                    .HasColumnName("qty");
+
+                b.Property<string>("ReasonCode")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("reason_code");
+
+                b.Property<DateTimeOffset>("ReportedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("reported_at");
+
+                b.Property<string>("ReportedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("reported_by");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<decimal>("UnitCost")
+                    .HasColumnType("numeric")
+                    .HasColumnName("unit_cost");
+
+                b.HasKey("Id");
+
+                b.HasIndex("JournalId");
+
+                b.HasIndex("OrderId");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "OrderId");
+
+                b.ToTable("scrap_reports");
             });
 
         modelBuilder.Entity("Erp.Api.ServiceCase", b =>
@@ -3179,6 +4201,161 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.ToTable("tax_codes");
             });
 
+        modelBuilder.Entity("Erp.Api.TimeCorrection", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<DateTimeOffset?>("ApprovedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("approved_at");
+
+                b.Property<string>("ApprovedBy")
+                    .HasColumnType("text")
+                    .HasColumnName("approved_by");
+
+                b.Property<DateTimeOffset>("CreatedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("created_at");
+
+                b.Property<string>("CreatedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("created_by");
+
+                b.Property<string>("DecisionReason")
+                    .HasColumnType("text")
+                    .HasColumnName("decision_reason");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<decimal>("PreviousHours")
+                    .HasColumnType("numeric")
+                    .HasColumnName("previous_hours");
+
+                b.Property<decimal>("PreviousOvertimeHours")
+                    .HasColumnType("numeric")
+                    .HasColumnName("previous_overtime_hours");
+
+                b.Property<decimal>("ProposedHours")
+                    .HasColumnType("numeric")
+                    .HasColumnName("proposed_hours");
+
+                b.Property<decimal>("ProposedOvertimeHours")
+                    .HasColumnType("numeric")
+                    .HasColumnName("proposed_overtime_hours");
+
+                b.Property<string>("Reason")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("reason");
+
+                b.Property<string>("RequestedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("requested_by");
+
+                b.Property<int>("Status")
+                    .IsConcurrencyToken()
+                    .HasColumnType("integer")
+                    .HasColumnName("status");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<string>("TimeEntryId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("time_entry_id");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TimeEntryId");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.ToTable("time_corrections");
+            });
+
+        modelBuilder.Entity("Erp.Api.TimeEntry", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<DateTimeOffset>("CreatedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("created_at");
+
+                b.Property<string>("CreatedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("created_by");
+
+                b.Property<string>("EmploymentId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("employment_id");
+
+                b.Property<decimal>("Hours")
+                    .HasColumnType("numeric")
+                    .HasColumnName("hours");
+
+                b.Property<string>("IdemKey")
+                    .HasColumnType("text")
+                    .HasColumnName("idem_key");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("Note")
+                    .HasColumnType("text")
+                    .HasColumnName("note");
+
+                b.Property<decimal>("OvertimeHours")
+                    .HasColumnType("numeric")
+                    .HasColumnName("overtime_hours");
+
+                b.Property<string>("Source")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("source");
+
+                b.Property<int>("Status")
+                    .HasColumnType("integer")
+                    .HasColumnName("status");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<DateOnly>("WorkDate")
+                    .HasColumnType("date")
+                    .HasColumnName("work_date");
+
+                b.HasKey("Id");
+
+                b.HasIndex("EmploymentId");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "IdemKey")
+                    .IsUnique();
+
+                b.HasIndex("TenantId", "LegalEntityId", "EmploymentId", "WorkDate", "Status");
+
+                b.ToTable("time_entries");
+            });
+
         modelBuilder.Entity("Erp.Api.User", b =>
             {
                 b.Property<string>("Id")
@@ -3269,6 +4446,24 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                         Email = "evaluator@teamzlab.dev",
                         LegalEntityId = "LE-001",
                         TenantId = "T-001"
+                    },
+                    new
+                    {
+                        Id = "U-008",
+                        Active = true,
+                        DisplayName = "Manufacturing Officer",
+                        Email = "mfg@teamzlab.dev",
+                        LegalEntityId = "LE-001",
+                        TenantId = "T-001"
+                    },
+                    new
+                    {
+                        Id = "U-007",
+                        Active = true,
+                        DisplayName = "HR Officer",
+                        Email = "hr@teamzlab.dev",
+                        LegalEntityId = "LE-001",
+                        TenantId = "T-001"
                     });
             });
 
@@ -3316,6 +4511,51 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                         Name = "Main Warehouse",
                         TenantId = "T-001"
                     });
+            });
+
+        modelBuilder.Entity("Erp.Api.WorkerPayGroup", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<DateOnly>("EffectiveFrom")
+                    .HasColumnType("date")
+                    .HasColumnName("effective_from");
+
+                b.Property<DateOnly?>("EffectiveTo")
+                    .HasColumnType("date")
+                    .HasColumnName("effective_to");
+
+                b.Property<string>("EmploymentId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("employment_id");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("PayGroupId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("pay_group_id");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.HasKey("Id");
+
+                b.HasIndex("EmploymentId");
+
+                b.HasIndex("PayGroupId");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.ToTable("worker_pay_groups");
             });
 
         modelBuilder.Entity("Erp.Api.AdjustmentDocument", b =>
@@ -3456,11 +4696,43 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .IsRequired();
             });
 
+        modelBuilder.Entity("Erp.Api.BomLine", b =>
+            {
+                b.HasOne("Erp.Api.BomRevision", null)
+                    .WithMany()
+                    .HasForeignKey("BomRevisionId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+            });
+
         modelBuilder.Entity("Erp.Api.CollectionReminder", b =>
             {
                 b.HasOne("Erp.Api.Invoice", null)
                     .WithMany()
                     .HasForeignKey("InvoiceId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+            });
+
+        modelBuilder.Entity("Erp.Api.CompensationEvent", b =>
+            {
+                b.HasOne("Erp.Api.Employment", null)
+                    .WithMany()
+                    .HasForeignKey("EmploymentId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+            });
+
+        modelBuilder.Entity("Erp.Api.CompletionReport", b =>
+            {
+                b.HasOne("Erp.Api.Journal", null)
+                    .WithMany()
+                    .HasForeignKey("JournalId")
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                b.HasOne("Erp.Api.ProductionOrder", null)
+                    .WithMany()
+                    .HasForeignKey("OrderId")
                     .OnDelete(DeleteBehavior.Restrict)
                     .IsRequired();
             });
@@ -3741,6 +5013,20 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.Navigation("Lines");
             });
 
+        modelBuilder.Entity("Erp.Api.MaterialIssue", b =>
+            {
+                b.HasOne("Erp.Api.Journal", null)
+                    .WithMany()
+                    .HasForeignKey("JournalId")
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                b.HasOne("Erp.Api.ProductionOrder", null)
+                    .WithMany()
+                    .HasForeignKey("OrderId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+            });
+
         modelBuilder.Entity("Erp.Api.Membership", b =>
             {
                 b.HasOne("Erp.Api.Role", null)
@@ -3825,6 +5111,123 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     });
 
                 b.Navigation("Lines");
+            });
+
+        modelBuilder.Entity("Erp.Api.OrderAmendment", b =>
+            {
+                b.HasOne("Erp.Api.ProductionOrder", null)
+                    .WithMany()
+                    .HasForeignKey("OrderId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+            });
+
+        modelBuilder.Entity("Erp.Api.PayRun", b =>
+            {
+                b.HasOne("Erp.Api.PayGroup", null)
+                    .WithMany()
+                    .HasForeignKey("PayGroupId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+
+                b.HasOne("Erp.Api.FiscalPeriod", null)
+                    .WithMany()
+                    .HasForeignKey("PeriodId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+
+                b.HasOne("Erp.Api.PayRun", null)
+                    .WithMany()
+                    .HasForeignKey("ReversalOfRunId")
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                b.OwnsMany("Erp.Api.PayRunLine", "Lines", b1 =>
+                    {
+                        b1.Property<string>("PayRunId")
+                            .HasColumnType("text")
+                            .HasColumnName("pay_run_id");
+
+                        var lineNo = b1.Property<int>("LineNo")
+                            .ValueGeneratedOnAdd()
+                            .HasColumnType("integer")
+                            .HasColumnName("line_no");
+
+                        NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(lineNo);
+
+                        b1.Property<decimal>("Amount")
+                            .HasColumnType("numeric")
+                            .HasColumnName("amount");
+
+                        b1.Property<string>("Currency")
+                            .IsRequired()
+                            .HasColumnType("text")
+                            .HasColumnName("currency");
+
+                        b1.Property<string>("EmploymentId")
+                            .IsRequired()
+                            .HasColumnType("text")
+                            .HasColumnName("employment_id");
+
+                        b1.Property<decimal>("Hours")
+                            .HasColumnType("numeric")
+                            .HasColumnName("hours");
+
+                        b1.Property<int>("Kind")
+                            .HasColumnType("integer")
+                            .HasColumnName("kind");
+
+                        b1.Property<string>("LegalEntityId")
+                            .HasColumnType("text")
+                            .HasColumnName("legal_entity_id");
+
+                        b1.Property<string>("PayCode")
+                            .IsRequired()
+                            .HasColumnType("text")
+                            .HasColumnName("pay_code");
+
+                        b1.Property<string>("PayCodeId")
+                            .IsRequired()
+                            .HasColumnType("text")
+                            .HasColumnName("pay_code_id");
+
+                        b1.Property<decimal>("Rate")
+                            .HasColumnType("numeric")
+                            .HasColumnName("rate");
+
+                        b1.Property<string>("SourceEntryId")
+                            .HasColumnType("text")
+                            .HasColumnName("source_entry_id");
+
+                        b1.Property<string>("TenantId")
+                            .HasColumnType("text")
+                            .HasColumnName("tenant_id");
+
+                        b1.HasKey("PayRunId", "LineNo");
+
+                        b1.HasIndex("PayRunId");
+
+                        b1.HasIndex("TenantId", "LegalEntityId");
+
+                        b1.ToTable("pay_run_lines");
+
+                        b1.WithOwner()
+                            .HasForeignKey("PayRunId");
+                    });
+
+                b.Navigation("Lines");
+            });
+
+        modelBuilder.Entity("Erp.Api.ProductionOrder", b =>
+            {
+                b.HasOne("Erp.Api.BomRevision", null)
+                    .WithMany()
+                    .HasForeignKey("PlannedBomRevisionId")
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                b.HasOne("Erp.Api.BomRevision", null)
+                    .WithMany()
+                    .HasForeignKey("ReleasedBomRevisionId")
+                    .OnDelete(DeleteBehavior.Restrict);
             });
 
         modelBuilder.Entity("Erp.Api.ProjectTask", b =>
@@ -3998,6 +5401,20 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .IsRequired();
             });
 
+        modelBuilder.Entity("Erp.Api.ScrapReport", b =>
+            {
+                b.HasOne("Erp.Api.Journal", null)
+                    .WithMany()
+                    .HasForeignKey("JournalId")
+                    .OnDelete(DeleteBehavior.Restrict);
+
+                b.HasOne("Erp.Api.ProductionOrder", null)
+                    .WithMany()
+                    .HasForeignKey("OrderId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+            });
+
         modelBuilder.Entity("Erp.Api.Shipment", b =>
             {
                 b.HasOne("Erp.Api.SalesOrder", null)
@@ -4108,6 +5525,39 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.HasOne("Erp.Api.Supplier", null)
                     .WithMany()
                     .HasForeignKey("SupplierId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+            });
+
+        modelBuilder.Entity("Erp.Api.TimeCorrection", b =>
+            {
+                b.HasOne("Erp.Api.TimeEntry", null)
+                    .WithMany()
+                    .HasForeignKey("TimeEntryId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+            });
+
+        modelBuilder.Entity("Erp.Api.TimeEntry", b =>
+            {
+                b.HasOne("Erp.Api.Employment", null)
+                    .WithMany()
+                    .HasForeignKey("EmploymentId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+            });
+
+        modelBuilder.Entity("Erp.Api.WorkerPayGroup", b =>
+            {
+                b.HasOne("Erp.Api.Employment", null)
+                    .WithMany()
+                    .HasForeignKey("EmploymentId")
+                    .OnDelete(DeleteBehavior.Restrict)
+                    .IsRequired();
+
+                b.HasOne("Erp.Api.PayGroup", null)
+                    .WithMany()
+                    .HasForeignKey("PayGroupId")
                     .OnDelete(DeleteBehavior.Restrict)
                     .IsRequired();
             });

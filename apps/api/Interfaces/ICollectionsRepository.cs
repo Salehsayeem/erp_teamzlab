@@ -4,6 +4,7 @@ namespace Erp.Api.Interfaces;
 public interface ICollectionsRepository
 {
     void AddReminder(CollectionReminder reminder);
+    List<CollectionReminder> RemindersForInvoice(string invoiceId);
     List<Dispute> DisputesForInvoice(string invoiceId);
     Dispute? FindDispute(string disputeId);
     void AddDispute(Dispute dispute);

@@ -1,5 +1,4 @@
 using Erp.Api.Data;
-using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -14,8 +13,6 @@ namespace Erp.Api.Migrations;
 // databases it drops and re-adds the composite PK AddAssetsSeed already created (harmless no-op
 // in effect). Context attributes live on the class — no Designer file needed for a hand-authored
 // migration whose post-state equals the current model snapshot.
-[DbContext(typeof(ErpDbContext))]
-[Migration("20261124142024_FixDepreciationRunsPk")]
 public partial class FixDepreciationRunsPk : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)

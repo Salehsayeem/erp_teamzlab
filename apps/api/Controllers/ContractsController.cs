@@ -28,6 +28,15 @@ public sealed class ContractsController(IContractsService contracts) : Controlle
         return Envelope.Ok<object>(contracts.List(statusValue, days));
     }
 
+    [HttpGet("{id}")]
+    public IResult Get(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("contracts:read")) return Envelope.Fail("FORBIDDEN", "contracts:read permission required.", 403);
+        var (data, code, message) = contracts.Get(id);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
     [HttpPost]
     public IResult Create(CreateContractRequest request) => Idem.Wrap(HttpContext, request, () =>
     {

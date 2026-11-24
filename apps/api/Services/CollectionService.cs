@@ -41,6 +41,20 @@ public sealed class CollectionService(
         return rows.OrderBy(r => r.DueDate.DayNumber).Select(r => r.Row).ToList();
     }
 
+    // 058 AC2 read: the invoice's append-only reminder history
+    public (object? data, string? code, string? message) RemindersFor(string invoiceId)
+    {
+        if (invoices.FindInvoice(invoiceId) is null) return (null, "INVOICE_NOT_FOUND", "Invoice not found.");
+        return (collections.RemindersForInvoice(invoiceId), null, null);
+    }
+
+    // 059 read: the invoice's disputes with promise-to-pay state
+    public (object? data, string? code, string? message) DisputesFor(string invoiceId)
+    {
+        if (invoices.FindInvoice(invoiceId) is null) return (null, "INVOICE_NOT_FOUND", "Invoice not found.");
+        return (collections.DisputesForInvoice(invoiceId), null, null);
+    }
+
     // 058 AC1: reminders are refused for settled, disputed (059 AC1) or suppressed invoices —
     // the open amount is re-read CURRENT at logging time (partial payments are honored)
     public (CollectionReminder? reminder, string? code, string? message) LogReminder(CurrentUser user, Dtos.LogReminderRequest request)

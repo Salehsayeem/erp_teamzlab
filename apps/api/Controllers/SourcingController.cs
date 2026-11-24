@@ -23,6 +23,16 @@ public sealed class SourcingEventsController(ISourcingService sourcing) : Contro
             : Envelope.Fail("VALIDATION_ERROR", $"Unknown event filter '{status ?? eventType}'.", 400);
     }
 
+    // composition read for the event screen — sealedness (FIX 1) is decided in the service
+    [HttpGet("{id}")]
+    public IResult Get(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("sourcing:read")) return Envelope.Fail("FORBIDDEN", "sourcing:read permission required.", 403);
+        var (data, code, message) = sourcing.GetEvent(u, id);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
     [HttpPost]
     public IResult Create(CreateEventRequest request) => Idem.Wrap(HttpContext, request, () =>
     {
@@ -168,6 +178,17 @@ public sealed class SourcingEventsController(ISourcingService sourcing) : Contro
 [Route("api/v1/awards")]
 public sealed class AwardsController(ISourcingService sourcing) : ControllerBase
 {
+    // award summaries for one event — embedded prices follow the sealed-phase rule (service-side)
+    [HttpGet]
+    public IResult List([FromQuery] string? eventId)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("sourcing:read")) return Envelope.Fail("FORBIDDEN", "sourcing:read permission required.", 403);
+        if (string.IsNullOrWhiteSpace(eventId)) return Envelope.Fail("VALIDATION_ERROR", "eventId query parameter is required.", 400);
+        var (data, code, message) = sourcing.AwardsFor(u, eventId);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
     [HttpPost]
     public IResult Recommend(RecommendAwardRequest request) => Idem.Wrap(HttpContext, request, () =>
     {

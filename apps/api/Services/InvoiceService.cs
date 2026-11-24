@@ -35,6 +35,14 @@ public sealed class InvoiceService(
         }).ToList();
     }
 
+    // 046 read: the adjustment history of one invoice (kind/status/totals as stored; approved
+    // memos carry the finalized tax + total, drafts 0 until approval)
+    public (object? data, string? code, string? message) AdjustmentsFor(string invoiceId)
+    {
+        if (invoices.FindInvoice(invoiceId) is null) return (null, "INVOICE_NOT_FOUND", "Invoice not found.");
+        return (invoices.AdjustmentsForInvoice(invoiceId), null, null);
+    }
+
     private bool IsStale(Invoice invoice)
     {
         if (invoice.Status != InvoiceStatus.Draft) return false;

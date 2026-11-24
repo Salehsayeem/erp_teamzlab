@@ -8,6 +8,7 @@ import { fetchMe, fetchSuppliers, fetchPurchaseOrders, fetchCount, type Me } fro
 import { fmtNumber } from "@/lib/format";
 import { useAuth } from "@/hooks/useAuth";
 import { ErrorState, LoadingSkeleton } from "@/components/uikit";
+import { DashboardCharts } from "@/components/dashboard-charts";
 
 export default function DashboardPage() {
   const params = useParams<{ locale: string }>();
@@ -66,6 +67,7 @@ export default function DashboardPage() {
           </div>
         ))}
       </div>
+      <DashboardCharts token={token} locale={locale} currency={me.legalEntity.currency} />
       <section>
         <h2 className="t-title">{t.dashboard.workAreas}</h2>
         <div className="stack">

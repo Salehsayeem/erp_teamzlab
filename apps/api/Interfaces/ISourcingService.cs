@@ -7,6 +7,9 @@ namespace Erp.Api.Interfaces;
 public interface ISourcingService
 {
     object List(CurrentUser user, SourcingEventStatus? status, SourcingEventType? eventType);
+    // composition reads for the event/award screens (page reloads) — sealedness decided here
+    (object? data, string? code, string? message) GetEvent(CurrentUser user, string eventId);
+    (object? data, string? code, string? message) AwardsFor(CurrentUser user, string eventId);
     (object? data, string? code, string? message) Create(CurrentUser user, CreateEventRequest request);
     (object? data, string? code, string? message) AddLot(CurrentUser user, string eventId, AddLotRequest request);
     (object? data, string? code, string? message) AddCriterion(CurrentUser user, string eventId, AddCriterionRequest request);
