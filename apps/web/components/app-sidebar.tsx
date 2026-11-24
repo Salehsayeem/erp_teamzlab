@@ -44,6 +44,23 @@ const NAV = [
     items: [{ href: "finance/journals", label: "Journals" }],
   },
   {
+    heading: "People",
+    items: [
+      { href: "people/workers", label: "Workers" },
+      { href: "people/time", label: "Time" },
+      { href: "people/pay-codes", label: "Pay codes" },
+      { href: "people/pay-groups", label: "Pay groups" },
+      { href: "people/pay-runs", label: "Pay runs" },
+    ],
+  },
+  {
+    heading: "Manufacturing",
+    items: [
+      { href: "mfg/boms", label: "BOM revisions" },
+      { href: "mfg/production-orders", label: "Production orders" },
+    ],
+  },
+  {
     heading: "System",
     items: [{ href: "design", label: "Design system" }],
   },
