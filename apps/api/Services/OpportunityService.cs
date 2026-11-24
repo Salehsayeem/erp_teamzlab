@@ -16,7 +16,7 @@ public sealed class OpportunityService(
             .Where(o => ownerId == null || o.OwnerId == ownerId)
             .Select(Proj).ToList();
 
-    public (Opportunity opportunity, string? code, string? message) Create(CurrentUser user, Dtos.CreateOpportunityRequest request)
+    public (Opportunity? opportunity, string? code, string? message) Create(CurrentUser user, Dtos.CreateOpportunityRequest request)
     {
         if (identities.FindActiveUserById(request.OwnerId) is null)
             return (null, "VALIDATION_ERROR", "Owner must be an active user.");
@@ -32,7 +32,7 @@ public sealed class OpportunityService(
 
     // 017 AC1: the total is the sum of the lines; 015 AC2 analog — adding a line moves the
     // opportunity value, so the audit summary records the previous → new amount
-    public (Opportunity opportunity, string? code, string? message) AddLine(CurrentUser user, string opportunityId, Dtos.AddOpportunityLineRequest request)
+    public (Opportunity? opportunity, string? code, string? message) AddLine(CurrentUser user, string opportunityId, Dtos.AddOpportunityLineRequest request)
     {
         var opportunity = opportunities.Find(opportunityId);
         if (opportunity is null) return (null, "OPPORTUNITY_NOT_FOUND", "Opportunity not found.");
@@ -48,7 +48,7 @@ public sealed class OpportunityService(
         return (opportunity, null, null);
     }
 
-    public (Opportunity opportunity, string? code, string? message) Transition(CurrentUser user, string opportunityId, Dtos.TransitionOpportunityRequest request)
+    public (Opportunity? opportunity, string? code, string? message) Transition(CurrentUser user, string opportunityId, Dtos.TransitionOpportunityRequest request)
     {
         var opportunity = opportunities.Find(opportunityId);
         if (opportunity is null) return (null, "OPPORTUNITY_NOT_FOUND", "Opportunity not found.");
@@ -70,7 +70,7 @@ public sealed class OpportunityService(
     }
 
     // 016 AC2: closed-won must link a Confirmed-or-later sales order
-    private (Opportunity, string?, string?) Win(CurrentUser user, Opportunity opportunity, Dtos.TransitionOpportunityRequest request)
+    private (Opportunity? opportunity, string? code, string? message) Win(CurrentUser user, Opportunity opportunity, Dtos.TransitionOpportunityRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.OrderId))
             return (null, "OPPORTUNITY_WON_REQUIRES_ORDER", "Closing an opportunity as won requires an OrderId linking a sales order.");

@@ -48,10 +48,11 @@ public sealed class InvoicesController(IInvoiceService invoices) : ControllerBas
     [HttpPost("adjustments")]
     public IResult CreateAdjustment(CreateAdjustmentRequest request) => Idem.Wrap(HttpContext, request, () =>
     {
-        var err = Guards.Check(request.Reason, "Reason")
-            ?? Guards.Check(request.InvoiceId, "InvoiceId")
-            ?? (request.Lines is null || request.Lines.Count == 0 ? "At least one adjustment line is required." : null)
-            ?? (request.Lines.Any(l => l.Qty <= 0 || l.UnitPrice < 0) ? "Line qty must be > 0 and unit price must be >= 0." : null);
+        var err = Guards.Check(request.Reason, "Reason") ?? Guards.Check(request.InvoiceId, "InvoiceId");
+        if (err is null && (request.Lines is null || request.Lines.Count == 0))
+            err = "At least one adjustment line is required.";
+        if (err is null && request.Lines!.Any(l => l.Qty <= 0 || l.UnitPrice < 0))
+            err = "Line qty must be > 0 and unit price must be >= 0.";
         if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
         var u = CurrentUser.From(HttpContext);
         if (!u.Has("invoices:write")) return (Envelope.FailBody("FORBIDDEN", "invoices:write permission required."), 403);

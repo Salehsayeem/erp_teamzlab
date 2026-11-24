@@ -28,7 +28,7 @@ public sealed class LeadService(
             l.ReasonCode, l.OwnerId, l.ReceivedAt, l.TaxId, l.CreatedBy, l.CreatedAt,
         }).ToList();
 
-    public (Lead lead, string? code, string? message) Create(CurrentUser user, Dtos.CreateLeadRequest request)
+    public (Lead? lead, string? code, string? message) Create(CurrentUser user, Dtos.CreateLeadRequest request)
     {
         // 003 AC1: the server records the receipt time — client-supplied timestamps are ignored
         var lead = new Lead(numbers.Next("LEAD"), ec.TenantId, ec.EntityId, request.Company, request.ContactName,
@@ -41,7 +41,7 @@ public sealed class LeadService(
         return (lead, null, null);
     }
 
-    public (Lead lead, string? code, string? message) Transition(CurrentUser user, string leadId, LeadStatus to, string? reasonCode)
+    public (Lead? lead, string? code, string? message) Transition(CurrentUser user, string leadId, LeadStatus to, string? reasonCode)
     {
         var lead = leads.Find(leadId);
         if (lead is null) return (null, "LEAD_NOT_FOUND", "Lead not found.");

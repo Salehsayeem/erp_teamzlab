@@ -6,7 +6,7 @@ namespace Erp.Api.Services;
 // CRM interaction timeline + cases (ERP-SALES-007/008). R-T7d: deliberately separate from the
 // ASSETS ServiceCase entity — only CasePriority and the R8d flat SLA hours mapping are reused.
 public sealed class CrmService(
-    ICrmRepository crm, IIdentityRepository identities, INumberSeries numbers,
+    ICrmRepository crm, INumberSeries numbers,
     IAuditRepository audit, EntityContext ec) : ICrmService
 {
     // 008: forward map; Resolved demands resolution text (checked by the controller before this)
@@ -34,7 +34,7 @@ public sealed class CrmService(
         return crm.InteractionsFor(partyType.Value, partyId);
     }
 
-    public (Interaction interaction, string? code, string? message) LogInteraction(CurrentUser user, Dtos.LogInteractionRequest request)
+    public (Interaction? interaction, string? code, string? message) LogInteraction(CurrentUser user, Dtos.LogInteractionRequest request)
     {
         var interaction = new Interaction(numbers.Next("INT"), ec.TenantId, ec.EntityId,
             request.PartyType, request.PartyId, request.Channel, request.Subject, request.Notes,
@@ -56,7 +56,7 @@ public sealed class CrmService(
             .Select(c => Proj(c, now)).ToList();
     }
 
-    public (CrmCase crmCase, string? code, string? message) CreateCase(CurrentUser user, Dtos.CreateCrmCaseRequest request)
+    public (CrmCase? crmCase, string? code, string? message) CreateCase(CurrentUser user, Dtos.CreateCrmCaseRequest request)
     {
         var now = DateTimeOffset.UtcNow;
         var crmCase = new CrmCase(numbers.Next("CC"), ec.TenantId, ec.EntityId, request.CustomerId,
@@ -69,7 +69,7 @@ public sealed class CrmService(
         return (crmCase, null, null);
     }
 
-    public (CrmCase crmCase, string? code, string? message) TransitionCase(CurrentUser user, string caseId, CrmCaseStatus to, string? resolution)
+    public (CrmCase? crmCase, string? code, string? message) TransitionCase(CurrentUser user, string caseId, CrmCaseStatus to, string? resolution)
     {
         var crmCase = crm.FindCase(caseId);
         if (crmCase is null) return (null, "CRM_CASE_NOT_FOUND", "CRM case not found.");
