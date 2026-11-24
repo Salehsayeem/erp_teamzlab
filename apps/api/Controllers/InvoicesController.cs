@@ -9,7 +9,7 @@ namespace Erp.Api.Controllers;
 // surface; everything else lives under /invoices and /adjustments.
 [ApiController]
 [Route("api/v1")]
-public sealed class InvoicesController(IInvoiceService invoices) : ControllerBase
+public sealed class InvoicesController(IInvoiceService invoices, ICollectionService collections) : ControllerBase
 {
     // drafts are drafted from the order — the editor side of the 043 separation
     [HttpPost("sales-orders/{soId}/invoice-drafts")]
@@ -45,6 +45,17 @@ public sealed class InvoicesController(IInvoiceService invoices) : ControllerBas
         return code is null ? (Envelope.OkBody(data!), 200) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
     });
 
+    // 046 read: the invoice's adjustment history (kind/status/totals)
+    [HttpGet("adjustments")]
+    public IResult ListAdjustments([FromQuery] string? invoiceId)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("invoices:read")) return Envelope.Fail("FORBIDDEN", "invoices:read permission required.", 403);
+        if (string.IsNullOrWhiteSpace(invoiceId)) return Envelope.Fail("VALIDATION_ERROR", "invoiceId query parameter is required.", 400);
+        var (data, code, message) = invoices.AdjustmentsFor(invoiceId);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
     [HttpPost("adjustments")]
     public IResult CreateAdjustment(CreateAdjustmentRequest request) => Idem.Wrap(HttpContext, request, () =>
     {
@@ -67,6 +78,25 @@ public sealed class InvoicesController(IInvoiceService invoices) : ControllerBas
         var u = CurrentUser.From(HttpContext);
         var (adjustment, code, message) = invoices.ApproveAdjustment(u, id, request.Reason);
         return code is null ? Envelope.Ok<object>(adjustment!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
+    // 058/059 reads: the collections records hanging off one invoice
+    [HttpGet("invoices/{id}/reminders")]
+    public IResult Reminders(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("collections:read")) return Envelope.Fail("FORBIDDEN", "collections:read permission required.", 403);
+        var (data, code, message) = collections.RemindersFor(id);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
+    [HttpGet("invoices/{id}/disputes")]
+    public IResult Disputes(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("collections:read")) return Envelope.Fail("FORBIDDEN", "collections:read permission required.", 403);
+        var (data, code, message) = collections.DisputesFor(id);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
     }
 
     // review 1b: the drafter's (or admin's) escape hatch for a mis-drafted draft — terminal,

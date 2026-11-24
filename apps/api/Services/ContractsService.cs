@@ -28,6 +28,25 @@ public sealed class ContractsService(
             contracts.ObligationsForContract(c.Id).Count(o => Overdue(o)))).ToList();
     }
 
+    // Composition read for the contract screen (page reload): header + amendments (ordered by
+    // version) + price lines + obligations (overdue computed on read, 038 AC2) + renewal state.
+    // Read-only — a commitment is never mutated here (R-T6f).
+    public (object? data, string? code, string? message) Get(string contractId)
+    {
+        var contract = contracts.FindContract(contractId);
+        if (contract is null) return (null, "CONTRACT_NOT_FOUND", "Contract not found.");
+        var amendments = contracts.AmendmentsForContract(contractId);
+        var obligations = contracts.ObligationsForContract(contractId);
+        return (new
+        {
+            contract = ProjContract(contract, amendments.Count, obligations.Count(o => Overdue(o))),
+            amendments = amendments.Select(ProjAmendment).ToList(),
+            priceLines = contracts.PriceLinesForContract(contractId).Select(ProjPriceLine).ToList(),
+            obligations = obligations.Select(ProjObligation).ToList(),
+            renewal = ProjRenewal(contract),
+        }, null, null);
+    }
+
     // 036 AC1: the award reference must resolve to an APPROVED award; supplier/currency/validity
     // carry forward from the recommendation flow; one contract per award
     public (object? data, string? code, string? message) Create(CurrentUser user, CreateContractRequest request)
@@ -255,6 +274,19 @@ public sealed class ContractsService(
     private static object ProjAmendment(ContractAmendment a) => new
     {
         a.Id, a.ContractId, a.Version, a.EffectiveDate, a.Summary, a.ApprovedBy, a.ApprovedAt,
+    };
+
+    private static object ProjPriceLine(ContractPriceLine p) => new
+    {
+        p.Id, p.ContractId, p.ItemSku, p.UnitPrice, p.EffectiveFrom, p.EffectiveTo,
+    };
+
+    // 039 renewal state as of NOW: options left, notice window reached (R-T6g — computed per call)
+    private static object ProjRenewal(Contract c) => new
+    {
+        c.OptionsExercised, c.OptionPeriodsTotal, c.RenewalNoticeDays, c.EffectiveTo,
+        optionsRemaining = Math.Max(0, (c.OptionPeriodsTotal ?? 0) - c.OptionsExercised),
+        noticeDue = c.RenewalNoticeDays is { } notice && c.EffectiveTo.AddDays(-notice) <= Today,
     };
 
     private static object ProjObligation(ContractObligation o) => new

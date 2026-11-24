@@ -9,6 +9,13 @@ public sealed class SupplierService(
     public object List() =>
         suppliers.All().Select(s => new { s.Id, s.Name, s.TaxId, s.Email, s.CreatedAt, s.CreatedBy, s.Status, s.StatusReason }).ToList();
 
+    // read-only gate list (status + exception windows as stored, 023 AC1/AC3)
+    public (object? data, string? code, string? message) Gates(string supplierId)
+    {
+        if (suppliers.Find(supplierId) is null) return (null, "SUPPLIER_NOT_FOUND", "Supplier not found.");
+        return (suppliers.GatesFor(supplierId).Select(ProjGate).ToList(), null, null);
+    }
+
     public (object data, string? code, string? message) Create(CurrentUser u, CreateSupplierRequest req)
     {
         var supplier = new Supplier(numbers.Next("SUP"), ec.TenantId, ec.EntityId, req.Name, req.TaxId, req.Email, DateTimeOffset.UtcNow, u.Id);

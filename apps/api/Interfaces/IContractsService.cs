@@ -7,6 +7,8 @@ namespace Erp.Api.Interfaces;
 public interface IContractsService
 {
     object List(ContractStatus? status, int? expiringWithinDays);
+    // composition read for the contract screen (page reload)
+    (object? data, string? code, string? message) Get(string contractId);
     (object? data, string? code, string? message) Create(CurrentUser user, CreateContractRequest request);
     (object? data, string? code, string? message) Activate(CurrentUser user, string contractId);
     (object? data, string? code, string? message) AddAmendment(CurrentUser user, string contractId, AddAmendmentRequest request);

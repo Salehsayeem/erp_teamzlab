@@ -11,6 +11,15 @@ public sealed class SuppliersController(ISupplierService suppliers) : Controller
     [HttpGet]
     public IResult List() => Envelope.Ok<object>(suppliers.List());
 
+    [HttpGet("{id}/gates")]
+    public IResult Gates(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("suppliers:read")) return Envelope.Fail("FORBIDDEN", "suppliers:read permission required.", 403);
+        var (data, code, message) = suppliers.Gates(id);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
     [HttpPost]
     public IResult Create(CreateSupplierRequest request) => Idem.Wrap(HttpContext, () =>
     {

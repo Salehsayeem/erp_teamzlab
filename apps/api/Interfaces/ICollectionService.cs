@@ -3,6 +3,9 @@ namespace Erp.Api.Interfaces;
 public interface ICollectionService
 {
     object Worklist();
+    // per-invoice reads for the collections screens (058/059)
+    (object? data, string? code, string? message) RemindersFor(string invoiceId);
+    (object? data, string? code, string? message) DisputesFor(string invoiceId);
     (CollectionReminder? reminder, string? code, string? message) LogReminder(CurrentUser user, Dtos.LogReminderRequest request);
     (Dispute? dispute, string? code, string? message) CreateDispute(CurrentUser user, Dtos.CreateDisputeRequest request);
     (Dispute? dispute, string? code, string? message) ResolveDispute(CurrentUser user, string disputeId, string outcome);
