@@ -108,7 +108,7 @@ can resolve the connection:
 dotnet ef database update --project apps/api
 ```
 
-The schema is additive (19 tables, sequences, seeded reference data); nothing is dropped.
+The schema is additive (23 tables, sequences, seeded reference data); nothing is dropped.
 When the EF model changes later, add a migration first —
 `dotnet ef migrations add <DescriptiveName> --project apps/api` — and never edit an
 already-applied one (CLAUDE.md: forward-only migrations).
