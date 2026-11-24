@@ -22,11 +22,20 @@ builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Ad
 // short-circuit them with a ProblemDetails 400 — suppress that so validation stays in one place
 builder.Services.AddControllers(o => o.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true)
     .AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+// Strict CORS (CLAUDE.md security rules): only listed browser origins may call the API.
+// Default covers the dev frontend; override with the CorsOrigins env var (comma-separated).
+var corsOrigins = (builder.Configuration["CorsOrigins"] ?? "http://localhost:3000")
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
+    .WithOrigins(corsOrigins)
+    .AllowAnyHeader()
+    .AllowAnyMethod()));
 var app = builder.Build();
 
 app.UseMiddleware<CorrelationMiddleware>();
 app.UseMiddleware<ErrorMiddleware>();
 app.UseMiddleware<BindingEnvelopeMiddleware>();
+app.UseCors(); // before AuthMiddleware — browser preflight OPTIONS carries no Authorization header
 app.UseMiddleware<AuthMiddleware>();
 app.MapControllers();
 
