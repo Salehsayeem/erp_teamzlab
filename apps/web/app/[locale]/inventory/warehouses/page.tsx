@@ -113,10 +113,10 @@ export default function WarehousesPage() {
         <form onSubmit={(e) => void submitWarehouse(e)}>
           <h3 className="t-body-strong">{t.inventory.warehouses.addWhTitle}</h3>
           <div className="form-grid">
-            <Input id="wh-code" label={t.inventory.warehouses.code} value={whForm.code} onChange={(e) => setWhForm({ ...whForm, code: e.target.value })} error={whErrors.code} />
+            <Input id="wh-code" label={t.inventory.warehouses.code} className="input mono" value={whForm.code} onChange={(e) => setWhForm({ ...whForm, code: e.target.value })} error={whErrors.code} />
             <Input id="wh-name" label={t.inventory.warehouses.name} value={whForm.name} onChange={(e) => setWhForm({ ...whForm, name: e.target.value })} error={whErrors.name} />
           </div>
-          <p><Button type="submit" loading={whCreating}>{t.inventory.warehouses.create}</Button></p>
+          <p><Button type="submit" loading={whCreating}>{t.inventory.warehouses.createWh}</Button></p>
         </form>
       </section>
 
@@ -139,10 +139,10 @@ export default function WarehousesPage() {
               onChange={(e) => setLocForm({ ...locForm, warehouseId: e.target.value })}
               error={locErrors.warehouseId}
             />
-            <Input id="loc-code" label={t.inventory.warehouses.code} value={locForm.code} onChange={(e) => setLocForm({ ...locForm, code: e.target.value })} error={locErrors.code} />
+            <Input id="loc-code" label={t.inventory.warehouses.code} className="input mono" value={locForm.code} onChange={(e) => setLocForm({ ...locForm, code: e.target.value })} error={locErrors.code} />
             <Input id="loc-name" label={t.inventory.warehouses.name} value={locForm.name} onChange={(e) => setLocForm({ ...locForm, name: e.target.value })} error={locErrors.name} />
           </div>
-          <p><Button type="submit" loading={locCreating}>{t.inventory.warehouses.create}</Button></p>
+          <p><Button type="submit" loading={locCreating}>{t.inventory.warehouses.createLoc}</Button></p>
         </form>
       </section>
     </div>

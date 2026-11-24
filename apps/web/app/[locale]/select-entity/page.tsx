@@ -6,7 +6,7 @@ import { useParams } from "next/navigation";
 import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
 import { fetchMe, type Me } from "@/lib/services/api";
 import { useAuth } from "@/hooks/useAuth";
-import { Button, EmptyState, ErrorState, LoadingSkeleton } from "@/components/uikit";
+import { EmptyState, ErrorState, LoadingSkeleton } from "@/components/uikit";
 
 export default function SelectEntityPage() {
   const params = useParams<{ locale: string }>();
@@ -39,19 +39,19 @@ export default function SelectEntityPage() {
   const entity = me.legalEntity;
   return (
     <div className="stack">
-      <h1 className="t-display">{t.selectEntity.title}</h1>
-      <p className="t-caption">{t.selectEntity.subtitle}</p>
+      <div className="page-header">
+        <h1 className="t-display">{t.selectEntity.title}</h1>
+        <p className="t-caption">{t.selectEntity.subtitle}</p>
+      </div>
       <div className="card">
         <h2 className="t-title">{entity.name}</h2>
         <p className="t-caption mono">{entity.id}</p>
-        <div className="stack">
+        <div className="grid gap-3">
           <p><span className="t-body-strong">{t.selectEntity.tenant}: </span>{me.tenant.name} <span className="t-caption mono">({me.tenant.id})</span></p>
           <p><span className="t-body-strong">{t.selectEntity.jurisdiction}: </span>{entity.jurisdiction}</p>
           <p><span className="t-body-strong">{t.selectEntity.currency}: </span><span className="mono">{entity.currency}</span></p>
         </div>
-        <Link href={`/${locale}/dashboard`}>
-          <Button>{t.selectEntity.continue}</Button>
-        </Link>
+        <Link href={`/${locale}/dashboard`} className="btn">{t.selectEntity.continue}</Link>
       </div>
     </div>
   );

@@ -164,7 +164,7 @@ a:hover { text-decoration: underline; }
 .banner { background: color-mix(in srgb, var(--destructive) 10%, var(--card)); color: var(--destructive); border-radius: var(--radius); padding: 12px 16px; margin: 0; }
 
 /* ---- form fields: 1px --input border + shadow-sm (reference borders/shadows) ---- */
-.field { display: flex; flex-direction: column; gap: 8px; }
+.field { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .field label { font-weight: 600; }
 .field--error .input { border-color: var(--destructive); }
 .field__hint { margin: 0; color: var(--muted-foreground); font-size: 12px; }
@@ -174,10 +174,17 @@ a:hover { text-decoration: underline; }
 .input:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-color: var(--ring); }
 .input:disabled, .input[readonly] { background: var(--muted); cursor: not-allowed; opacity: 0.7; }
 .form-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+/* Tailwind preflight zeroes every margin, which left form children flush
+   (heading on the grid, submit button on the fields). One rhythm step inside
+   every form, matching .card > * + *. Class-based spacing (.stack) overrides. */
+form > * + * { margin-block-start: 12px; }
+/* Headings inside forms breathe more above than below (ui-direction rhythm). */
+form > h2, form > h3, form > h4 { margin-block-start: 20px; }
+form > h2 + *, form > h3 + *, form > h4 + * { margin-block-start: 8px; }
 
 /* ---- buttons: flat, primary #5d87ff ---- */
-.btn { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--primary); border: none; border-radius: var(--radius); color: var(--primary-foreground); font-size: 14px; font-weight: 600; cursor: pointer; }
-.btn:hover { background: color-mix(in srgb, var(--primary) 88%, var(--secondary)); }
+.btn { display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; background: var(--primary); border: none; border-radius: var(--radius); color: var(--primary-foreground); font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; }
+.btn:hover { background: color-mix(in srgb, var(--primary) 88%, var(--secondary)); text-decoration: none; }
 .btn:active { background: color-mix(in srgb, var(--primary) 75%, var(--foreground)); }
 .btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .btn:disabled, .btn[aria-disabled="true"] { background: var(--muted); color: var(--muted-foreground); cursor: not-allowed; }

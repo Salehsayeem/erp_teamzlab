@@ -159,6 +159,8 @@ export const en = {
       addWhTitle: "Add warehouse",
       addLocTitle: "Add location",
       create: "Create",
+      createWh: "Create warehouse",
+      createLoc: "Create location",
       creating: "Creating…",
       whEmpty: "No warehouses yet — add your first warehouse.",
       locEmpty: "No locations yet — add a location to a warehouse.",
