@@ -5,8 +5,9 @@ namespace Erp.Api;
 
 public enum AssetStatus { Cip, Draft, Active, Disposed }
 
-// AccumulatedDepreciation carries depreciation AND approved impairment so bookValue = Cost −
-// AccumulatedDepreciation always mirrors the GL carrying value
+// AccumulatedDepreciation carries depreciation AND approved impairment (R-T4k: impairment posts
+// Cr 1500 Accumulated Depreciation, not Cr 1600) so bookValue = Cost − AccumulatedDepreciation
+// and the disposal's Dr 1500 write-off cancels both exactly
 public record FixedAsset(string Id, string TenantId, string LegalEntityId, string Tag, string Serial,
     string Name, string Category, decimal Cost, decimal AccumulatedDepreciation, string LocationId,
     AssetStatus Status, string? SourceProjectId, DateTimeOffset? InServiceDate, string CreatedBy, DateTimeOffset CreatedAt);

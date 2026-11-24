@@ -14,7 +14,7 @@ internal static class AssetsPeriods
 
 // Fixed-asset register: create (draft) → capitalization proposal + checker approval (CIP → Active,
 // journal Dr 1600 / Cr 1610) → monthly straight-line runs (Dr 6400 / Cr 1500), transfers with
-// history, impairment (Dr 6600 / Cr 1600) and disposal with gain/loss handoff (055/056).
+// history, impairment (Dr 6600 / Cr 1500 per R-T4k) and disposal with gain/loss handoff (055/056).
 public sealed class AssetService(
     IAssetsRepository assets, IJournalRepository journals, INumberSeries numbers,
     IAuditRepository audit, EntityContext ec) : IAssetService
@@ -87,6 +87,8 @@ public sealed class AssetService(
     {
         if (!AssetsPeriods.IsOpen(periodId))
             return (null, "PERIOD_LOCKED", $"Period {periodId} is closed for depreciation posting (048 AC2).");
+        if (assets.DepreciationPeriodAlreadyPosted(periodId))
+            return (null, "DEPRECIATION_PERIOD_ALREADY_POSTED", $"Period {periodId} already has a posted depreciation run.");
         var eligible = assets.DepreciableAssets();
         if (eligible.Count == 0)
             return (null, "DEPRECIATION_NOTHING_TO_POST", "No active assets have depreciable basis remaining.");
@@ -179,11 +181,16 @@ public sealed class AssetService(
     {
         var (asset, evt, code, message) = LoadPending(approver, assetId, eventId, "impair", "assets:approve");
         if (code is not null) return (null, code, message);
+        if (asset!.Status != AssetStatus.Active) // finding 2: re-enforce the propose-time guard —
+            // a stale impairment must not post against a disposed asset
+            return (null, "ASSET_STATE_ERROR", $"Only active assets can be impaired (current: {asset.Status}).");
 
+        // R-T4k: impairment credits Accumulated Depreciation, NOT 1600 — crediting the cost
+        // account would strand a permanent credit in 1600 once disposal writes off Accum
         var journal = PostJournal(approver, $"Impairment {assetId} ({eventId})",
             [new JournalLine("6600", "Impairment Loss", evt!.Amount, 0),
-             new JournalLine("1600", "Fixed Asset - Cost", 0, evt.Amount)]);
-        assets.SetAssetAccumulated(asset!, asset!.AccumulatedDepreciation + evt.Amount);
+             new JournalLine("1500", "Accumulated Depreciation", 0, evt.Amount)]);
+        assets.SetAssetAccumulated(asset, asset.AccumulatedDepreciation + evt.Amount);
         assets.SetEventJournal(evt, journal.Id);
         audit.Log(approver, "approve", "asset_impairment", eventId, $"Impairment of {evt.Amount:0.00} approved by {approver.Email}; journal {journal.Id}");
         audit.Emit(approver, "assets.asset.impaired", new { assetId, eventId, amount = evt.Amount, journalId = journal.Id });
@@ -222,6 +229,8 @@ public sealed class AssetService(
     {
         var (asset, evt, code, message) = LoadPending(approver, assetId, eventId, "dispose", "assets:approve");
         if (code is not null) return (null, code, message);
+        if (asset!.Status != AssetStatus.Active) // finding 2: re-enforce the propose-time guard
+            return (null, "ASSET_STATE_ERROR", $"Only active assets can be disposed (current: {asset.Status}).");
 
         // 055/056 handoff — one balanced journal; zero-amount lines are skipped and exactly one
         // of 6500/6100 (never both non-zero)

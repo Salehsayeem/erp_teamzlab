@@ -50,6 +50,9 @@ public sealed class AssetsRepository(ErpDbContext db, EntityContext ec) : IAsset
 
     public void AddRun(DepreciationRun run) => db.DepreciationRuns.Add(run);
 
+    public bool DepreciationPeriodAlreadyPosted(string periodId) =>
+        RunsScoped().Any(r => r.PeriodId == periodId);
+
     // locations live in the shared inventory table — the same entity-scoped rule, plus a
     // tenant-wide probe so a cross-entity destination can be answered 409, not 404 (R8b)
     public StockLocation? FindLocationInEntity(string locationId) =>
