@@ -378,6 +378,29 @@ public class PeopleTimeTests : PeopleTestBase
         Assert.Equal(8m, row.GetProperty("previousHours").GetDecimal());
         Assert.Equal(6m, row.GetProperty("proposedHours").GetDecimal());
     }
+
+    // ---- entry decisions: pending → approved with approver ≠ requester (034 input) ----
+
+    [Fact]
+    public async Task Time_Entry_Decision_Flows_Pending_To_Approved_With_Maker_Checker()
+    {
+        var worker = await ActivateWorker(await SeedWorker(managerUserId: Admin));
+        var (entryId, status) = await SeedTime(worker, Today, 5m, 0m, asUser: Hr); // not the manager → Pending
+        Assert.Equal("Pending", status);
+
+        // the submitter cannot approve their own entry
+        var self = await PostAsync($"/api/v1/time-entries/{entryId}/decisions", new { approve = true }, Hr);
+        Assert.Equal(HttpStatusCode.Conflict, self.StatusCode);
+        Assert.Equal("TIME_APPROVAL_ERROR", ErrCode(await Json(self)));
+
+        var res = await PostAsync($"/api/v1/time-entries/{entryId}/decisions", new { approve = true }, Admin);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("Approved", (await Json(res)).GetProperty("data").GetProperty("status").GetString());
+
+        // a decided entry cannot be re-decided
+        var again = await PostAsync($"/api/v1/time-entries/{entryId}/decisions", new { approve = false }, Admin);
+        Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+    }
 }
 
 // ---- pay runs: catalog, calculation, validation, approval, payslip scope -------------
@@ -595,6 +618,43 @@ public class PeoplePayrollTests : PeopleTestBase
         Assert.Equal(HttpStatusCode.NotFound, other.StatusCode);
         Assert.Equal("PAYSLIP_NOT_FOUND", ErrCode(await Json(other)));
     }
+
+    // ---- 16b. register list, catalog/group lists and pay history (read surfaces) -----
+
+    [Fact]
+    public async Task Register_Pay_History_And_Catalog_Lists_Are_Scoped()
+    {
+        var (worker, runId, _) = await SeedCalculatedRun(hours: 8m);
+        await ApproveRun(runId);
+        await PostRun(runId);
+
+        // register list filters by status and exposes the configured category code (006 AC2)
+        var register = await GetAsync("/api/v1/workers?status=Active", Hr);
+        var row = register.GetProperty("data").EnumerateArray()
+            .First(w => w.GetProperty("id").GetString() == worker);
+        Assert.Equal("Active", row.GetProperty("status").GetString());
+        Assert.Equal("STAFF", row.GetProperty("categoryCode").GetString());
+        Assert.Equal(worker, row.GetProperty("workerNo").GetString()); // WKR doc number IS the worker number
+
+        // 056: posted results reproduced as issued
+        var history = await GetAsync($"/api/v1/workers/{worker}/pay-history", Fin);
+        var entry = history.GetProperty("data").EnumerateArray().First(r => r.GetProperty("runId").GetString() == runId);
+        Assert.Equal("original", entry.GetProperty("kind").GetString());
+        Assert.Equal(800m, entry.GetProperty("gross").GetDecimal());
+        Assert.Equal(720m, entry.GetProperty("net").GetDecimal()); // TAX-10, the only deduction code in this DB
+
+        // a worker with no posted results has an empty history
+        var outsider = await SeedWorker();
+        var empty = await GetAsync($"/api/v1/workers/{outsider}/pay-history", Fin);
+        Assert.Empty(empty.GetProperty("data").EnumerateArray());
+
+        // catalog + group lists are scope-filtered reads
+        var codes = await GetAsync("/api/v1/pay-codes", Fin);
+        Assert.Contains(codes.GetProperty("data").EnumerateArray(),
+            c => c.GetProperty("code").GetString() == "BASIC");
+        var groups = await GetAsync("/api/v1/pay-groups", Hr);
+        Assert.NotEmpty(groups.GetProperty("data").EnumerateArray());
+    }
 }
 
 // ---- golden posting + reversal: the only deduction code in this database is FLAT-100 --
@@ -704,5 +764,30 @@ public class PeoplePayrollPostingTests : PeopleTestBase
         var again = await PostAsync($"/api/v1/pay-runs/{runId}/reversals",
             new { reason = "double click", fundsReleased = false }, Fin);
         Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+    }
+
+    // ---- 18. late corrections against a posted entry wait (027 AC2 trim, Q10) --------
+
+    [Fact]
+    public async Task Correction_Against_A_Posted_Entry_Waits_For_The_Next_Period()
+    {
+        var periodId = await SeedOpenTodayPeriod(Tag("p"));
+        var groupId = await SeedPayGroup();
+        var worker = await ActivateWorker(await SeedWorker(managerUserId: Admin), amount: 100m, payBasis: "Hourly");
+        await AssignPayGroup(worker, groupId);
+        var (entryId, _) = await SeedTime(worker, Today, 10m, 0m);
+        await SeedPayCode("BASIC", "Earning", "Hours", 0);
+        await SeedPayCode("FLAT-100", "Deduction", "Amount", 100);
+
+        var res = await PostAsync("/api/v1/pay-runs", new { payGroupId = groupId, periodId, payDate = Today }, Hr);
+        var runId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/pay-runs/{runId}/calculations", new { }, Hr)).StatusCode);
+        await ApproveRun(runId);
+        await PostRun(runId);
+
+        var correction = await PostAsync("/api/v1/time-corrections", new
+        { timeEntryId = entryId, proposedHours = 6m, proposedOvertimeHours = 0m, reason = "late drift" }, Hr);
+        Assert.Equal(HttpStatusCode.Conflict, correction.StatusCode);
+        Assert.Equal("TIME_PERIOD_POSTED", ErrCode(await Json(correction)));
     }
 }
