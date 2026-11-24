@@ -93,7 +93,7 @@ public class ProcurementDeepTests : IClassFixture<TestApiFactory>
         return (eventId, lotId, ids);
     }
 
-    private async Task<string> CreateEvent(string tag, string eventType = "Rfq", DateTimeOffset? closesAt = null)
+    private async Task<string> CreateEvent(string tag, string eventType = "Rfq", DateTimeOffset? closesAt = null, string actor = Proc)
     {
         var data = await PostForData("/api/v1/sourcing-events", new
         {
@@ -103,7 +103,7 @@ public class ProcurementDeepTests : IClassFixture<TestApiFactory>
             closesAt = closesAt ?? DateTimeOffset.UtcNow.AddHours(4),
             timeZoneName = "Asia/Dhaka",
             currency = "BDT",
-        }, Proc);
+        }, actor);
         return data.GetProperty("id").GetString()!;
     }
 
@@ -404,7 +404,7 @@ public class ProcurementDeepTests : IClassFixture<TestApiFactory>
         Assert.Equal("BIDS_SEALED", ErrorCode(await Json(res)));
 
         // maker-checker: the event creator cannot run the approved opening
-        var adminEvent = await CreateEvent("T5B"); // Admin creates → creator = U-001
+        var adminEvent = await CreateEvent("T5B", actor: Admin); // Admin creates → creator = U-001
         var adminLot = await AddLot(adminEvent, "T5B");
         await PostForData($"/api/v1/sourcing-events/{adminEvent}/criteria",
             new { code = "PRICE", name = "Price", kind = "Scored", weightPct = 100m, scaleMax = 10 }, Admin);
@@ -416,7 +416,8 @@ public class ProcurementDeepTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         Assert.Equal("BID_OPENING_APPROVAL_ERROR", ErrorCode(await Json(res)));
 
-        // approved checker opens → who/when recorded, prices unseal for everyone
+        // approved checker opens (after the window closes) → who/when recorded, prices unseal
+        await CloseEvent(eventId);
         res = await PostAsync($"/api/v1/sourcing-events/{eventId}/bid-openings", new { }, Fin);
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
         var opened = BidRow(await GetAsync($"/api/v1/sourcing-events/{eventId}/bids", Proc), bidId);
@@ -514,8 +515,9 @@ public class ProcurementDeepTests : IClassFixture<TestApiFactory>
         var firstRaw = await (await GetRawAsync($"/api/v1/sourcing-events/{eventId}/score-summary", Proc)).Content.ReadAsStringAsync();
         Assert.Equal(firstRaw, secondRaw); // determinism: same inputs → byte-identical trace
 
-        Assert.Equal("1", first.GetProperty("formulaVersion").GetString());
-        var rows = first.GetProperty("bids").EnumerateArray().ToDictionary(b => b.GetProperty("bidId").GetString()!);
+        var summary = first.GetProperty("data");
+        Assert.Equal("1", summary.GetProperty("formulaVersion").GetString());
+        var rows = summary.GetProperty("bids").EnumerateArray().ToDictionary(b => b.GetProperty("bidId").GetString()!);
 
         // PRICE 8/10 × 60 = 48.00; DELIVERY 4/5 × 30 = 24.00 → 72.00, rank 1
         Assert.Equal(72.00m, rows[bid1].GetProperty("total").GetDecimal());
@@ -691,14 +693,14 @@ public class ProcurementDeepTests : IClassFixture<TestApiFactory>
         Assert.Equal("CONTRACT_NO_PRICE_LINES", ErrorCode(await Json(res)));
 
         // price lines enter through amendments; contract version bumps
-        var amendment = await PostForData($"/api/v1/contracts/{contractId}/amendments", new
+        res = await PostAsync($"/api/v1/contracts/{contractId}/amendments", new
         {
             effectiveDate = Today,
             summary = "Initial price schedule",
             priceLines = new[] { new { itemSku = "SKU-T11", unitPrice = 100m, effectiveFrom = Today, effectiveTo = (DateOnly?)null } },
         }, Proc);
         Assert.Equal(HttpStatusCode.Created, res.StatusCode);
-        Assert.Equal(2, amendment.GetProperty("contract").GetProperty("version").GetInt32());
+        Assert.Equal(2, (await Json(res)).GetProperty("data").GetProperty("contract").GetProperty("version").GetInt32());
 
         res = await PostAsync($"/api/v1/contracts/{contractId}/activations", new { }, Fin);
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
@@ -781,9 +783,11 @@ public class ProcurementDeepTests : IClassFixture<TestApiFactory>
         Assert.Equal("EvidenceSubmitted", evidenced.GetProperty("status").GetString());
         Assert.Null(evidenced.GetProperty("verifiedBy").GetString()); // evidence never verifies
 
-        // maker-checker: the verifier cannot be the obligation's creator
+        // maker-checker: the verifier cannot be the obligation's creator (evidenced first)
         var adminOb = await PostForData($"/api/v1/contracts/{contractId}/obligations",
             new { obligationType = "Insurance", ownerUserId = Admin, dueDate = Today.AddDays(7), sourceClause = (string?)null }, Admin);
+        await PostForData($"/api/v1/contracts/{contractId}/obligations/{adminOb.GetProperty("id").GetString()!}/evidence",
+            new { evidenceRef = "doc://insurance-cert" }, Admin);
         res = await PostAsync($"/api/v1/contracts/{contractId}/obligations/{adminOb.GetProperty("id").GetString()!}/verifications", new { }, Admin);
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         Assert.Equal("OBLIGATION_APPROVAL_ERROR", ErrorCode(await Json(res)));
@@ -810,15 +814,16 @@ public class ProcurementDeepTests : IClassFixture<TestApiFactory>
     public async Task Renewal_Exercise_Beyond_Last_Option_Returns_409_CONTRACT_NO_OPTION()
     {
         var supplierId = await SeedSupplier("T14");
-        var contractId = await SeedActiveContract("T14", supplierId, optionPeriodsTotal: 1, renewalNoticeDays: 30, termDays: 20);
+        var contractId = await SeedActiveContract("T14", supplierId, optionPeriodsTotal: 1, renewalNoticeDays: 30, termDays: 15);
 
         // unknown status filter is a client error
         var res = await GetRawAsync("/api/v1/contracts?status=Bogus", Proc);
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
 
-        // the maker has no renewal permission
+        // the maker (contract creator) cannot exercise their own contract's renewal
         res = await PostAsync($"/api/v1/contracts/{contractId}/renewals", new { optionNumber = 1 }, Proc);
-        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("CONTRACT_APPROVAL_ERROR", ErrorCode(await Json(res)));
 
         // skipping to option 2 with only one option → no option (039 AC3)
         res = await PostAsync($"/api/v1/contracts/{contractId}/renewals", new { optionNumber = 2 }, Fin);
@@ -827,7 +832,7 @@ public class ProcurementDeepTests : IClassFixture<TestApiFactory>
 
         var renewed = await PostForData($"/api/v1/contracts/{contractId}/renewals", new { optionNumber = 1 }, Fin);
         Assert.Equal(1, renewed.GetProperty("optionsExercised").GetInt32());
-        Assert.Equal(Today.AddDays(40), DateOnly.Parse(renewed.GetProperty("effectiveTo").GetString()!)); // 20-day term extended by 20 days
+        Assert.Equal(Today.AddDays(30), DateOnly.Parse(renewed.GetProperty("effectiveTo").GetString()!)); // 15-day term extended by 15 days
 
         // the exercised contract is inside a 45-day expiry window and notice-due
         var list = await GetAsync("/api/v1/contracts?expiringWithinDays=45", Proc);
@@ -978,12 +983,13 @@ public class ProcurementDeepTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
         Assert.Equal("VALIDATION_ERROR", ErrorCode(await Json(res)));
 
-        res = await PostAsync($"/api/v1/contracts/{contractId}/obligations/{obligationId}/waivers", new { reason = "waived" }, Proc);
+        // the maker has no waiver permission — waiving an obligation they did not create
+        var adminOb = await PostForData($"/api/v1/contracts/{contractId}/obligations",
+            new { obligationType = "Permit", ownerUserId = Admin, dueDate = Today.AddDays(7), sourceClause = (string?)null }, Admin);
+        res = await PostAsync($"/api/v1/contracts/{contractId}/obligations/{adminOb.GetProperty("id").GetString()!}/waivers", new { reason = "waived" }, Proc);
         Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
 
         // maker-checker: the obligation creator cannot waive their own obligation
-        var adminOb = await PostForData($"/api/v1/contracts/{contractId}/obligations",
-            new { obligationType = "Permit", ownerUserId = Admin, dueDate = Today.AddDays(7), sourceClause = (string?)null }, Admin);
         res = await PostAsync($"/api/v1/contracts/{contractId}/obligations/{adminOb.GetProperty("id").GetString()!}/waivers", new { reason = "self-waive" }, Admin);
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         Assert.Equal("OBLIGATION_APPROVAL_ERROR", ErrorCode(await Json(res)));
