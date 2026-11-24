@@ -19,6 +19,7 @@ export const en = {
       admin: "Tenant admin",
       procurement: "Procurement officer",
       finance: "Finance officer",
+      assets: "Assets officer",
       sales: "Sales officer",
     },
     demoLogins: "Demo logins",

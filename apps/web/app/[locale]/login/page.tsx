@@ -12,6 +12,7 @@ const SEEDED_USERS = [
   { email: "procurve@teamzlab.dev", key: "procurement" },
   { email: "finance@teamzlab.dev", key: "finance" },
   { email: "sales@teamzlab.dev", key: "sales" },
+  { email: "assets@teamzlab.dev", key: "assets" },
 ] as const;
 
 export default function LoginPage() {
@@ -36,34 +37,25 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="stack">
+    <div className="auth">
       <h1 className="t-display">{t.login.title}</h1>
       <p className="t-caption">{t.login.subtitle}</p>
       {error ? <ErrorState message={error} retryLabel={t.common.retry} onRetry={() => setError(null)} /> : null}
-      <div className="stack">
-        {SEEDED_USERS.map((u) => (
-          <div key={u.email} className="card">
-            <p className="t-body-strong">{t.login.roles[u.key]}</p>
-            <p className="t-caption mono">{u.email}</p>
-            <Button loading={busyEmail === u.email} disabled={busyEmail !== null && busyEmail !== u.email} onClick={() => void signIn(u.email)}>
-              {t.login.signIn}
-            </Button>
-          </div>
-        ))}
-      </div>
-      <section className="card" aria-label={t.login.demoLogins}>
-        <h2 className="t-title">{t.login.demoLogins}</h2>
-        <ul className="demo-logins">
+      <div className="auth__card">
+        <div className="auth__rows">
           {SEEDED_USERS.map((u) => (
-            <li key={u.email}>
-              <span>{t.login.roles[u.key]}</span>
-              <Button small variant="secondary" loading={busyEmail === u.email} onClick={() => void signIn(u.email)}>
-                {u.email}
+            <div key={u.email} className="auth__row">
+              <div>
+                <p className="auth__role">{t.login.roles[u.key]}</p>
+                <p className="auth__email">{u.email}</p>
+              </div>
+              <Button loading={busyEmail === u.email} disabled={busyEmail !== null && busyEmail !== u.email} onClick={() => void signIn(u.email)}>
+                {t.login.signIn}
               </Button>
-            </li>
+            </div>
           ))}
-        </ul>
-      </section>
+        </div>
+      </div>
     </div>
   );
 }

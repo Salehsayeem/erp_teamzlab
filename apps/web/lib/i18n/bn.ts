@@ -21,6 +21,7 @@ export const bn: Dict = {
       admin: "টেন্যান্ট অ্যাডমিন",
       procurement: "ক্রয় কর্মকর্তা",
       finance: "অর্থ কর্মকর্তা",
+      assets: "সম্পদ কর্মকর্তা",
       sales: "বিক্রয় কর্মকর্তা",
     },
     demoLogins: "ডেমো লগইন",
