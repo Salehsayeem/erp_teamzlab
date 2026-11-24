@@ -61,6 +61,7 @@ const ERROR_KEYS: Record<string, keyof Dict["mfg"]["errors"]> = {
   ISSUE_RETURN_OVER: "issueReturnOver",
   MFG_COMPONENT_ERROR: "componentError",
   MFG_CONCURRENCY_ERROR: "concurrency",
+  PERIOD_NOT_CONFIGURED: "periodNotConfigured",
   FORBIDDEN: "forbidden",
   VALIDATION_ERROR: "validation",
 };

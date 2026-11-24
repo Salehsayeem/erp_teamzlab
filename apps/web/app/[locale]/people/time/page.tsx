@@ -308,6 +308,7 @@ export default function TimePage() {
       {entryList.length === 0 ? <EmptyState title={tc.entriesEmpty} /> : (
         <Table columns={entryColumns} rows={entryList} caption={tc.tabEntries} />
       )}
+      {rejectId !== null && !rejectId.startsWith("corr-") ? rejectBox(tc.rejectReason) : null}
     </section>
   );
 
@@ -336,7 +337,7 @@ export default function TimePage() {
       {correctionList.length === 0 ? <EmptyState title={tc.correctionsEmpty} /> : (
         <Table columns={correctionColumns} rows={correctionList} caption={tc.tabCorrections} />
       )}
-      {rejectId !== null ? rejectBox(tc.rejectReason) : null}
+      {rejectId !== null && rejectId.startsWith("corr-") ? rejectBox(tc.rejectReason) : null}
     </section>
   );
 

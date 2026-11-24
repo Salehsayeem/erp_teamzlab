@@ -257,7 +257,7 @@ export default function PayRunDetailPage() {
           <Meta label={tc.postedBy} value={run.postedBy ?? "—"} mono />
           <Meta label={tc.journal} value={run.journalId ?? tc.noJournal} mono />
           {run.reversalReason ? <Meta label={tc.reversalReason} value={run.reversalReason} /> : null}
-          {run.fundsReleased !== null ? <Meta label={tc.fundsReleased} value={run.fundsReleased ? "true" : "false"} /> : null}
+          {run.fundsReleased !== null ? <Meta label={tc.fundsReleased} value={run.fundsReleased ? tc.flagYes : tc.flagNo} /> : null}
         </div>
       </section>
 
@@ -272,9 +272,6 @@ export default function PayRunDetailPage() {
           ) : null}
           {run.status === "Calculated" && isCalculator ? (
             <p className="t-caption" role="status">{t.people.makerChecker}</p>
-          ) : null}
-          {run.status === "Calculated" && canApprove === null && !isCalculator ? (
-            <Button disabled={!meReady}>{tc.approve}</Button>
           ) : null}
           {showApprove ? (
             <Button disabled={busy || !meReady} onClick={() => setApproveOpen(true)}>{tc.approve}</Button>
@@ -379,7 +376,7 @@ export default function PayRunDetailPage() {
             <Select
               id="reverse-funds" label={tc.reverseFundsReleased} value={fundsReleased === null ? "" : fundsReleased ? "true" : "false"}
               onChange={(e) => setFundsReleased(e.target.value === "" ? null : e.target.value === "true")}
-              options={[{ value: "true", label: "true" }, { value: "false", label: "false" }]}
+              options={[{ value: "true", label: tc.flagYes }, { value: "false", label: tc.flagNo }]}
               placeholder={tc.reverseFundsReleased} error={fundsError ?? undefined} hint={tc.fundsReleasedHint}
             />
           </div>

@@ -65,6 +65,7 @@ const ERROR_KEYS: Record<string, keyof Dict["people"]["errors"]> = {
   ACCOUNT_NOT_POSTABLE: "accountNotPostable",
   PERIOD_NOT_FOUND: "periodNotFound",
   PERIOD_LOCKED: "periodLocked",
+  PERIOD_NOT_CONFIGURED: "periodNotConfigured",
   PAYRUN_NOT_FOUND: "payrunNotFound",
   PAYRUN_NOT_CALCULATED: "payrunNotCalculated",
   PAYRUN_NOT_APPROVED: "payrunNotApproved",

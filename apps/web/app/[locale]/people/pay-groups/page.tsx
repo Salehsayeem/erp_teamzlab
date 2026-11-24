@@ -18,7 +18,7 @@ import {
   type ToastItem,
 } from "@/components/uikit";
 import type { Column } from "@/components/uikit";
-import { peopleActionError, usePeopleMe } from "../_lib/helpers";
+import { hasPermission, peopleActionError, usePeopleMe } from "../_lib/helpers";
 
 type GroupForm = { code: string; name: string; frequency: string };
 const EMPTY_GROUP: GroupForm = { code: "", name: "", frequency: "Monthly" };
@@ -30,6 +30,7 @@ export default function PayGroupsPage() {
   const tc = t.people.payGroups;
   const { token, ready } = useAuth(locale);
   const { permissions, meReady } = usePeopleMe(token);
+  const canOpen = hasPermission(permissions, "payroll:calculate");
 
   const [groups, setGroups] = useState<PayGroupRow[] | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
@@ -123,6 +124,7 @@ export default function PayGroupsPage() {
 
       <section className="card">
         <h2 className="t-title">{tc.formTitle}</h2>
+        {canOpen === false ? <p className="t-caption">{t.people.errors.forbidden}</p> : (
         <form onSubmit={(e) => void submit(e)}>
           <div className="form-grid">
             <Input id="pgp-code" label={tc.code} value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} error={errors.code} />
@@ -131,6 +133,7 @@ export default function PayGroupsPage() {
           </div>
           <p><Button type="submit" loading={creating} disabled={!meReady}>{tc.create}</Button></p>
         </form>
+        )}
       </section>
 
       <section className="card">
