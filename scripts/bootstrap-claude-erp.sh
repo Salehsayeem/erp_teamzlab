@@ -31,7 +31,9 @@ PLUGINS=(
   chrome-devtools-mcp
 )
 for name in "${PLUGINS[@]}"; do
-  claude plugin install "${name}@claude-plugins-official" --scope project --yes
+  # --replace: switch plugins already installed from another marketplace/source
+  claude plugin install "${name}@claude-plugins-official" --scope project --yes --replace \
+    || echo "install failed: $name (see 'claude plugin list')"
 done
 
 echo "=== 4. Verify plugin state ==="
