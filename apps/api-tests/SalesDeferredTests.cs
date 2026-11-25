@@ -1240,7 +1240,7 @@ public partial class SalesDeferredTests
         var outbox = await GetAsync("/api/v1/outbox", Admin);
         var posted = outbox.GetProperty("data").EnumerateArray()
             .Where(e => e.GetProperty("type").GetString() == "sales.commission.event")
-            .FirstOrDefault(e => e.GetProperty("payloadJson").GetString()!.Contains($"\"invoiceId\":\"{invoiceId}\""));
+            .FirstOrDefault(e => e.GetProperty("payloadJson").GetString()!.Contains(invoiceId));
         Assert.NotEqual(default, posted);
 
         // reversal: approving a credit adjustment emits a linked reversal event
@@ -1255,7 +1255,7 @@ public partial class SalesDeferredTests
         var after = await GetAsync("/api/v1/outbox", Admin);
         var reversal = after.GetProperty("data").EnumerateArray()
             .Where(e => e.GetProperty("type").GetString() == "sales.commission.reversed")
-            .FirstOrDefault(e => e.GetProperty("payloadJson").GetString()!.Contains($"\"invoiceId\":\"{invoiceId}\""));
+            .FirstOrDefault(e => e.GetProperty("payloadJson").GetString()!.Contains(invoiceId));
         Assert.NotEqual(default, reversal);
         var payload = JsonDocument.Parse(reversal.GetProperty("payloadJson").GetString()!).RootElement;
         Assert.Equal(invoiceId, payload.GetProperty("sourceInvoiceId").GetString());

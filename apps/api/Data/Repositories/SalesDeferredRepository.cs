@@ -74,5 +74,53 @@ public sealed class SalesDeferredRepository(ErpDbContext db, EntityContext ec) :
     public void SetCandidatePayer(ReceiptCandidate candidate, string customerId) =>
         db.Entry(candidate).Property(nameof(ReceiptCandidate.CustomerId)).CurrentValue = customerId;
 
+    // --- rebates (063) ---
+
+    public void AddAgreement(RebateAgreement agreement) => db.RebateAgreements.Add(agreement);
+
+    public RebateAgreement? FindAgreement(string agreementId) =>
+        Scoped<RebateAgreement>().FirstOrDefault(a => a.Id == agreementId);
+
+    public List<RebateAgreement> Agreements() =>
+        Scoped<RebateAgreement>().OrderBy(a => a.Id).ToList();
+
+    public RebateAccrual? FindAccrual(string agreementId, string period) =>
+        Scoped<RebateAccrual>().FirstOrDefault(a => a.AgreementId == agreementId && a.Period == period);
+
+    public void AddAccrual(RebateAccrual accrual) => db.RebateAccruals.Add(accrual);
+
+    public void SetAccrual(RebateAccrual accrual, decimal accruedAmount, string eligibleTxnJson)
+    {
+        db.Entry(accrual).Property(nameof(RebateAccrual.AccruedAmount)).CurrentValue = accruedAmount;
+        db.Entry(accrual).Property(nameof(RebateAccrual.EligibleTxnJson)).CurrentValue = eligibleTxnJson;
+        db.Entry(accrual).Property(nameof(RebateAccrual.CalculatedAt)).CurrentValue = DateTimeOffset.UtcNow;
+    }
+
+    public void SetAccrualApproved(RebateAccrual accrual, string approverId)
+    {
+        db.Entry(accrual).Property(nameof(RebateAccrual.Status)).CurrentValue = RebateAccrualStatus.Approved;
+        db.Entry(accrual).Property(nameof(RebateAccrual.ApprovedAmount)).CurrentValue = accrual.AccruedAmount;
+        db.Entry(accrual).Property(nameof(RebateAccrual.ApprovedBy)).CurrentValue = approverId;
+        db.Entry(accrual).Property(nameof(RebateAccrual.ApprovedAt)).CurrentValue = DateTimeOffset.UtcNow;
+    }
+
+    public void AddClaim(RebateClaim claim) => db.RebateClaims.Add(claim);
+
+    public RebateClaim? FindClaim(string claimId) =>
+        Scoped<RebateClaim>().FirstOrDefault(c => c.Id == claimId);
+
+    public List<RebateClaim> ClaimsFor(string agreementId, string period) =>
+        Scoped<RebateClaim>().Where(c => c.AgreementId == agreementId && c.Period == period).ToList();
+
+    public void SetClaimStatus(RebateClaim claim, RebateClaimStatus status, string? approverId)
+    {
+        db.Entry(claim).Property(nameof(RebateClaim.Status)).CurrentValue = status;
+        if (approverId is not null)
+        {
+            db.Entry(claim).Property(nameof(RebateClaim.ApprovedBy)).CurrentValue = approverId;
+            db.Entry(claim).Property(nameof(RebateClaim.ApprovedAt)).CurrentValue = DateTimeOffset.UtcNow;
+        }
+    }
+
     public int Save() => db.SaveChanges();
 }

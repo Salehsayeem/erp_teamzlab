@@ -131,6 +131,13 @@ public sealed class InvoiceService(
             invoiceId, journalId = journal.Id, dueDate, total, subTotal, taxTotal,
             currency = invoice.Currency, customerId = invoice.CustomerId,
         });
+        // 064 AC1: commission boundary — the event identifies the credited owner (the source
+        // order's maker), the source transaction, and the event date; no compensation engine
+        audit.Emit(approver, "sales.commission.event", new
+        {
+            invoiceId, sourceTxnId = invoice.SalesOrderId, customerId = invoice.CustomerId,
+            eventDate = DateTimeOffset.UtcNow, invoiceDate = invoice.InvoiceDate, total,
+        });
         try
         {
             invoices.Save(); // document + pinned lines + journal + audit + outbox in ONE SaveChanges
@@ -247,6 +254,13 @@ public sealed class InvoiceService(
             $"{adjustment.Kind} memo {adjustmentId} approved: total {total:0.00} (net {subTotal:0.00}, tax {taxTotal:0.00}); journal {journal.Id}");
         audit.Emit(approver, "sales.adjustment.approved",
             new { adjustmentId, kind = adjustment.Kind.ToString(), invoiceId = invoice.Id, total, journalId = journal.Id });
+        // 064 edge: a credit reversal emits a LINKED commission reversal event
+        if (adjustment.Kind == AdjustmentKind.Credit)
+            audit.Emit(approver, "sales.commission.reversed", new
+            {
+                sourceInvoiceId = invoice.Id, adjustmentId, amount = total,
+                eventDate = DateTimeOffset.UtcNow,
+            });
         try
         {
             invoices.Save();

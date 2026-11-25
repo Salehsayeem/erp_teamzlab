@@ -39,6 +39,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISalesReturnService, SalesReturnService>();
         services.AddScoped<IRefundService, RefundService>();
         services.AddScoped<IReceiptCandidatesService, ReceiptCandidatesService>();
+        services.AddScoped<IRebateService, RebateService>();
+        services.AddScoped<ISalesAnalyticsService, SalesAnalyticsService>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IJournalRepository, JournalRepository>();
         services.AddScoped<IManufacturingRepository, ManufacturingRepository>();

@@ -25,5 +25,17 @@ public interface ISalesDeferredRepository
     ReceiptCandidate? FindCandidate(string candidateId);
     List<ReceiptCandidate> Candidates();
     void SetCandidatePayer(ReceiptCandidate candidate, string customerId);
+    // rebates (063)
+    void AddAgreement(RebateAgreement agreement);
+    RebateAgreement? FindAgreement(string agreementId);
+    List<RebateAgreement> Agreements();
+    RebateAccrual? FindAccrual(string agreementId, string period);
+    void AddAccrual(RebateAccrual accrual);
+    void SetAccrual(RebateAccrual accrual, decimal accruedAmount, string eligibleTxnJson);
+    void SetAccrualApproved(RebateAccrual accrual, string approverId);
+    void AddClaim(RebateClaim claim);
+    RebateClaim? FindClaim(string claimId);
+    List<RebateClaim> ClaimsFor(string agreementId, string period);
+    void SetClaimStatus(RebateClaim claim, RebateClaimStatus status, string? approverId);
     int Save();
 }

@@ -83,3 +83,10 @@ public record ReceiveReturnRequest(decimal ReceivedQty);
 public record ApproveRefundRequest(string? Reason = null);
 public record CreateReceiptCandidateRequest(string? CustomerId, string BankRef, decimal Amount, string Currency, DateOnly ValueDate, string Channel);
 public record LinkPayerRequest(string CustomerId);
+
+// --- deferred-screens wave: S9 rebates + S10 analytics ---
+
+public record CreateRebateAgreementRequest(string CustomerId, string Basis, decimal RatePct, string AccrualPeriod, DateOnly ValidFrom);
+public record CalculateAccrualRequest(string Period);
+public record CreateRebateClaimRequest(string AgreementId, string Period, decimal Amount, IReadOnlyList<string>? EligibleTxnIds);
+public record ApproveRebateClaimRequest(string? Reason = null);
