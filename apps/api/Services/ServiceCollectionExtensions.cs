@@ -45,6 +45,19 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IContractsService, ContractsService>();
         services.AddScoped<IPurchaseOrderService, PurchaseOrderService>();
         services.AddScoped<IReceiptService, ReceiptService>();
+        // deferred PROCUREMENT wave
+        services.AddScoped<IProcurementCatalogRepository, ProcurementCatalogRepository>();
+        services.AddScoped<IRequisitionRepository, RequisitionRepository>();
+        services.AddScoped<IPurchaseOrderChangeRepository, PurchaseOrderChangeRepository>();
+        services.AddScoped<IBlanketOrderRepository, BlanketOrderRepository>();
+        services.AddScoped<IReceiptInspectionRepository, ReceiptInspectionRepository>();
+        services.AddScoped<IProcurementCatalogService, ProcurementCatalogService>();
+        services.AddScoped<IRequisitionService, RequisitionService>();
+        services.AddScoped<IApprovalRouteService, ApprovalRouteService>();
+        services.AddScoped<IBudgetChecker, BudgetCheckService>();
+        services.AddScoped<IPurchaseOrderChangeService, PurchaseOrderChangeService>();
+        services.AddScoped<IBlanketOrderService, BlanketOrderService>();
+        services.AddScoped<IReceiptInspectionService, ReceiptInspectionService>();
         services.AddScoped<IBomService, BomService>();
         services.AddScoped<IProductionOrderService, ProductionOrderService>();
         services.AddScoped<ICustomerService, CustomerService>();

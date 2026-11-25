@@ -1308,5 +1308,14 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         // R-PEO2: the overtime multiplier is a finance setting (data, not a constant); default 1.5
         mb.Entity<FinanceSetting>().HasData(
             new FinanceSetting("FS-payroll-ot", t, le, "payroll.ot_multiplier", "1.5"));
+
+        // deferred PROCUREMENT wave: the one active requisition approval rule route resolution falls
+        // back to (Q-P2 fixed maker-checker — the row's version is snapshotted onto approvals, no
+        // matrix engine); budget-check stub mode lives in finance_settings, default Pass
+        mb.Entity<ApprovalRule>().HasData(
+            new ApprovalRule("AR-REQ-DEFAULT", t, le, "requisition_default", 1, true, "R-FIN", null, "system",
+                new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        mb.Entity<FinanceSetting>().HasData(
+            new FinanceSetting("FS-budget-mode", t, le, "budget.check_mode", "Pass"));
     }
 }

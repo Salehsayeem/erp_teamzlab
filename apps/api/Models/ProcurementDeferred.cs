@@ -26,14 +26,15 @@ public enum ScorecardStatus { Rated, NotRated }
 
 // ---------- P1: requisitions (011–019) ----------
 
-// line Id comes from doc_rql at creation; LineNo is the generated shadow PK (po_lines pattern)
-public record RequisitionLine(string Id, string CategoryId, string Description, decimal Qty, string Unit,
-    DateOnly NeedBy, decimal BaseQty, string BaseUnit);
+// line Id comes from doc_rql at creation; LineNo is the generated shadow PK (po_lines pattern).
+// UnitPrice feeds the budget-control contract (013 AC1: currency + amount + txn-ID).
+public record RequisitionLine(string Id, string CategoryId, string Description, decimal Qty, decimal UnitPrice,
+    string Unit, DateOnly NeedBy, decimal BaseQty, string BaseUnit);
 
 public record Requisition(string Id, string TenantId, string LegalEntityId, string Purpose,
     RequisitionStatus Status, int Version, string CreatedBy, DateTimeOffset CreatedAt,
     string? SubmittedBy = null, DateTimeOffset? SubmittedAt = null,
-    string? RuleId = null, int? RuleVersion = null, string? ApproverRole = null,
+    string? RuleId = null, int? RuleVersion = null, string? ApproverRole = null, string? Currency = null,
     string? ExceptionCode = null, string? ExceptionNarrative = null, string? ExceptionEvidenceRef = null,
     DateTimeOffset? ExceptionFlaggedAt = null)
 {

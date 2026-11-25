@@ -9,7 +9,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Erp.Api.Migrations;
 
 /// <inheritdoc />
-public partial class _20261125072117_AddProcDeferredScreens : Migration
+public partial class _20261125072428_AddProcDeferredScreens : Migration
 {
     /// <inheritdoc />
     protected override void Up(MigrationBuilder migrationBuilder)
@@ -428,6 +428,7 @@ public partial class _20261125072117_AddProcDeferredScreens : Migration
                 rule_id = table.Column<string>(type: "text", nullable: true),
                 rule_version = table.Column<int>(type: "integer", nullable: true),
                 approver_role = table.Column<string>(type: "text", nullable: true),
+                currency = table.Column<string>(type: "text", nullable: true),
                 exception_code = table.Column<string>(type: "text", nullable: true),
                 exception_narrative = table.Column<string>(type: "text", nullable: true),
                 exception_evidence_ref = table.Column<string>(type: "text", nullable: true),
@@ -696,6 +697,7 @@ public partial class _20261125072117_AddProcDeferredScreens : Migration
                 category_id = table.Column<string>(type: "text", nullable: false),
                 description = table.Column<string>(type: "text", nullable: false),
                 qty = table.Column<decimal>(type: "numeric", nullable: false),
+                unit_price = table.Column<decimal>(type: "numeric", nullable: false),
                 unit = table.Column<string>(type: "text", nullable: false),
                 need_by = table.Column<DateOnly>(type: "date", nullable: false),
                 base_qty = table.Column<decimal>(type: "numeric", nullable: false),
@@ -713,6 +715,16 @@ public partial class _20261125072117_AddProcDeferredScreens : Migration
                     principalColumn: "id",
                     onDelete: ReferentialAction.Cascade);
             });
+
+        migrationBuilder.InsertData(
+            table: "approval_rules",
+            columns: new[] { "id", "approver_role", "created_at", "created_by", "is_active", "legal_entity_id", "max_amount", "name", "tenant_id", "version" },
+            values: new object[] { "AR-REQ-DEFAULT", "R-FIN", new DateTimeOffset(new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)), "system", true, "LE-001", null, "requisition_default", "T-001", 1 });
+
+        migrationBuilder.InsertData(
+            table: "finance_settings",
+            columns: new[] { "id", "key", "legal_entity_id", "tenant_id", "value" },
+            values: new object[] { "FS-budget-mode", "budget.check_mode", "LE-001", "T-001", "Pass" });
 
         migrationBuilder.UpdateData(
             table: "roles",
@@ -1125,6 +1137,11 @@ public partial class _20261125072117_AddProcDeferredScreens : Migration
 
         migrationBuilder.DropTable(
             name: "requisitions");
+
+        migrationBuilder.DeleteData(
+            table: "finance_settings",
+            keyColumn: "id",
+            keyValue: "FS-budget-mode");
 
         migrationBuilder.DeleteData(
             table: "memberships",

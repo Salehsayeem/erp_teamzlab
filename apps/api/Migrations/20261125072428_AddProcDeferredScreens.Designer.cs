@@ -12,8 +12,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Erp.Api.Migrations;
 
 [DbContext(typeof(ErpDbContext))]
-[Migration("20261125072117_AddProcDeferredScreens")]
-partial class _20261125072117_AddProcDeferredScreens
+[Migration("20261125072428_AddProcDeferredScreens")]
+partial class _20261125072428_AddProcDeferredScreens
 {
     /// <inheritdoc />
     protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -491,6 +491,20 @@ partial class _20261125072117_AddProcDeferredScreens
                 b.HasIndex("TenantId", "LegalEntityId", "IsActive");
 
                 b.ToTable("approval_rules");
+
+                b.HasData(
+                    new
+                    {
+                        Id = "AR-REQ-DEFAULT",
+                        ApproverRole = "R-FIN",
+                        CreatedAt = new DateTimeOffset(new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                        CreatedBy = "system",
+                        IsActive = true,
+                        LegalEntityId = "LE-001",
+                        Name = "requisition_default",
+                        TenantId = "T-001",
+                        Version = 1
+                    });
             });
 
         modelBuilder.Entity("Erp.Api.ApprovalStep", b =>
@@ -2463,6 +2477,14 @@ partial class _20261125072117_AddProcDeferredScreens
                         LegalEntityId = "LE-001",
                         TenantId = "T-001",
                         Value = "1.5"
+                    },
+                    new
+                    {
+                        Id = "FS-budget-mode",
+                        Key = "budget.check_mode",
+                        LegalEntityId = "LE-001",
+                        TenantId = "T-001",
+                        Value = "Pass"
                     });
             });
 
@@ -4192,6 +4214,10 @@ partial class _20261125072117_AddProcDeferredScreens
                     .IsRequired()
                     .HasColumnType("text")
                     .HasColumnName("created_by");
+
+                b.Property<string>("Currency")
+                    .HasColumnType("text")
+                    .HasColumnName("currency");
 
                 b.Property<string>("ExceptionCode")
                     .HasColumnType("text")
@@ -7191,6 +7217,10 @@ partial class _20261125072117_AddProcDeferredScreens
                             .IsRequired()
                             .HasColumnType("text")
                             .HasColumnName("unit");
+
+                        b1.Property<decimal>("UnitPrice")
+                            .HasColumnType("numeric")
+                            .HasColumnName("unit_price");
 
                         b1.HasKey("RequisitionId", "LineNo");
 
