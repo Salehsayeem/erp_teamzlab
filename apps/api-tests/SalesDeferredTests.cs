@@ -1298,3 +1298,79 @@ public partial class SalesDeferredTests
         Assert.Equal(HttpStatusCode.BadRequest, await GetStatusAsync("/api/v1/sales-analytics?domain=inventory", Sales));
     }
 }
+
+// ==== Gate 2: authz negative sweep on the new routes (brief §7 #28) ====
+
+public partial class SalesDeferredTests
+{
+    // R-EVAL (U-006) holds none of the sales permissions — every new write/read route must
+    // refuse with 403 rather than leaking rows or state changes
+    [Fact]
+    public async Task Authz_Sweep_New_Routes_Refuse_Unprivileged_Tokens()
+    {
+        const string NoPerm = "U-006"; // R-EVAL: sourcing:read + sourcing:evaluate only
+        var gets = new[]
+        {
+            "/api/v1/quotes", "/api/v1/price-books", "/api/v1/customers/C-0001",
+            "/api/v1/customers/C-0001/onboarding-checks", "/api/v1/sales-orders/SO-0001",
+            "/api/v1/receipt-candidates", "/api/v1/ar-reconciliation",
+            "/api/v1/sales-returns", "/api/v1/rebate-agreements",
+            "/api/v1/sales-analytics?domain=crm", "/api/v1/sales-analytics?domain=orders",
+            "/api/v1/sales-analytics?domain=billing", "/api/v1/forecast?period=2099-01",
+            "/api/v1/forecast-snapshots?period=2099-01",
+        };
+        foreach (var path in gets)
+        {
+            var res = await RawAsync(HttpMethod.Get, path, NoPerm);
+            // list routes can only 403 (no existence check); id-bearing detail routes may 404
+            // on the fixture's placeholder ids — both refuse and leak nothing
+            Assert.True(res.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound,
+                $"{path} should be 403/404 for {NoPerm}, got {res.StatusCode}");
+        }
+
+        var posts = new List<(string path, object body)>
+        {
+            ("/api/v1/quotes", new { customerId = "C-0001", currency = "BDT", lines = new[] { new { itemSku = "X", qty = 1m, unitPrice = 1m } } }),
+            ("/api/v1/price-books", new { name = "x", currency = "BDT", precedence = 1 }),
+            ("/api/v1/customer-contract-prices", new { customerId = "C-0001", itemSku = "X", minQty = 0m, unitPrice = 1m, effectiveFrom = Today }),
+            ("/api/v1/quotes/QTE-0001/revisions/1/approvals", new { }),
+            ("/api/v1/quotes/QTE-0001/revisions/1/acceptances", new { method = "Email" }),
+            ("/api/v1/customers/C-0001/hierarchy", new { parentId = "C-0002" }),
+            ("/api/v1/customers/C-0001/onboarding-checks", new { checkCode = "X", mandatory = true }),
+            ("/api/v1/customer-merges/preview", new { survivorId = "C-0001", mergedId = "C-0002", reason = "x" }),
+            ("/api/v1/sales-orders/SO-0001/holds", new { holdType = "Manual", reason = "x" }),
+            ("/api/v1/sales-orders/SO-0001/amendments", new { rationale = "x", lines = new[] { new { itemSku = "X", description = "d", qty = 1m, unitPrice = 1m } } }),
+            ("/api/v1/sales-orders/SO-0001/cancellations", new { reason = "x", scope = "Remaining" }),
+            ("/api/v1/recurring-schedules", new { customerId = "C-0001", frequency = "Monthly", nextRunDate = Today, lines = new[] { new { itemSku = "X", description = "d", qty = 1m, unitPrice = 1m } } }),
+            ("/api/v1/forecast-submissions", new { owner = Sales, period = "2099-01", category = "Commit" }),
+            ("/api/v1/forecast-snapshots", new { period = "2099-01" }),
+            ("/api/v1/invoices/INV-0001/einvoice-submissions", new { }),
+            ("/api/v1/invoices/INV-0001/delivery-attempts", new { channel = "Email", recipient = "a@b.test" }),
+            ("/api/v1/sales-returns", new { orderId = "SO-0001", lines = new[] { new { itemSku = "X", qty = 1m } } }),
+            ("/api/v1/adjustments/ADJ-0001/refund-requests", new { }),
+            ("/api/v1/refund-requests/X:REF/approvals", new { }),
+            ("/api/v1/receipt-candidates", new { bankRef = "B-1", amount = 1m, currency = "BDT", valueDate = Today, channel = "Bank" }),
+            ("/api/v1/rebate-agreements", new { customerId = "C-0001", basis = "net_sales", ratePct = 5m, accrualPeriod = "Monthly", validFrom = Today }),
+            ("/api/v1/rebate-claims", new { agreementId = "RBT-0001", period = "2099-01", amount = 1m, eligibleTxnIds = new[] { "INV-1" } }),
+        };
+        foreach (var (path, body) in posts)
+        {
+            var res = await PostAsync(path, body, NoPerm);
+            // 403 = permission gate; 404 = id not in this fixture; 409 = a state guard that
+            // fires earlier in the flow (fixture sequences make low ids real). All three
+            // refuse the action — the assert is about never reaching the business write.
+            Assert.True(res.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound or HttpStatusCode.Conflict,
+                $"{path} should be 403/404/409 for {NoPerm}, got {res.StatusCode}");
+        }
+
+        // merge execution is tighter still: an authorized sales token is refused (R-ADMIN only,
+        // Q-S3) — 403 on an existing preview, 404 acceptable only because this id is a placeholder
+        var exec = await PostAsync("/api/v1/customer-merges/PMG-00000000/executions", new { }, Sales);
+        Assert.True(exec.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound,
+            $"merge execution should refuse for {Sales}, got {exec.StatusCode}");
+        // refund approval is finance-only: an unprivileged token cannot approve
+        var refundSelf = await PostAsync("/api/v1/refund-requests/X:REF/approvals", new { }, NoPerm);
+        Assert.True(refundSelf.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound,
+            $"refund approval should refuse for {NoPerm}, got {refundSelf.StatusCode}");
+    }
+}

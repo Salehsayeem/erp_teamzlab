@@ -361,3 +361,534 @@ export function fetchCustomers(token: string) {
 export function createCustomer(token: string, body: { name: string; taxId: string; email: string; creditLimit?: number; paymentTermNetDays?: number; remindersSuppressed?: boolean }) {
   return apiFetch<CustomerRow>("/api/v1/customers", { method: "POST", body, token });
 }
+
+// --- Quotes (ERP-SALES-021/022/023/030) -----------------------------------------
+
+export type QuotePriceEvidence = {
+  itemSku: string;
+  priceBookId: string | null;
+  rule: string;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  baseValue: number;
+  sourceRef: string;
+};
+
+export type QuoteLine = { itemSku: string; description: string; qty: number; unitPrice: number; discountPct: number };
+
+export type QuoteApprovalRow = { approverId: string; status: string; reason: string | null; createdAt: string };
+
+export type QuoteRevisionRow = {
+  id: string;
+  quoteId: string;
+  revision: number;
+  status: string;
+  subTotal: number;
+  discountTotal: number;
+  taxTotal: number;
+  total: number;
+  priceEvidence: QuotePriceEvidence[] | null;
+  lines: QuoteLine[];
+  approvals: QuoteApprovalRow[];
+  approvedBy: string | null;
+  approvedAt: string | null;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type QuoteAcceptanceRow = {
+  id: string;
+  quoteId: string;
+  revisionId: string;
+  revision: number;
+  method: string;
+  externalEventId: string | null;
+  evidenceRef: string | null;
+  acceptedBy: string;
+  acceptedAt: string;
+  idempotent: boolean;
+};
+
+export type QuoteRow = {
+  id: string;
+  customerId: string;
+  currency: string;
+  terms: string | null;
+  expiresAt: string | null;
+  status: string;
+  revision: number;
+  revisionStatus: string | null;
+  subTotal: number | null;
+  discountTotal: number | null;
+  taxTotal: number | null;
+  total: number | null;
+  priceEvidence: QuotePriceEvidence[] | null;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type QuoteDetail = QuoteRow & {
+  acceptedRevision: number | null;
+  revisions: QuoteRevisionRow[];
+  acceptances: QuoteAcceptanceRow[];
+};
+
+export type QuoteLineInput = { itemSku: string; qty: number; unitPrice?: number; discountPct?: number };
+
+export function listQuotes(token: string) {
+  return apiFetch<QuoteRow[]>("/api/v1/quotes", { token });
+}
+export function getQuote(token: string, id: string) {
+  return apiFetch<QuoteDetail>(`/api/v1/quotes/${id}`, { token });
+}
+export function createQuote(token: string, body: { customerId: string; currency: string; lines: QuoteLineInput[]; terms?: string; expiresAt?: string }) {
+  return apiFetch<QuoteRow>("/api/v1/quotes", { method: "POST", body, token });
+}
+export function createQuoteRevision(token: string, id: string, body: { lines: QuoteLineInput[]; rationale?: string }) {
+  return apiFetch<QuoteDetail>(`/api/v1/quotes/${id}/revisions`, { method: "POST", body, token });
+}
+export function approveQuoteRevision(token: string, id: string, revision: number, reason: string | null) {
+  return apiFetch<QuoteRevisionRow>(`/api/v1/quotes/${id}/revisions/${revision}/approvals`, { method: "POST", body: { reason }, token });
+}
+export function acceptQuoteRevision(token: string, id: string, revision: number, body: { method: string; externalEventId?: string; evidenceRef?: string }) {
+  return apiFetch<QuoteAcceptanceRow>(`/api/v1/quotes/${id}/revisions/${revision}/acceptances`, { method: "POST", body, token });
+}
+export function revalidateQuote(token: string, id: string, body: { expiresAt: string; reason: string }) {
+  return apiFetch<QuoteDetail>(`/api/v1/quotes/${id}/revalidations`, { method: "POST", body, token });
+}
+
+// --- Price books + contract prices (ERP-SALES-024/025/026) -----------------------
+
+export type PriceBookEntryRow = {
+  itemSku: string;
+  minQty: number;
+  unitPrice: number;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  rule: string | null;
+};
+
+export type PriceBookRow = {
+  id: string;
+  name: string;
+  currency: string;
+  precedence: number;
+  createdBy: string;
+  createdAt: string;
+  entries: PriceBookEntryRow[];
+};
+
+export function listPriceBooks(token: string) {
+  return apiFetch<PriceBookRow[]>("/api/v1/price-books", { token });
+}
+export function createPriceBook(token: string, body: { name: string; currency: string; precedence: number }) {
+  return apiFetch<PriceBookRow>("/api/v1/price-books", { method: "POST", body, token });
+}
+export function addBookEntry(token: string, id: string, body: { itemSku: string; minQty: number; unitPrice: number; effectiveFrom: string; effectiveTo?: string; rule?: string }) {
+  return apiFetch<PriceBookRow>(`/api/v1/price-books/${id}/entries`, { method: "POST", body, token });
+}
+export function createContractPrice(token: string, body: { customerId: string; itemSku: string; minQty: number; unitPrice: number; effectiveFrom: string; effectiveTo?: string }) {
+  return apiFetch<PriceBookEntryRow>("/api/v1/customer-contract-prices", { method: "POST", body, token });
+}
+
+// --- Customer 360 (ERP-SALES-012/013/014) ----------------------------------------
+
+export type HierarchyInfo = {
+  parentId: string | null;
+  childrenIds: string[];
+  includedEntityIds: string[];
+  rollupOpenOrderTotal: number;
+};
+
+export type OnboardingCheckRow = {
+  checkCode: string;
+  mandatory: boolean;
+  status: string;
+  metAt: string | null;
+  metBy: string | null;
+};
+
+export type Customer360 = {
+  id: string;
+  name: string;
+  taxId: string;
+  email: string;
+  creditLimit: number | null;
+  paymentTermNetDays: number;
+  remindersSuppressed: boolean;
+  mergedIntoId: string | null;
+  hierarchy: HierarchyInfo;
+  openOrders: { id: string; status: string; total: number }[];
+  openInvoiceCount: number;
+  openInvoiceTotal: number;
+  exposure: CreditExposure | null;
+  onboardingChecks: OnboardingCheckRow[];
+};
+
+export type MergePreviewRow = {
+  id: string;
+  survivorId: string;
+  mergedId: string;
+  reason: string;
+  status: string;
+  reassignments: Record<string, number>;
+  requestedBy: string;
+  requestedAt: string;
+  executedBy: string | null;
+  executedAt: string | null;
+};
+
+export function getCustomer360(token: string, id: string) {
+  return apiFetch<Customer360>(`/api/v1/customers/${id}`, { token });
+}
+export function setCustomerHierarchy(token: string, id: string, parentId: string | null) {
+  return apiFetch<{ customerId: string; parentId: string | null }>(`/api/v1/customers/${id}/hierarchy`, { method: "POST", body: { parentId }, token });
+}
+export function addOnboardingCheck(token: string, id: string, body: { checkCode: string; mandatory: boolean }) {
+  return apiFetch<OnboardingCheckRow>(`/api/v1/customers/${id}/onboarding-checks`, { method: "POST", body, token });
+}
+export function markOnboardingCheckMet(token: string, id: string, checkCode: string) {
+  return apiFetch<OnboardingCheckRow>(`/api/v1/customers/${id}/onboarding-checks/${checkCode}/met`, { method: "POST", token });
+}
+export function mergePreview(token: string, body: { survivorId: string; mergedId: string; reason: string }) {
+  return apiFetch<MergePreviewRow>("/api/v1/customer-merges/preview", { method: "POST", body, token });
+}
+export function mergeExecute(token: string, previewId: string) {
+  return apiFetch<MergePreviewRow>(`/api/v1/customer-merges/${previewId}/executions`, { method: "POST", body: {}, token });
+}
+
+// --- Order lifecycle (ERP-SALES-031..040) -----------------------------------------
+
+export type OrderLineDetail = {
+  itemSku: string;
+  description: string;
+  qty: number;
+  unitPrice: number;
+  expectedDate: string | null;
+  fulfilledQty: number;
+  remainingQty: number;
+  backorderQty: number;
+};
+
+export type OrderHoldRow = {
+  id: string;
+  holdType: string;
+  status: string;
+  reason: string;
+  source: string;
+  setBy: string;
+  setAt: string;
+  clearedBy: string | null;
+  clearedAt: string | null;
+};
+
+export type OrderAmendmentRow = {
+  id: string;
+  revision: number;
+  status: string;
+  rationale: string;
+  lines: { itemSku: string; description: string; qty: number; unitPrice: number }[];
+  createdBy: string;
+  createdAt: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  rejectionReason: string | null;
+};
+
+export type OrderCancellationRow = {
+  id: string;
+  scope: string;
+  reason: string;
+  cancelledBy: string;
+  cancelledAt: string;
+};
+
+export type SalesOrderDetail = {
+  id: string;
+  customerId: string;
+  status: string;
+  createdBy: string;
+  createdAt: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  rejectionReason: string | null;
+  sourceQuoteRevisionId: string | null;
+  total: number;
+  lines: OrderLineDetail[];
+  holds: OrderHoldRow[];
+  amendments: OrderAmendmentRow[];
+  cancellations: OrderCancellationRow[];
+};
+
+export function getSalesOrder(token: string, id: string) {
+  return apiFetch<SalesOrderDetail>(`/api/v1/sales-orders/${id}`, { token });
+}
+export function placeHold(token: string, id: string, body: { holdType: string; reason: string; source?: string }) {
+  return apiFetch<SalesOrderDetail>(`/api/v1/sales-orders/${id}/holds`, { method: "POST", body, token });
+}
+export function releaseHold(token: string, id: string, holdId: string, reason: string | null) {
+  return apiFetch<SalesOrderDetail>(`/api/v1/sales-orders/${id}/holds/${holdId}/releases`, { method: "POST", body: { reason }, token });
+}
+export function createAmendment(token: string, id: string, body: { lines: { itemSku: string; description: string; qty: number; unitPrice: number }[]; rationale: string }) {
+  return apiFetch<OrderAmendmentRow>(`/api/v1/sales-orders/${id}/amendments`, { method: "POST", body, token });
+}
+export function approveAmendment(token: string, id: string, amendmentId: string, reason: string | null) {
+  return apiFetch<OrderAmendmentRow>(`/api/v1/sales-orders/${id}/amendments/${amendmentId}/approvals`, { method: "POST", body: { reason }, token });
+}
+export function cancelOrder(token: string, id: string, body: { reason: string; scope: string }) {
+  return apiFetch<SalesOrderDetail>(`/api/v1/sales-orders/${id}/cancellations`, { method: "POST", body, token });
+}
+export function createSchedule(token: string, body: { customerId: string; frequency: string; nextRunDate: string; lines: { itemSku: string; qty: number }[] }) {
+  return apiFetch<unknown>("/api/v1/recurring-schedules", { method: "POST", body, token });
+}
+export function pauseSchedule(token: string, id: string) {
+  return apiFetch<unknown>(`/api/v1/recurring-schedules/${id}/pauses`, { method: "POST", body: {}, token });
+}
+export function generateSchedule(token: string, id: string, period: string) {
+  return apiFetch<unknown>(`/api/v1/recurring-schedules/${id}/generations`, { method: "POST", body: { period }, token });
+}
+
+// --- Forecast (ERP-SALES-017/018/020) ----------------------------------------------
+
+export type ForecastSubmissionRow = {
+  id: string;
+  owner: string;
+  period: string;
+  category: string;
+  overrideValue: number | null;
+  version: number;
+  submittedBy: string;
+  submittedAt: string;
+};
+
+export type ForecastReport = {
+  period: string;
+  unweighted: { count: number; total: number };
+  weighted: { total: number };
+  override: { count: number; total: number };
+  submissions: ForecastSubmissionRow[];
+  unclassified: { count: number };
+};
+
+export type ForecastSnapshotRow = {
+  id: string;
+  period: string;
+  status: string;
+  payload: { unweightedTotal?: number } | null;
+  generatedBy: string;
+  generatedAt: string;
+};
+
+export function submitForecast(token: string, body: { owner: string; period: string; category: string; overrideValue?: number }) {
+  return apiFetch<ForecastSubmissionRow>("/api/v1/forecast-submissions", { method: "POST", body, token });
+}
+export function getForecast(token: string, period: string) {
+  return apiFetch<ForecastReport>(withQuery("/api/v1/forecast", { period }), { token });
+}
+export function createSnapshot(token: string, period: string) {
+  return apiFetch<ForecastSnapshotRow>("/api/v1/forecast-snapshots", { method: "POST", body: { period }, token });
+}
+export function listSnapshots(token: string, period: string) {
+  return apiFetch<ForecastSnapshotRow[]>(withQuery("/api/v1/forecast-snapshots", { period }), { token });
+}
+
+// --- E-invoice + delivery (ERP-SALES-054/055) — services only; screen wiring lands later ---
+
+export type EinvoiceSubmissionRow = {
+  id: string;
+  invoiceId: string;
+  jurisdiction: string;
+  schemaVersion: string;
+  correlationId: string;
+  status: string;
+  submittedBy: string;
+  submittedAt: string;
+};
+
+export type InvoiceDeliveryRow = {
+  id: string;
+  channel: string;
+  recipient: string;
+  status: string;
+  attempt: number;
+  reason: string | null;
+  sentAt: string;
+  bouncedAt: string | null;
+};
+
+export function submitEinvoice(token: string, invoiceId: string) {
+  return apiFetch<EinvoiceSubmissionRow>(`/api/v1/invoices/${invoiceId}/einvoice-submissions`, { method: "POST", body: {}, token });
+}
+export function addDeliveryAttempt(token: string, invoiceId: string, body: { channel: string; recipient: string }) {
+  return apiFetch<InvoiceDeliveryRow>(`/api/v1/invoices/${invoiceId}/delivery-attempts`, { method: "POST", body, token });
+}
+export function bounceDelivery(token: string, invoiceId: string, deliveryId: string, reason: string) {
+  return apiFetch<InvoiceDeliveryRow>(`/api/v1/invoices/${invoiceId}/delivery-attempts/${deliveryId}/bounce`, { method: "POST", body: { reason }, token });
+}
+export function listDeliveries(token: string, invoiceId: string) {
+  return apiFetch<InvoiceDeliveryRow[]>(`/api/v1/invoices/${invoiceId}/deliveries`, { token });
+}
+
+// --- Sales returns + refunds (ERP-SALES-044/045/046) --------------------------------
+
+export type SalesReturnLine = { itemSku: string; qty: number; reason: string; condition: string };
+
+export type ReturnReceiptRow = { id: string; receivedQty: number; receivedBy: string; receivedAt: string };
+
+export type SalesReturnRow = {
+  id: string;
+  salesOrderId: string;
+  customerId: string;
+  status: string;
+  reason: string;
+  createdBy: string;
+  createdAt: string;
+  lines: SalesReturnLine[];
+  authorizedQty: number;
+  receivedQty: number;
+  receipts: ReturnReceiptRow[];
+};
+
+export type RefundRequestRow = {
+  id: string;
+  adjustmentId: string;
+  invoiceId: string;
+  amount: number;
+  status: string;
+  requestedBy: string;
+  requestedAt: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  rejectionReason: string | null;
+};
+
+export function listSalesReturns(token: string) {
+  return apiFetch<SalesReturnRow[]>("/api/v1/sales-returns", { token });
+}
+export function getSalesReturn(token: string, id: string) {
+  return apiFetch<SalesReturnRow>(`/api/v1/sales-returns/${id}`, { token });
+}
+export function createSalesReturn(token: string, body: { orderId: string; lines: { itemSku: string; qty: number; reason: string; condition: string }[]; overrideJustification?: string }) {
+  return apiFetch<SalesReturnRow>("/api/v1/sales-returns", { method: "POST", body, token });
+}
+export function receiveReturn(token: string, id: string, receivedQty: number) {
+  return apiFetch<SalesReturnRow>(`/api/v1/sales-returns/${id}/receipts`, { method: "POST", body: { receivedQty }, token });
+}
+export function requestRefund(token: string, adjustmentId: string) {
+  return apiFetch<RefundRequestRow>(`/api/v1/adjustments/${adjustmentId}/refund-requests`, { method: "POST", body: {}, token });
+}
+export function approveRefund(token: string, id: string, reason: string | null) {
+  return apiFetch<RefundRequestRow>(`/api/v1/refund-requests/${id}/approvals`, { method: "POST", body: { reason }, token });
+}
+
+// --- Receipt candidates + AR reconciliation (ERP-SALES-061/062) — services only ------
+
+export type ReceiptCandidateRow = {
+  id: string;
+  customerId: string | null;
+  bankRef: string;
+  amount: number;
+  currency: string;
+  valueDate: string;
+  channel: string;
+  status: string;
+  payerRef: string | null;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type ArReconciliation = {
+  asOf: string;
+  totalOpen: number;
+  unresolvedCount: number;
+  rows: { docId: string; financeRef: string | null; currency: string; openAmount: number; status: string }[];
+  unappliedCandidates: { count: number; total: number };
+};
+
+export function listReceiptCandidates(token: string) {
+  return apiFetch<ReceiptCandidateRow[]>("/api/v1/receipt-candidates", { token });
+}
+export function createReceiptCandidate(token: string, body: { customerId?: string; bankRef: string; amount: number; currency: string; valueDate: string; channel: string }) {
+  return apiFetch<ReceiptCandidateRow>("/api/v1/receipt-candidates", { method: "POST", body, token });
+}
+export function linkPayer(token: string, id: string, customerId: string) {
+  return apiFetch<ReceiptCandidateRow>(`/api/v1/receipt-candidates/${id}/payer-links`, { method: "POST", body: { customerId }, token });
+}
+export function getArReconciliation(token: string) {
+  return apiFetch<ArReconciliation>("/api/v1/ar-reconciliation", { token });
+}
+
+// --- Rebates (ERP-SALES-066/067/068) — services only; screen wiring lands later -------
+
+export type RebateAgreementRow = {
+  id: string;
+  customerId: string;
+  basis: string;
+  ratePct: number;
+  accrualPeriod: string;
+  status: string;
+  version: number;
+  validFrom: string;
+  validTo: string | null;
+  createdBy: string;
+  createdAt: string;
+};
+
+export type RebateAccrualRow = {
+  id: string;
+  agreementId: string;
+  period: string;
+  accruedAmount: number;
+  approvedAmount: number | null;
+  status: string;
+  calculatedBy: string;
+  calculatedAt: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+};
+
+export type RebateClaimRow = {
+  id: string;
+  agreementId: string;
+  period: string;
+  amount: number;
+  status: string;
+  requestedBy: string;
+  requestedAt: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  rejectionReason: string | null;
+};
+
+export function listRebateAgreements(token: string) {
+  return apiFetch<RebateAgreementRow[]>("/api/v1/rebate-agreements", { token });
+}
+export function createRebateAgreement(token: string, body: { customerId: string; basis: string; ratePct: number; accrualPeriod: string; validFrom: string }) {
+  return apiFetch<RebateAgreementRow>("/api/v1/rebate-agreements", { method: "POST", body, token });
+}
+export function calculateAccrual(token: string, id: string, period: string) {
+  return apiFetch<RebateAccrualRow>(`/api/v1/rebate-agreements/${id}/accruals`, { method: "POST", body: { period }, token });
+}
+export function approveAccrual(token: string, id: string, period: string) {
+  return apiFetch<RebateAccrualRow>(`/api/v1/rebate-agreements/${id}/accruals/${period}/approvals`, { method: "POST", body: {}, token });
+}
+export function createRebateClaim(token: string, body: { agreementId: string; period: string; amount: number; eligibleTxnIds: string[] }) {
+  return apiFetch<RebateClaimRow>("/api/v1/rebate-claims", { method: "POST", body, token });
+}
+export function approveRebateClaim(token: string, id: string, reason: string | null) {
+  return apiFetch<RebateClaimRow>(`/api/v1/rebate-claims/${id}/approvals`, { method: "POST", body: { reason }, token });
+}
+
+// --- Sales analytics (ERP-SALES-065) -------------------------------------------------
+
+export type AnalyticsRow = { groupKey: string; count: number; total: number; docIds: string[] };
+
+export type SalesAnalyticsReport = {
+  domain: string;
+  definition: string;
+  rows: AnalyticsRow[];
+};
+
+export function getSalesAnalytics(token: string, domain: string, groupBy?: string) {
+  return apiFetch<SalesAnalyticsReport>(withQuery("/api/v1/sales-analytics", { domain, groupBy }), { token });
+}
