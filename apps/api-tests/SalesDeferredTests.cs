@@ -619,3 +619,188 @@ public partial class SalesDeferredTests
         Assert.Equal("MERGE_BLOCKED", (await Json(blocked)).GetProperty("error").GetProperty("code").GetString());
     }
 }
+
+// ==== S4 order lifecycle: holds, amendments, partial fulfillment, cancel, recurring ====
+
+public partial class SalesDeferredTests
+{
+    private async Task<(string customerId, string soId)> SeedBigConfirmedSo(decimal qty = 10m, decimal price = 10m)
+    {
+        var sku = Tag("SKU");
+        await SeedStock(sku, qty, 2m);
+        return await SeedConfirmedSo(sku, qty, price);
+    }
+
+    private async Task<string> OrderSku(string soId)
+    {
+        var orders = await GetAsync("/api/v1/sales-orders", Sales);
+        return orders.GetProperty("data").EnumerateArray()
+            .First(o => o.GetProperty("id").GetString() == soId)
+            .GetProperty("lines").EnumerateArray().First().GetProperty("itemSku").GetString()!;
+    }
+
+    // 13 (035 AC1-2): a blocking hold prevents shipment; release records clear actor/time
+    [Fact]
+    public async Task Blocking_Hold_Gates_Shipment_Release_Records_Actor()
+    {
+        var (_, soId) = await SeedBigConfirmedSo();
+        var hold = await PostAsync($"/api/v1/sales-orders/{soId}/holds",
+            new { holdType = "Compliance", reason = "export screening pending", source = "trade-compliance" }, Sales);
+        Assert.Equal(HttpStatusCode.Created, hold.StatusCode);
+        var holdId = (await Json(hold)).GetProperty("data").GetProperty("id").GetString()!;
+
+        var ship = await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = await OrderSku(soId), qty = 1m }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, ship.StatusCode);
+        Assert.Equal("SO_HELD", (await Json(ship)).GetProperty("error").GetProperty("code").GetString());
+
+        var release = await PostAsync($"/api/v1/sales-orders/{soId}/holds/{holdId}/releases", new { reason = "screening cleared" }, Sales);
+        Assert.Equal(HttpStatusCode.OK, release.StatusCode);
+        var cleared = (await Json(release)).GetProperty("data");
+        Assert.Equal("Cleared", cleared.GetProperty("status").GetString());
+        Assert.Equal(Sales, cleared.GetProperty("clearedBy").GetString());
+        Assert.NotNull(cleared.GetProperty("clearedAt").GetString());
+
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/sales-orders/{soId}/shipments",
+            new { itemSku = await OrderSku(soId), qty = 1m }, Sales)).StatusCode);
+    }
+
+    // 14 (034 AC1-2): pending amendment is invisible to fulfillment; approval applies it
+    [Fact]
+    public async Task Amendment_Requires_Approval_Before_Fulfillment_Sees_It()
+    {
+        var (_, soId) = await SeedBigConfirmedSo(qty: 10m, price: 10m);
+        var sku = await OrderSku(soId);
+        var amd = await PostAsync($"/api/v1/sales-orders/{soId}/amendments", new
+        {
+            lines = new[] { new { itemSku = sku, description = "amended", qty = 4m, unitPrice = 20m } },
+            rationale = "customer cut scope",
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, amd.StatusCode);
+        var amdId = (await Json(amd)).GetProperty("data").GetProperty("id").GetString()!;
+        var detail = await GetAsync($"/api/v1/sales-orders/{soId}", Sales);
+        Assert.Equal("PendingAmendmentApproval", detail.GetProperty("data").GetProperty("status").GetString());
+
+        // fulfillment cannot ship while an amendment is pending (034 AC2)
+        var blocked = await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = sku, qty = 1m }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, blocked.StatusCode);
+
+        // maker-checker: issuer cannot approve own amendment; U-009 can
+        var self = await PostAsync($"/api/v1/sales-orders/{soId}/amendments/{amdId}/approvals", new { }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, self.StatusCode);
+        Assert.Equal("SO_AMENDMENT_ERROR", (await Json(self)).GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/sales-orders/{soId}/amendments/{amdId}/approvals", new { }, SalesManager)).StatusCode);
+
+        // now fulfillment sees the approved version: line qty 4 @ 20
+        var after = await GetAsync($"/api/v1/sales-orders/{soId}", Sales);
+        var line = after.GetProperty("data").GetProperty("lines").EnumerateArray().First();
+        Assert.Equal(4m, line.GetProperty("qty").GetDecimal());
+        Assert.Equal(20m, line.GetProperty("unitPrice").GetDecimal());
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = sku, qty = 1m }, Sales)).StatusCode);
+    }
+
+    // 15 (036 AC1/037): two shipments update fulfilled/remaining independently; shortage
+    // leaves measurable remaining + expected date
+    [Fact]
+    public async Task Two_Shipments_Track_Fulfilled_Remaining_And_Backorder()
+    {
+        var (_, soId) = await SeedBigConfirmedSo(qty: 10m, price: 10m);
+        var sku = await OrderSku(soId);
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = sku, qty = 3m }, Sales)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = sku, qty = 2m }, Sales)).StatusCode);
+
+        var detail = await GetAsync($"/api/v1/sales-orders/{soId}", Sales);
+        var line = detail.GetProperty("data").GetProperty("lines").EnumerateArray().First();
+        Assert.Equal(5m, line.GetProperty("fulfilledQty").GetDecimal());
+        Assert.Equal(5m, line.GetProperty("remainingQty").GetDecimal());
+        Assert.Equal(0m, line.GetProperty("backorderQty").GetDecimal());
+
+        // shortage shipment: line wants 10, 3 more given -> remaining 2 measured + expected date
+        var expected = Today.AddDays(14);
+        var shortage = await PostAsync($"/api/v1/sales-orders/{soId}/shipments",
+            new { itemSku = sku, qty = 3m, expectedDate = expected }, Sales);
+        Assert.Equal(HttpStatusCode.Created, shortage.StatusCode);
+        var after = await GetAsync($"/api/v1/sales-orders/{soId}", Sales);
+        var shortLine = after.GetProperty("data").GetProperty("lines").EnumerateArray().First();
+        Assert.Equal(8m, shortLine.GetProperty("fulfilledQty").GetDecimal());
+        Assert.Equal(2m, shortLine.GetProperty("remainingQty").GetDecimal());
+        Assert.Equal(2m, shortLine.GetProperty("backorderQty").GetDecimal());
+        Assert.Equal(expected, DateOnly.Parse(shortLine.GetProperty("expectedDate").GetString()!));
+    }
+
+    // 16 (039 AC1-2): cancellation of the remaining preserves posted invoices
+    [Fact]
+    public async Task Cancel_Remaining_Preserves_Posted_Invoice_And_Records_Outcome()
+    {
+        var customerId = await SeedCustomer();
+        var sku = Tag("SKU");
+        await SeedStock(sku, 10m, 2m);
+        var (_, soId) = await SeedConfirmedSo(sku, 10m, 25m, customerId);
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = sku, qty = 4m }, Sales)).StatusCode);
+        var draft = await DraftInvoice(soId);
+        var (invoiceId, _) = await PostInvoice(draft.GetProperty("id").GetString()!, Fin);
+
+        var cancel = await PostAsync($"/api/v1/sales-orders/{soId}/cancellations",
+            new { reason = "customer walked from the remainder", scope = "Remaining" }, Sales);
+        Assert.Equal(HttpStatusCode.OK, cancel.StatusCode);
+        var outcome = (await Json(cancel)).GetProperty("data");
+        Assert.Equal("Cancelled", outcome.GetProperty("status").GetString());
+        Assert.Equal(6m, outcome.GetProperty("remainingQty").GetDecimal());
+
+        // posted invoice untouched - corrections ride the credit-note flow (039 AC2)
+        var invoice = await GetInvoice(invoiceId);
+        Assert.Equal("Posted", invoice.GetProperty("status").GetString());
+
+        // cancelling again is a state error
+        var again = await PostAsync($"/api/v1/sales-orders/{soId}/cancellations",
+            new { reason = "double cancel", scope = "Remaining" }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+    }
+
+    // 16b (039 AC2): post-release FULL cancellation needs a different approver
+    [Fact]
+    public async Task Post_Release_Full_Cancel_Needs_Approver_Role()
+    {
+        var (_, soId) = await SeedBigConfirmedSo(qty: 10m, price: 10m);
+        var sku = await OrderSku(soId);
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = sku, qty = 2m }, Sales)).StatusCode);
+
+        var self = await PostAsync($"/api/v1/sales-orders/{soId}/cancellations",
+            new { reason = "full walkaway", scope = "Full" }, Sales);
+        Assert.Equal(HttpStatusCode.Forbidden, self.StatusCode); // maker + post-release full scope
+
+        var approved = await PostAsync($"/api/v1/sales-orders/{soId}/cancellations",
+            new { reason = "full walkaway", scope = "Full" }, SalesManager);
+        Assert.Equal(HttpStatusCode.OK, approved.StatusCode);
+        Assert.Equal("Cancelled", (await Json(approved)).GetProperty("data").GetProperty("status").GetString());
+    }
+
+    // 17 (040 AC1-2): at most one occurrence per (schedule, period), duplicate idempotent,
+    // paused yields none
+    [Fact]
+    public async Task Recurring_Generation_Is_Idempotent_Per_Period_And_Pauses()
+    {
+        var customerId = await SeedCustomer();
+        var schedule = await PostAsync("/api/v1/recurring-schedules", new
+        {
+            customerId,
+            frequency = "Monthly",
+            nextRunDate = Today.AddDays(1),
+            lines = new[] { new { itemSku = Tag("SKU"), description = "Maintenance", qty = 2m, unitPrice = 50m } },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, schedule.StatusCode);
+        var scheduleId = (await Json(schedule)).GetProperty("data").GetProperty("id").GetString()!;
+
+        var first = await PostAsync($"/api/v1/recurring-schedules/{scheduleId}/generations", new { period = "2026-12" }, Sales);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var orderId1 = (await Json(first)).GetProperty("data").GetProperty("orderId").GetString()!;
+
+        var duplicate = await PostAsync($"/api/v1/recurring-schedules/{scheduleId}/generations", new { period = "2026-12" }, Sales);
+        Assert.Equal(HttpStatusCode.OK, duplicate.StatusCode);
+        Assert.Equal(orderId1, (await Json(duplicate)).GetProperty("data").GetProperty("orderId").GetString());
+
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/recurring-schedules/{scheduleId}/pauses", new { }, Sales)).StatusCode);
+        var paused = await PostAsync($"/api/v1/recurring-schedules/{scheduleId}/generations", new { period = "2027-01" }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, paused.StatusCode);
+        Assert.Equal("SCHEDULE_PAUSED", (await Json(paused)).GetProperty("error").GetProperty("code").GetString());
+    }
+}

@@ -57,11 +57,13 @@ public sealed class InvoiceService(
     {
         var so = orders.Find(soId);
         if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
-        if (so.Status is not (SoStatus.Shipped or SoStatus.Invoiced))
-            return (null, "SO_NOT_BILLABLE", $"Only shipped sales orders can be invoiced (current: {so.Status}).");
-
+        // 036: invoice eligibility is per shipment (partial fulfillment bills what shipped) —
+        // a Confirmed order with an unbilled shipment event drafts like a fully shipped one,
+        // while an order with nothing billable keeps the house SO_NOT_BILLABLE / ALREADY_BILLED split
         var shipments = orders.ShipmentsFor(soId);
         var source = shipments.FirstOrDefault(sh => invoices.FindBySourceEvent(sh.Id) is null);
+        if (so.Status is not (SoStatus.Confirmed or SoStatus.Shipped or SoStatus.Invoiced) || (source is null && so.Status == SoStatus.Confirmed))
+            return (null, "SO_NOT_BILLABLE", $"Only shipped sales orders can be invoiced (current: {so.Status}).");
         if (source is null)
             return (null, "ALREADY_BILLED",
                 $"Every shipment of {soId} is already billed (source events {string.Join(", ", shipments.Select(s => s.Id))}).");

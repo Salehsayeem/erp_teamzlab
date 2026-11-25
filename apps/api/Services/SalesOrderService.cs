@@ -14,8 +14,265 @@ public sealed class SalesOrderService(
         orders.All().Select(s => new
         {
             s.Id, s.CustomerId, s.Status, s.Lines, s.CreatedBy, s.CreatedAt, s.ApprovedBy, s.ApprovedAt, s.RejectionReason,
+            s.SourceQuoteRevisionId,
             total = s.Lines.Sum(l => decimal.Round(l.Qty * l.UnitPrice, 2, MidpointRounding.AwayFromZero)),
         }).ToList();
+
+    // S4: order detail — lines carry fulfilled/remaining/backorder + expected date (036/037),
+    // plus the lifecycle rows (holds/amendments/cancellations)
+    public (object? data, string? code, string? message) Detail(string soId)
+    {
+        var so = orders.Find(soId);
+        if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
+        var shipped = orders.ShippedBySku(soId);
+        return (new
+        {
+            so.Id, so.CustomerId, so.Status, so.CreatedBy, so.CreatedAt, so.ApprovedBy, so.ApprovedAt,
+            so.RejectionReason, so.SourceQuoteRevisionId,
+            total = so.Lines.Sum(l => decimal.Round(l.Qty * l.UnitPrice, 2, MidpointRounding.AwayFromZero)),
+            lines = so.Lines.Select(l =>
+            {
+                var fulfilled = shipped.TryGetValue(l.ItemSku, out var f) ? f : 0;
+                var remaining = decimal.Max(0, l.Qty - fulfilled);
+                return new
+                {
+                    l.ItemSku, l.Description, l.Qty, l.UnitPrice, l.ExpectedDate,
+                    fulfilledQty = fulfilled,
+                    remainingQty = remaining,
+                    // backorder = the remaining slice that carries an expected date (037)
+                    backorderQty = l.ExpectedDate is not null ? remaining : 0,
+                };
+            }),
+            holds = orders.HoldsFor(soId),
+            amendments = orders.AmendmentsFor(soId).Select(a => new
+            {
+                a.Id, a.Revision, a.Status, a.Rationale, a.Lines, a.CreatedBy, a.CreatedAt, a.ApprovedBy, a.ApprovedAt, a.RejectionReason,
+            }),
+            cancellations = orders.CancellationsFor(soId),
+        }, null, null);
+    }
+
+    // --- S4: holds (035) -------------------------------------------------------------
+
+    // any blocking hold prevents progression; typed holds carry reason/source/set actor-time
+    public (OrderHold? hold, string? code, string? message) PlaceHold(CurrentUser u, string soId, OrderHoldType holdType, string reason, string? source)
+    {
+        var so = orders.Find(soId);
+        if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
+        if (so.Status != SoStatus.Confirmed)
+            return (null, "SO_STATE_ERROR", $"Only confirmed sales orders can be held (current: {so.Status}).");
+        if (!u.Has("so:write")) return (null, "FORBIDDEN", "so:write permission required.");
+        var hold = new OrderHold($"{soId}:H{orders.HoldsFor(soId).Count + 1}", ec.TenantId, ec.EntityId,
+            soId, holdType, OrderHoldStatus.Active, reason, source ?? u.RoleId, u.Id, DateTimeOffset.UtcNow);
+        orders.AddHold(hold);
+        audit.Log(u, "hold", "sales_order", soId, $"{holdType} hold: {reason}");
+        audit.Emit(u, "sales.so.held", new { soId, holdType, reason, setBy = u.Id });
+        orders.Save();
+        return (hold, null, null);
+    }
+
+    public (OrderHold? hold, string? code, string? message) ReleaseHold(CurrentUser u, string holdId, string? reason)
+    {
+        var hold = orders.FindHold(holdId);
+        if (hold is null) return (null, "HOLD_NOT_FOUND", "Order hold not found.");
+        if (!u.Has("so:write")) return (null, "FORBIDDEN", "so:write permission required.");
+        try
+        {
+            orders.SetHoldCleared(hold, u.Id);
+            audit.Log(u, "hold_release", "sales_order", hold.SalesOrderId, $"Hold {holdId} cleared: {reason ?? "no reason given"}");
+            orders.Save();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return (null, "HOLD_ALREADY_CLEARED", "Hold was cleared concurrently by another session.");
+        }
+        return (hold, null, null);
+    }
+
+    // --- S4: amendments (034) --------------------------------------------------------
+
+    // material edit → amendment with the NEW lines; fulfillment/billing see them only after
+    // the required approval (034 AC2) — the order flips to PendingAmendmentApproval meanwhile
+    public (SalesOrderAmendment? amendment, string? code, string? message) CreateAmendment(
+        CurrentUser u, string soId, IReadOnlyList<SoLine> lines, string rationale)
+    {
+        var so = orders.Find(soId);
+        if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
+        if (so.Status != SoStatus.Confirmed)
+            return (null, "SO_AMENDMENT_ERROR", $"Only confirmed sales orders can be amended (current: {so.Status}).");
+        if (!u.Has("so:write")) return (null, "FORBIDDEN", "so:write permission required.");
+        var revisionNo = orders.AmendmentsFor(soId).Count + 1;
+        var amendment = new SalesOrderAmendment($"{soId}:A{revisionNo}", ec.TenantId, ec.EntityId, soId,
+            revisionNo, AmendmentStatus.Pending, rationale, u.Id, DateTimeOffset.UtcNow, lines);
+        orders.AddAmendment(amendment);
+        orders.SetSoStatus(so, SoStatus.PendingAmendmentApproval);
+        audit.Log(u, "amend", "sales_order", soId, $"Amendment {revisionNo} proposed: {rationale}");
+        orders.Save();
+        return (amendment, null, null);
+    }
+
+    public (SalesOrderAmendment? amendment, string? code, string? message) ApproveAmendment(
+        CurrentUser u, string amendmentId, string? reason)
+    {
+        var amendment = orders.FindAmendment(amendmentId);
+        if (amendment is null) return (null, "AMENDMENT_NOT_FOUND", "Order amendment not found.");
+        var so = orders.Find(amendment.SalesOrderId);
+        if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
+        if (amendment.Status != AmendmentStatus.Pending)
+            return (null, "SO_AMENDMENT_ERROR", $"Only pending amendments can be approved (current: {amendment.Status}).");
+        if (amendment.CreatedBy == u.Id)
+            return (null, "SO_AMENDMENT_ERROR", "Maker-checker: the proposer cannot approve their own amendment.");
+        if (!u.Has("so:approve")) return (null, "FORBIDDEN", "so:approve permission required.");
+
+        if (reason is not null)
+        {
+            orders.SetAmendmentStatus(amendment, AmendmentStatus.Rejected, u.Id);
+            Set(amendment, nameof(SalesOrderAmendment.RejectionReason), reason);
+            orders.SetSoStatus(so, SoStatus.Confirmed); // prior values were never touched
+            audit.Log(u, "amend_reject", "sales_order", so.Id, $"Amendment rejected: {reason}");
+            orders.Save();
+            return (amendment, null, null);
+        }
+
+        orders.SetAmendmentStatus(amendment, AmendmentStatus.Approved, u.Id);
+        // copies, not the tracked instances — a shared-type owned row can only belong to one owner
+        orders.ReplaceLines(so, amendment.Lines.Select(l => l with { }).ToList());
+        orders.SetSoStatus(so, SoStatus.Confirmed);
+        audit.Log(u, "amend_approve", "sales_order", so.Id, $"Amendment {amendment.Revision} applied by {u.Email}");
+        audit.Emit(u, "sales.so.amended", new { soId = so.Id, amendmentId, approvedBy = u.Id });
+        orders.Save();
+        return (amendment, null, null);
+    }
+
+    // --- S4: cancellations (039) -----------------------------------------------------
+
+    // scope Remaining cancels the unshipped remainder (so:write); scope Full after any
+    // shipment is post-release and needs so:approve by an officer who is not the maker.
+    // Posted invoices remain untouched — corrections ride the credit-note flow (039 AC2).
+    // Reservation release is out of scope (Q-S4: no formal reservation contract this wave).
+    public (object? data, string? code, string? message) CancelOrder(CurrentUser u, string soId, string reason, CancellationScope scope)
+    {
+        var so = orders.Find(soId);
+        if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
+        if (so.Status is SoStatus.Cancelled or SoStatus.Rejected or SoStatus.Invoiced)
+            return (null, "SO_CANCEL_ERROR", $"A {so.Status} order cannot be cancelled.");
+        var shipped = orders.ShippedBySku(soId);
+        var hasShipments = shipped.Any(kv => kv.Value > 0);
+        if (scope == CancellationScope.Full && hasShipments)
+        {
+            if (!u.Has("so:approve"))
+                return (null, "FORBIDDEN", "Post-release full cancellation requires so:approve.");
+            if (u.Id == so.CreatedBy)
+                return (null, "FORBIDDEN", "Post-release full cancellation requires an approver who is not the maker.");
+        }
+        else if (!u.Has("so:write"))
+        {
+            return (null, "FORBIDDEN", "so:write permission required.");
+        }
+
+        var remainingByLine = so.Lines.Select(l => new
+        {
+            itemSku = l.ItemSku,
+            ordered = l.Qty,
+            fulfilled = shipped.TryGetValue(l.ItemSku, out var f) ? f : 0,
+            remaining = decimal.Max(0, l.Qty - (shipped.TryGetValue(l.ItemSku, out var g) ? g : 0)),
+        }).ToList();
+        var remainingQty = remainingByLine.Sum(r => r.remaining);
+        var cancellation = new OrderCancellation($"{soId}:C{orders.CancellationsFor(soId).Count + 1}",
+            ec.TenantId, ec.EntityId, soId, scope, reason,
+            System.Text.Json.JsonSerializer.Serialize(new { scope, remainingQty, lines = remainingByLine }, Idem.JsonOptions),
+            u.Id, DateTimeOffset.UtcNow);
+        orders.AddCancellation(cancellation);
+        orders.SetSoStatus(so, SoStatus.Cancelled);
+        audit.Log(u, "cancel", "sales_order", soId, $"{scope} cancellation: {reason}; remaining {remainingQty:0.##}");
+        audit.Emit(u, "sales.so.cancelled", new { soId, scope, reason, remainingQty, cancelledBy = u.Id });
+        orders.Save();
+        return (new
+        {
+            so.Id, so.Status, cancellation.Scope, cancellation.Reason, remainingQty, lines = remainingByLine,
+            cancelledBy = u.Id, cancelledAt = cancellation.CancelledAt, postedInvoicesUntouched = true,
+        }, null, null);
+    }
+
+    // --- S4: recurring schedules (040) -----------------------------------------------
+
+    public (RecurringSchedule? schedule, string? code, string? message) CreateSchedule(
+        CurrentUser u, string customerId, RecurringFrequency frequency, DateOnly nextRunDate, IReadOnlyList<SoLine> lines)
+    {
+        if (!customers.Exists(customerId))
+            return (null, "CUSTOMER_NOT_FOUND", "Customer does not exist.");
+        if (nextRunDate < DateOnly.FromDateTime(DateTime.UtcNow))
+            return (null, "VALIDATION_ERROR", "nextRunDate must be today or later.");
+        if (!u.Has("recurring:write")) return (null, "FORBIDDEN", "recurring:write permission required.");
+        var schedule = new RecurringSchedule(numbers.Next("RCS"), ec.TenantId, ec.EntityId, customerId,
+            frequency, RecurringScheduleStatus.Active, nextRunDate, u.Id, DateTimeOffset.UtcNow, lines);
+        orders.AddSchedule(schedule);
+        audit.Log(u, "create", "recurring_schedule", schedule.Id, $"{frequency} schedule for {customerId}");
+        orders.Save();
+        return (schedule, null, null);
+    }
+
+    public (RecurringSchedule? schedule, string? code, string? message) PauseSchedule(CurrentUser u, string scheduleId)
+    {
+        var schedule = orders.FindSchedule(scheduleId);
+        if (schedule is null) return (null, "SCHEDULE_NOT_FOUND", "Recurring schedule not found.");
+        if (!u.Has("recurring:write")) return (null, "FORBIDDEN", "recurring:write permission required.");
+        if (schedule.Status != RecurringScheduleStatus.Active)
+            return (null, "SCHEDULE_STATE_ERROR", $"Only active schedules can be paused (current: {schedule.Status}).");
+        orders.SetScheduleStatus(schedule, RecurringScheduleStatus.Paused); // history preserved (040 AC2)
+        audit.Log(u, "pause", "recurring_schedule", scheduleId, "Schedule paused");
+        orders.Save();
+        return (schedule, null, null);
+    }
+
+    // 040 AC1: generation is keyed (schedule, period) — the unique index plus this check keep
+    // it at ≤1 occurrence per period; a paused schedule produces nothing (040 AC2).
+    // Roll-forward rule (040 edge): monthly clips to the month end, weekly steps 7 days —
+    // Bangladesh local time has no DST, so no clock shifts are applied.
+    public (object? data, string? code, string? message) Generate(CurrentUser u, string scheduleId, string period)
+    {
+        var schedule = orders.FindSchedule(scheduleId);
+        if (schedule is null) return (null, "SCHEDULE_NOT_FOUND", "Recurring schedule not found.");
+        if (schedule.Status == RecurringScheduleStatus.Paused)
+            return (null, "SCHEDULE_PAUSED", "Paused schedules generate nothing while paused.");
+        if (!u.Has("recurring:write")) return (null, "FORBIDDEN", "recurring:write permission required.");
+        var periodKey = NormalizePeriod(period, schedule.Frequency);
+        if (periodKey is null)
+            return (null, "VALIDATION_ERROR", $"Period must be {(schedule.Frequency == RecurringFrequency.Monthly ? "\"YYYY-MM\"" : "\"YYYY-Www\" (ISO week)")} for a {schedule.Frequency} schedule.");
+
+        var existing = orders.FindOccurrence(scheduleId, periodKey);
+        if (existing is not null)
+            return (OccurrenceView(schedule, periodKey, existing, replay: true), null, null);
+
+        var so = new SalesOrder(numbers.Next("SO"), ec.TenantId, ec.EntityId, schedule.CustomerId,
+            // fresh SoLine instances — the template's owned rows stay owned by the schedule
+            SoStatus.Draft, schedule.Lines.Select(l => l with { }).ToList(), u.Id, DateTimeOffset.UtcNow);
+        orders.Add(so);
+        var occurrence = new RecurringOccurrence($"{scheduleId}:{periodKey}", ec.TenantId, ec.EntityId,
+            scheduleId, periodKey, so.Id, u.Id, DateTimeOffset.UtcNow);
+        orders.AddOccurrence(occurrence);
+        audit.Log(u, "generate", "recurring_schedule", scheduleId, $"Occurrence {periodKey} → {so.Id}");
+        audit.Emit(u, "sales.recurring.generated", new { scheduleId, period = periodKey, orderId = so.Id });
+        orders.Save();
+        return (OccurrenceView(schedule, periodKey, occurrence, replay: false), null, null);
+    }
+
+    private static object OccurrenceView(RecurringSchedule schedule, string periodKey, RecurringOccurrence occurrence, bool replay) => new
+    {
+        schedule.Id, period = periodKey, occurrence.OrderId, occurrenceId = occurrence.Id, replay,
+        scheduleStatus = schedule.Status.ToString(),
+    };
+
+    private static string? NormalizePeriod(string period, RecurringFrequency frequency)
+    {
+        if (frequency == RecurringFrequency.Monthly)
+            return DateTime.TryParseExact(period, "yyyy-MM", null, System.Globalization.DateTimeStyles.None, out var m)
+                ? $"{m:yyyy-MM}" : null;
+        return DateTime.TryParseExact(period, "yyyy-'W'ww", null, System.Globalization.DateTimeStyles.None, out var w)
+            ? $"{w.Year:0000}-W{System.Globalization.ISOWeek.GetWeekOfYear(w):00}" : null;
+    }
+
+    private void Set<T>(object entity, string name, T value) => db.Entry(entity).Property(name).CurrentValue = value;
 
     public (SalesOrder? order, string? code, string? message) Create(CurrentUser u, string customerId, IReadOnlyList<SoLine> lines, string? sourceQuoteRevisionId = null)
     {
@@ -120,13 +377,24 @@ public sealed class SalesOrderService(
     }
 
     public (Shipment? shipment, Journal? journal, string? code, string? message) Ship(
-        CurrentUser user, string soId, string itemSku, decimal qty)
+        CurrentUser user, string soId, string itemSku, decimal qty, DateOnly? expectedDate = null)
     {
         var so = orders.Find(soId);
         if (so is null) return (null, null, "SO_NOT_FOUND", "Sales order not found.");
         if (so.Status != SoStatus.Confirmed) return (null, null, "SHIPMENT_ERROR", $"Only confirmed sales orders can be shipped (current: {so.Status}).");
         if (qty <= 0) return (null, null, "VALIDATION_ERROR", "Shipment qty must be greater than 0.");
-        if (so.Lines.FirstOrDefault(l => l.ItemSku == itemSku) is null) return (null, null, "ITEM_NOT_FOUND", $"Item {itemSku} is not on this sales order.");
+        var line = so.Lines.FirstOrDefault(l => l.ItemSku == itemSku);
+        if (line is null) return (null, null, "ITEM_NOT_FOUND", $"Item {itemSku} is not on this sales order.");
+
+        // 035 AC1: any blocking hold prevents progression — shipment is the progression here
+        if (orders.ActiveHoldCount(soId) > 0)
+            return (null, null, "SO_HELD", "This order has an active hold — clear it before shipping.");
+
+        // 036: a line cannot ship past its ordered qty (fulfilled/remaining stay meaningful)
+        var alreadyShipped = orders.ShippedBySku(soId).TryGetValue(itemSku, out var s) ? s : 0;
+        if (alreadyShipped + qty > line.Qty)
+            return (null, null, "SHIPMENT_ERROR",
+                $"Shipment exceeds the ordered qty: {itemSku} ordered {line.Qty:0.##}, already shipped {alreadyShipped:0.##}, requested {qty:0.##}.");
 
         var onHand = inventory.QtyOf(itemSku);
         if (onHand < qty)
@@ -154,6 +422,9 @@ public sealed class SalesOrderService(
         var shippedBySku = orders.ShippedBySku(soId);
         if (so.Lines.All(l => shippedBySku.TryGetValue(l.ItemSku, out var got) && got >= l.Qty))
             orders.MarkShipped(so);
+        // 037: a shortfall leaves a measurable remaining + expected date on the line
+        else if (expectedDate is not null)
+            orders.SetLineExpectedDate(so, itemSku, expectedDate.Value);
 
         audit.Log(user, "ship", "shipment", shipment.Id, $"Shipped {qty} x {itemSku} against {soId}; journal {journal.Id} posted");
         audit.Emit(user, "sales.shipment.posted", new { shipmentId = shipment.Id, soId, itemSku, qty, journalId = journal.Id });

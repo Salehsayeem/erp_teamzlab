@@ -6,7 +6,8 @@ public record CreateCustomerRequest(string Name, string TaxId, string Email,
     decimal? CreditLimit = null, int PaymentTermNetDays = 30, bool RemindersSuppressed = false);
 public record CreateSoRequest(string CustomerId, IReadOnlyList<SoLine> Lines, string? SourceQuoteRevisionId = null);
 public record ApproveSoRequest(string? Reason);
-public record ShipRequest(string ItemSku, decimal Qty);
+// ExpectedDate (037): stamped on the line when a shipment leaves a measurable remainder
+public record ShipRequest(string ItemSku, decimal Qty, DateOnly? ExpectedDate = null);
 public record ReleaseCreditRequest();
 
 // --- task-7 SALES deep ---
@@ -54,3 +55,14 @@ public record SetHierarchyRequest(string? ParentId);
 public record AddOnboardingCheckRequest(string CheckCode, bool Mandatory = true);
 public record MergePreviewRequest(string SurvivorId, string MergedId, string Reason);
 public record MergeExecuteRequest(string? Reason = null);
+
+// --- deferred-screens wave: S4 order lifecycle ---
+
+public record PlaceHoldRequest(string HoldType, string Reason, string? Source = null);
+public record ReleaseHoldRequest(string? Reason = null);
+public record CreateAmendmentRequest(IReadOnlyList<SoLine>? Lines, string Rationale);
+public record ApproveAmendmentRequest(string? Reason = null);
+public record CancelOrderRequest(string Reason, string Scope);
+public record CreateScheduleRequest(string CustomerId, string Frequency, DateOnly NextRunDate, IReadOnlyList<SoLine>? Lines);
+public record GenerateRequest(string Period);
+public record PauseRequest();
