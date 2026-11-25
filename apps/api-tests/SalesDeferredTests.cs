@@ -804,3 +804,349 @@ public partial class SalesDeferredTests
         Assert.Equal("SCHEDULE_PAUSED", (await Json(paused)).GetProperty("error").GetProperty("code").GetString());
     }
 }
+
+// ==== S5 forecast categories + snapshots (018/020) ====
+
+public partial class SalesDeferredTests
+{
+    private async Task<string> SeedOpenOpportunity(decimal lineTotal)
+    {
+        var customerId = await SeedCustomer();
+        var res = await PostAsync("/api/v1/opportunities", new
+        {
+            customerId, title = $"Opp {Tag("OPP")}", currency = "BDT", ownerId = Sales, expectedCloseDate = (DateOnly?)null,
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var oppId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        var line = await PostAsync($"/api/v1/opportunities/{oppId}/lines", new
+        {
+            itemSku = Tag("SKU"), description = "License", qty = 1m, targetPrice = lineTotal,
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, line.StatusCode);
+        return oppId;
+    }
+
+    // 18a (018 AC1): report shows unweighted / weighted / submitted-override separately
+    [Fact]
+    public async Task Forecast_Report_Separates_Buckets()
+    {
+        await SeedOpenOpportunity(100m);
+        var sub = await PostAsync("/api/v1/forecast-submissions", new
+        {
+            owner = Sales, period = "2099-01", category = "Commit", overrideValue = 90m,
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, sub.StatusCode);
+
+        var report = await GetAsync("/api/v1/forecast?period=2099-01", Sales);
+        var data = report.GetProperty("data");
+        Assert.Equal(100m, data.GetProperty("unweighted").GetProperty("total").GetDecimal());
+        Assert.True(data.GetProperty("weighted").GetProperty("total").GetDecimal() > 0);
+        Assert.Equal(90m, data.GetProperty("override").GetProperty("total").GetDecimal());
+        Assert.True(data.GetProperty("weighted").GetProperty("total").GetDecimal()
+            != data.GetProperty("unweighted").GetProperty("total").GetDecimal()); // separate buckets
+    }
+
+    // 18b (018 AC2): submission records owner/period/time/version — resubmission bumps version
+    [Fact]
+    public async Task Forecast_Submission_Records_Versioned_Provenance()
+    {
+        var first = await PostAsync("/api/v1/forecast-submissions", new
+        {
+            owner = Sales, period = "2099-02", category = "BestCase", overrideValue = 10m,
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var v1 = (await Json(first)).GetProperty("data");
+        Assert.Equal(1, v1.GetProperty("version").GetInt32());
+        Assert.Equal(Sales, v1.GetProperty("owner").GetString());
+        Assert.NotNull(v1.GetProperty("submittedAt").GetString());
+
+        var second = await PostAsync("/api/v1/forecast-submissions", new
+        {
+            owner = Sales, period = "2099-02", category = "BestCase", overrideValue = 20m,
+        }, Sales);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        var v2 = (await Json(second)).GetProperty("data");
+        Assert.Equal(2, v2.GetProperty("version").GetInt32());
+        Assert.Equal(20m, v2.GetProperty("overrideValue").GetDecimal());
+    }
+
+    // 19 (020 AC1-2): snapshot freezes included ids/values; later opportunity edits never
+    // change it; snapshots are append-only rows (fixture DB may hold other open opps —
+    // assert reconciliation with the live report, then freeze)
+    [Fact]
+    public async Task Snapshot_Immunne_To_Later_Opportunity_Edits()
+    {
+        var oppId = await SeedOpenOpportunity(100m);
+        var report = await GetAsync("/api/v1/forecast?period=2099-03", Sales);
+        var liveTotal = report.GetProperty("data").GetProperty("unweighted").GetProperty("total").GetDecimal();
+
+        var snap = await PostAsync("/api/v1/forecast-snapshots", new { period = "2099-03" }, Sales);
+        Assert.Equal(HttpStatusCode.Created, snap.StatusCode);
+        var snapshot = (await Json(snap)).GetProperty("data");
+        Assert.Equal("Complete", snapshot.GetProperty("status").GetString());
+        Assert.Contains(oppId, snapshot.GetProperty("payload").GetProperty("includedIds").EnumerateArray()
+            .Select(i => i.GetString()));
+        Assert.Equal(liveTotal, snapshot.GetProperty("payload").GetProperty("unweightedTotal").GetDecimal());
+
+        // edit the opportunity afterwards (lost) — the snapshot must not move
+        var lost = await PostAsync($"/api/v1/opportunities/{oppId}/transitions", new
+        {
+            status = "Lost", stage = "Closed", lossReason = "budget cut", orderId = (string?)null, competitor = (string?)null,
+        }, Sales);
+        Assert.Equal(HttpStatusCode.OK, lost.StatusCode);
+
+        var list = await GetAsync("/api/v1/forecast-snapshots?period=2099-03", Sales);
+        var rows = list.GetProperty("data").EnumerateArray().ToList();
+        var frozen = rows.Single(r => r.GetProperty("id").GetString() == snapshot.GetProperty("id").GetString());
+        Assert.Equal(liveTotal, frozen.GetProperty("payload").GetProperty("unweightedTotal").GetDecimal());
+        Assert.Contains(oppId, frozen.GetProperty("payload").GetProperty("includedIds").EnumerateArray()
+            .Select(i => i.GetString()));
+    }
+}
+
+// ==== S6 e-invoice adapter + delivery tracking (050/051) ====
+
+public partial class SalesDeferredTests
+{
+    // 20 (050 AC1-2): the adapter identifies jurisdiction/schema/version/correlation/status;
+    // the seeded entity has no jurisdiction profile → NotEnabled blocks transmission
+    [Fact]
+    public async Task Einvoice_Submission_NotEnabled_For_Seeded_Entity()
+    {
+        var (invoiceId, _) = await SeedPostedInvoice(1m, 100m);
+        var res = await PostAsync($"/api/v1/invoices/{invoiceId}/einvoice-submissions", new { }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        var body = await Json(res);
+        Assert.Equal("EINVOICE_NOT_ENABLED", body.GetProperty("error").GetProperty("code").GetString());
+        var detail = body.GetProperty("error").GetProperty("detail");
+        Assert.Equal("NotEnabled", detail.GetProperty("status").GetString());
+        Assert.NotEmpty(detail.GetProperty("correlationId").GetString()!);
+        Assert.NotEmpty(detail.GetProperty("errors").EnumerateArray());
+    }
+
+    // 21 (051 AC1-2): attempts ride the same posted revision; resend = new attempt; a bounce
+    // is visible and never mutates the invoice's payment state
+    [Fact]
+    public async Task Delivery_Attempts_On_Posted_Revision_And_Bounce_Never_Marks_Paid()
+    {
+        var (invoiceId, total) = await SeedPostedInvoice(2m, 50m);
+        var first = await PostAsync($"/api/v1/invoices/{invoiceId}/delivery-attempts",
+            new { channel = "Email", recipient = "ar@buyer.test" }, Sales);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var attempt1 = (await Json(first)).GetProperty("data");
+        Assert.Equal(1, attempt1.GetProperty("attempt").GetInt32());
+        var deliveryId = attempt1.GetProperty("id").GetString()!;
+
+        // resend = a NEW attempt on the same posted revision
+        var resend = await PostAsync($"/api/v1/invoices/{invoiceId}/delivery-attempts",
+            new { channel = "Email", recipient = "ar@buyer.test" }, Sales);
+        Assert.Equal(HttpStatusCode.Created, resend.StatusCode);
+        Assert.Equal(2, (await Json(resend)).GetProperty("data").GetProperty("attempt").GetInt32());
+
+        // bounce: visible on the attempt, invoice untouched
+        var bounce = await PostAsync($"/api/v1/invoices/{invoiceId}/delivery-attempts/{deliveryId}/bounce",
+            new { reason = "mailbox full" }, Sales);
+        Assert.Equal(HttpStatusCode.OK, bounce.StatusCode);
+        Assert.Equal("Bounced", (await Json(bounce)).GetProperty("data").GetProperty("status").GetString());
+
+        var invoice = await GetInvoice(invoiceId);
+        Assert.Equal("Posted", invoice.GetProperty("status").GetString());
+        Assert.Equal(total, invoice.GetProperty("total").GetDecimal());
+        Assert.False(invoice.TryGetProperty("paid", out _)); // delivery state never conflates payment
+
+        var deliveries = await GetAsync($"/api/v1/invoices/{invoiceId}/deliveries", Sales);
+        Assert.Equal(2, deliveries.GetProperty("data").GetArrayLength());
+
+        // a draft cannot be delivered — delivery state rides posted revisions only
+        var soId = (await GetInvoice(invoiceId)).GetProperty("salesOrderId").GetString()!;
+        var sku = Tag("SKU");
+        await SeedStock(sku, 5m, 1m);
+        var (_, so2) = await SeedConfirmedSo(sku, 5m, 5m);
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/sales-orders/{so2}/shipments", new { itemSku = sku, qty = 5m }, Sales)).StatusCode);
+        var draft = await DraftInvoice(so2);
+        var draftId = draft.GetProperty("id").GetString()!;
+        var early = await PostAsync($"/api/v1/invoices/{draftId}/delivery-attempts",
+            new { channel = "Email", recipient = "ar@buyer.test" }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, early.StatusCode);
+        Assert.Equal("DELIVERY_STATE_ERROR", (await Json(early)).GetProperty("error").GetProperty("code").GetString());
+    }
+}
+
+// ==== S7 returns/RMA + refunds (061/062) ====
+
+public partial class SalesDeferredTests
+{
+    // 22 (061 AC1-2): authorized return capped at sold − prior returns; received tracked
+    // separately from authorized
+    [Fact]
+    public async Task Return_Capped_At_Sold_Minus_Prior_Returns()
+    {
+        var (_, soId) = await SeedBigConfirmedSo(qty: 5m, price: 20m);
+        var sku = await OrderSku(soId);
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = sku, qty = 5m }, Sales)).StatusCode);
+
+        var first = await PostAsync("/api/v1/sales-returns", new
+        {
+            orderId = soId,
+            lines = new[] { new { itemSku = sku, qty = 2m, reason = "wrong size", condition = "Resellable" } },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var returnId = (await Json(first)).GetProperty("data").GetProperty("id").GetString()!;
+
+        // 2 already authorized; 4 more exceeds the 5 sold → 409 without an approved override
+        var over = await PostAsync("/api/v1/sales-returns", new
+        {
+            orderId = soId,
+            lines = new[] { new { itemSku = sku, qty = 4m, reason = "second wave", condition = "Resellable" } },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, over.StatusCode);
+        Assert.Equal("RETURN_QTY_EXCEEDED", (await Json(over)).GetProperty("error").GetProperty("code").GetString());
+
+        // override rides so:approve held by an officer who is not the maker of the return… the
+        // maker here IS Sales, so the override must come from the second sales user
+        var makerOverride = await PostAsync("/api/v1/sales-returns", new
+        {
+            orderId = soId,
+            lines = new[] { new { itemSku = sku, qty = 4m, reason = "second wave", condition = "Resellable" } },
+            overrideJustification = "manager-approved goodwill return",
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, makerOverride.StatusCode);
+
+        var overrideOk = await PostAsync("/api/v1/sales-returns", new
+        {
+            orderId = soId,
+            lines = new[] { new { itemSku = sku, qty = 4m, reason = "second wave", condition = "Resellable" } },
+            overrideJustification = "manager-approved goodwill return",
+        }, SalesManager);
+        Assert.Equal(HttpStatusCode.Created, overrideOk.StatusCode);
+
+        // received tracked separately from authorized (061 AC2) + stock comes back
+        var receipt = await PostAsync($"/api/v1/sales-returns/{returnId}/receipts", new { receivedQty = 2m }, Sales);
+        Assert.Equal(HttpStatusCode.Created, receipt.StatusCode);
+        var data = (await Json(receipt)).GetProperty("data");
+        Assert.Equal(2m, data.GetProperty("receivedQty").GetDecimal());
+        Assert.Equal(2m, data.GetProperty("authorizedQty").GetDecimal());
+        Assert.Equal("PartiallyReceived", data.GetProperty("status").GetString());
+    }
+
+    // 23 (062 AC1): posting a credit alone never completes a refund; the refund request links
+    // an approved credit and is idempotent on retry; approval is R-FIN and not the requester
+    [Fact]
+    public async Task Refund_Needs_Finance_Approval_And_Is_Idempotent()
+    {
+        var (invoiceId, total) = await SeedPostedInvoice(4m, 25m); // 100
+        var customerId = (await GetInvoice(invoiceId)).GetProperty("customerId").GetString()!;
+
+        // approved credit adjustment (house reversal pattern — existing flow)
+        var adj = await PostAsync("/api/v1/adjustments", new
+        {
+            kind = "Credit", invoiceId, reason = "wrong item discount",
+            lines = new[] { new { itemSku = Tag("SKU"), qty = 1m, unitPrice = 25m } },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, adj.StatusCode);
+        var adjId = (await Json(adj)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/adjustments/{adjId}/approvals", new { }, Fin)).StatusCode);
+
+        // credit posted — but a refund request still starts at Requested, never Completed
+        var refund = await PostAsync($"/api/v1/adjustments/{adjId}/refund-requests", new { }, Sales);
+        Assert.Equal(HttpStatusCode.Created, refund.StatusCode);
+        var request = (await Json(refund)).GetProperty("data");
+        Assert.Equal("Requested", request.GetProperty("status").GetString());
+        Assert.Equal(25m, request.GetProperty("amount").GetDecimal());
+        var refundId = request.GetProperty("id").GetString()!;
+
+        // duplicate request on the same credit → idempotent same record
+        var retry = await PostAsync($"/api/v1/adjustments/{adjId}/refund-requests", new { }, Sales);
+        Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+        Assert.Equal(refundId, (await Json(retry)).GetProperty("data").GetProperty("id").GetString());
+
+        // SoD: the maker cannot approve; refunds:approve is R-FIN only
+        var sod = await PostAsync($"/api/v1/refund-requests/{refundId}/approvals", new { }, Sales);
+        Assert.Equal(HttpStatusCode.Forbidden, sod.StatusCode);
+        var selfFin = await PostAsync($"/api/v1/refund-requests/{refundId}/approvals", new { }, Sales);
+        Assert.Equal(HttpStatusCode.Forbidden, selfFin.StatusCode);
+
+        var approved = await PostAsync($"/api/v1/refund-requests/{refundId}/approvals", new { }, Fin);
+        Assert.Equal(HttpStatusCode.OK, approved.StatusCode);
+        Assert.Equal("Approved", (await Json(approved)).GetProperty("data").GetProperty("status").GetString());
+        Assert.Equal(Fin, (await Json(approved)).GetProperty("data").GetProperty("approvedBy").GetString());
+    }
+}
+
+// ==== S8 receipt candidates + AR reconciliation (054/055/056) ====
+
+public partial class SalesDeferredTests
+{
+    // 24 (054 AC1-2): candidate preserves bank ref + raw amount/currency; unmatched stays
+    // Unapplied and never closes an invoice; payer link added later keeps the reference
+    [Fact]
+    public async Task Unmatched_Receipt_Candidate_Never_Closes_An_Invoice()
+    {
+        var (invoiceId, total) = await SeedPostedInvoice(1m, 80m);
+        var customerId = (await GetInvoice(invoiceId)).GetProperty("customerId").GetString()!;
+
+        var res = await PostAsync("/api/v1/receipt-candidates", new
+        {
+            bankRef = $"BANK-{Tag("REF")}", amount = 80m, currency = "BDT",
+            valueDate = Today, channel = "BankTransfer",
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var candidate = (await Json(res)).GetProperty("data");
+        Assert.Equal("Unapplied", candidate.GetProperty("status").GetString());
+        Assert.StartsWith("BANK-", candidate.GetProperty("bankRef").GetString());
+        Assert.Equal(80m, candidate.GetProperty("amount").GetDecimal());
+        var candidateId = candidate.GetProperty("id").GetString()!;
+
+        // the unmatched candidate did NOT close anything — invoice open amount unchanged
+        var recon = await GetAsync("/api/v1/ar-reconciliation", Sales);
+        var row = recon.GetProperty("data").EnumerateArray()
+            .First(r => r.GetProperty("docId").GetString() == invoiceId);
+        Assert.Equal(total, row.GetProperty("openAmount").GetDecimal());
+        Assert.Equal("Resolved", row.GetProperty("status").GetString());
+
+        // payer link added later without losing the bank reference
+        var link = await PostAsync($"/api/v1/receipt-candidates/{candidateId}/payer-links",
+            new { customerId }, Sales);
+        Assert.Equal(HttpStatusCode.OK, link.StatusCode);
+        var linked = (await Json(link)).GetProperty("data");
+        Assert.Equal(customerId, linked.GetProperty("customerId").GetString());
+        Assert.StartsWith("BANK-", linked.GetProperty("bankRef").GetString());
+    }
+
+    // 25 (056 AC1-2): recon view shows doc/finance ref/currency/open/as-of and never marks
+    // an invoice settled unless finance state (approved credits) brought the open to zero
+    [Fact]
+    public async Task Ar_Reconciliation_Marks_State_Explicitly()
+    {
+        var (invoiceId, total) = await SeedPostedInvoice(2m, 50m);
+        var adj = await PostAsync("/api/v1/adjustments", new
+        {
+            kind = "Credit", invoiceId, reason = "partial credit",
+            lines = new[] { new { itemSku = Tag("SKU"), qty = 1m, unitPrice = 20m } },
+        }, Sales);
+        var adjId = (await Json(adj)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/adjustments/{adjId}/approvals", new { }, Fin)).StatusCode);
+
+        var recon = await GetAsync("/api/v1/ar-reconciliation", Sales);
+        var row = recon.GetProperty("data").EnumerateArray()
+            .First(r => r.GetProperty("docId").GetString() == invoiceId);
+        Assert.Equal(30m, row.GetProperty("openAmount").GetDecimal()); // 100 − 20 credit
+        Assert.Equal("BDT", row.GetProperty("currency").GetString());
+        Assert.StartsWith("J-", row.GetProperty("financeRef").GetString()!);
+        Assert.Equal("Resolved", row.GetProperty("status").GetString()); // open > 0, journal present
+
+        // a fully credited invoice reads Settled (finance said so), never by candidates
+        var adj2 = await PostAsync("/api/v1/adjustments", new
+        {
+            kind = "Credit", invoiceId, reason = "full credit",
+            lines = new[] { new { itemSku = Tag("SKU"), qty = 1m, unitPrice = 30m } },
+        }, Sales);
+        var adj2Id = (await Json(adj2)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/adjustments/{adj2Id}/approvals", new { }, Fin)).StatusCode);
+        var after = await GetAsync("/api/v1/ar-reconciliation", Sales);
+        var settled = after.GetProperty("data").EnumerateArray()
+            .First(r => r.GetProperty("docId").GetString() == invoiceId);
+        Assert.Equal(0m, settled.GetProperty("openAmount").GetDecimal());
+        Assert.Equal("Settled", settled.GetProperty("status").GetString());
+    }
+}

@@ -66,3 +66,11 @@ public record CancelOrderRequest(string Reason, string Scope);
 public record CreateScheduleRequest(string CustomerId, string Frequency, DateOnly NextRunDate, IReadOnlyList<SoLine>? Lines);
 public record GenerateRequest(string Period);
 public record PauseRequest();
+
+// --- deferred-screens wave: S5 forecast + S6 e-invoice/delivery ---
+
+public record SubmitForecastRequest(string Owner, string Period, string Category, decimal? OverrideValue = null);
+public record CreateSnapshotRequest(string Period);
+public record SubmitEinvoiceRequest();
+public record DeliveryAttemptRequest(string Channel, string Recipient);
+public record DeliveryBounceRequest(string Reason);
