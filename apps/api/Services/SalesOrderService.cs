@@ -16,6 +16,11 @@ public sealed class SalesOrderService(
             s.Id, s.CustomerId, s.Status, s.Lines, s.CreatedBy, s.CreatedAt, s.ApprovedBy, s.ApprovedAt, s.RejectionReason,
             s.SourceQuoteRevisionId,
             total = s.Lines.Sum(l => decimal.Round(l.Qty * l.UnitPrice, 2, MidpointRounding.AwayFromZero)),
+            // S4 list badges: blocking holds + unapproved amendments are the two things a
+            // dispatcher scans the list for
+            activeHolds = orders.ActiveHoldCount(s.Id),
+            pendingAmendment = s.Status == SoStatus.PendingAmendmentApproval
+                || orders.AmendmentsFor(s.Id).Any(a => a.Status == AmendmentStatus.Pending),
         }).ToList();
 
     // S4: order detail — lines carry fulfilled/remaining/backorder + expected date (036/037),
