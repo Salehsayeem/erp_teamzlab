@@ -22,6 +22,11 @@ export default function ReceiptsPage() {
   const [tab, setTab] = useState("receipts");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [asnPo, setAsnPo] = useState("");
+  const [asnRef, setAsnRef] = useState("");
+  const [asnSku, setAsnSku] = useState("");
+  const [asnQty, setAsnQty] = useState("");
+  const [asnVer, setAsnVer] = useState("1");
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -31,6 +36,23 @@ export default function ReceiptsPage() {
     else { setRows(null); setPhase("error"); }
   }, [token]);
   useEffect(() => { void load(); }, [load]);
+
+  async function onIntake(e: React.FormEvent) {
+    e.preventDefault();
+    if (!token) return;
+    const qty = Number(asnQty);
+    const version = Number(asnVer);
+    if (!asnPo || !asnSku || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(version)) return;
+    setBusy(true); setErr(null);
+    const res = await intakeAsn(token, {
+      poId: asnPo, shipmentRef: asnRef, orderVersion: version,
+      lines: [{ itemSku: asnSku, qty }],
+    });
+    setBusy(false);
+    if (!res.ok) { setErr(`${t.procurement.common.actionFailed}: ${res.message}`); return; }
+    setAsnPo(""); setAsnRef(""); setAsnSku(""); setAsnQty("");
+    await load();
+  }
 
   const list = rows ?? [];
   const asnList = asns ?? [];
@@ -110,6 +132,18 @@ export default function ReceiptsPage() {
           </div>
         )}
         <p className="t-caption">{t.procurement.receipts.intakeNote}</p>
+        <form onSubmit={(e) => void onIntake(e)} className="stack">
+          <div className="form-grid">
+            <Input id="asn-po" label={t.procurement.receipts.po} value={asnPo} onChange={(e) => setAsnPo(e.target.value)} required />
+            <Input id="asn-ref" label={t.procurement.receipts.shipmentRef} value={asnRef} onChange={(e) => setAsnRef(e.target.value)} />
+            <Input id="asn-sku" label={t.procurement.receipts.itemSku} value={asnSku} onChange={(e) => setAsnSku(e.target.value)} required />
+            <Input id="asn-qty" label={t.procurement.receipts.qty} type="number" min="0" step="any" value={asnQty} onChange={(e) => setAsnQty(e.target.value)} required />
+            <Input id="asn-ver" label={t.procurement.receipts.asnVersion} type="number" min="1" value={asnVer} onChange={(e) => setAsnVer(e.target.value)} required />
+          </div>
+          <div className="row-actions" style={{ justifyContent: "flex-start" }}>
+            <Button type="submit" small loading={busy} disabled={busy}>{t.procurement.receipts.intake}</Button>
+          </div>
+        </form>
       </section>
     </div>
   );
