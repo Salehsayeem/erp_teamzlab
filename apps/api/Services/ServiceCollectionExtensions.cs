@@ -39,6 +39,17 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IWorkerService, WorkerService>();
         services.AddScoped<ITimeService, TimeService>();
         services.AddScoped<IPayrollService, PayrollService>();
+        // deferred screens (PM1–PM10)
+        services.AddScoped<IPeopleOrgService, PeopleOrgService>();
+        services.AddScoped<IOnboardingService, OnboardingService>();
+        services.AddScoped<IJobCatalogService, JobCatalogService>();
+        services.AddScoped<IWorkScheduleService, WorkScheduleService>();
+        services.AddScoped<ILeaveService, LeaveService>();
+        services.AddScoped<IPayrollInputsService, PayrollInputsService>();
+        services.AddScoped<IPaymentFileService, PaymentFileService>();
+        services.AddScoped<IPayrollCloseService, PayrollCloseService>();
+        services.AddScoped<ICredentialService, CredentialService>();
+        services.AddScoped<IWorkforceService, WorkforceService>();
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<ISupplierService, SupplierService>();
         services.AddScoped<ISourcingService, SourcingService>();
