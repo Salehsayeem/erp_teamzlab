@@ -1,24 +1,29 @@
 namespace Erp.Api;
 
 // T7 appended CreditHold LAST (057 AC2): EF stores enums as ints — inserting mid-enum would
-// renumber every existing sales_orders.status row in postgres.
-public enum SoStatus { Draft, PendingApproval, Confirmed, Shipped, Invoiced, Rejected, CreditHold }
+// renumber every existing sales_orders.status row in postgres. Deferred-screens wave appends
+// PendingAmendmentApproval (034) + Cancelled (039) at the END for the same reason.
+public enum SoStatus { Draft, PendingApproval, Confirmed, Shipped, Invoiced, Rejected, CreditHold, PendingAmendmentApproval, Cancelled }
 
 // Customer trailing optionals (T7): credit limit + payment terms live on the customer row
-// (057 AC1 sources, 053 AC1). Existing 8-arg call sites compile unchanged.
+// (057 AC1 sources, 053 AC1). Existing 8-arg call sites compile unchanged. Deferred-screens
+// wave (S3): hierarchy parent + merge redirect — 012/014.
 public record Customer(string Id, string TenantId, string LegalEntityId, string Name, string TaxId, string Email, DateTimeOffset CreatedAt, string CreatedBy,
-    decimal? CreditLimit = null, int PaymentTermNetDays = 30, bool RemindersSuppressed = false);
+    decimal? CreditLimit = null, int PaymentTermNetDays = 30, bool RemindersSuppressed = false, string? ParentCustomerId = null, string? MergedIntoId = null);
 
-public record SoLine(string Id, string ItemSku, string Description, decimal Qty, decimal UnitPrice);
+// ExpectedDate (037): backorder expected date stamped by a short shipment against the line
+public record SoLine(string Id, string ItemSku, string Description, decimal Qty, decimal UnitPrice, DateOnly? ExpectedDate = null);
 
-// Lines as a settable body property for EF (see PurchaseOrder) — same JSON shape, same call sites
-public record SalesOrder(string Id, string TenantId, string LegalEntityId, string CustomerId, SoStatus Status, string CreatedBy, DateTimeOffset CreatedAt, string? ApprovedBy = null, DateTimeOffset? ApprovedAt = null, string? RejectionReason = null)
+// Lines as a settable body property for EF (see PurchaseOrder) — same JSON shape, same call sites.
+// SourceQuoteRevisionId (030 AC1): the accepted quote revision stamped on the generated order.
+public record SalesOrder(string Id, string TenantId, string LegalEntityId, string CustomerId, SoStatus Status, string CreatedBy, DateTimeOffset CreatedAt, string? ApprovedBy = null, DateTimeOffset? ApprovedAt = null, string? RejectionReason = null, string? SourceQuoteRevisionId = null)
 {
     public List<SoLine> Lines { get; set; } = [];
     public SalesOrder(string id, string tenantId, string legalEntityId, string customerId, SoStatus status,
         IReadOnlyList<SoLine> lines, string createdBy, DateTimeOffset createdAt,
-        string? approvedBy = null, DateTimeOffset? approvedAt = null, string? rejectionReason = null)
-        : this(id, tenantId, legalEntityId, customerId, status, createdBy, createdAt, approvedBy, approvedAt, rejectionReason)
+        string? approvedBy = null, DateTimeOffset? approvedAt = null, string? rejectionReason = null,
+        string? sourceQuoteRevisionId = null)
+        : this(id, tenantId, legalEntityId, customerId, status, createdBy, createdAt, approvedBy, approvedAt, rejectionReason, sourceQuoteRevisionId)
     { Lines = [.. lines]; }
 }
 
