@@ -60,6 +60,12 @@ International Multilingual ERP — configurable, multi-entity ERP. Spec baseline
 - Flow (owner instruction, 2026-11-24): feature branch → feature tests green on that branch → merge into `dev-sayeem` → **full site regression** (backend test suite + web build + endpoint smoke) → all green → merge into `main`.
 - Never merge into `main` without a passing dev-sayeem regression.
 
+## Claude workspace tooling
+- `.claude/settings.json` (committed): registers `claude-plugins-official` and enables the ERP plugin set (csharp-lsp, typescript-lsp, frontend-design, playwright, context7, security-guidance, code-review, claude-security, chrome-devtools-mcp); denies reading `.env` secrets, `rm -rf`, force-push, and `dotnet ef database drop`.
+- Post-edit hook `.claude/hooks/verify-after-edit.sh`: builds `apps/api` after C# edits, runs `tsc --noEmit` in `apps/web` after TS edits.
+- One-time/headless setup: `./scripts/bootstrap-claude-erp.sh` — settings.json auto-install only fires on the interactive workspace-trust dialog, not in `claude -p`/CI.
+- Path-scoped invariants live in `.claude/rules/` (finance, postgres-rls, nextjs-ui). QA gates & pipeline: `docs/07_QA_Verification_Blueprint.md`.
+
 ## Style plugins (use when producing prose or UI)
 - `/ponytail` — least code that works (active session-wide)
 - `/unslop`, `/humanizer` — natural human prose for docs/UI copy
