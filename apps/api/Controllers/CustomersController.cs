@@ -6,7 +6,7 @@ namespace Erp.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/customers")]
-public sealed class CustomersController(ICustomerService customers, ICollectionService collections) : ControllerBase
+public sealed class CustomersController(ICustomerService customers, ICollectionService collections, ICustomer360Service customer360) : ControllerBase
 {
     [HttpGet]
     public IResult List() => Envelope.Ok<object>(customers.List());
@@ -34,4 +34,75 @@ public sealed class CustomersController(ICustomerService customers, ICollectionS
         var (data, code, message) = collections.CreditExposure(id);
         return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
     }
+
+    // --- deferred-screens wave (S3): composite detail / hierarchy / onboarding / merge ---
+
+    [HttpGet("{id}")]
+    public IResult Detail(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("customers:write")) return Envelope.Fail("FORBIDDEN", "customers:write permission required.", 403);
+        var (data, code, message) = customer360.Detail(u, id);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
+    [HttpPost("{id}/hierarchy")]
+    public IResult SetHierarchy(string id, SetHierarchyRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("customers:write")) return (Envelope.FailBody("FORBIDDEN", "customers:write permission required."), 403);
+        var (data, code, message) = customer360.SetHierarchy(u, id, request.ParentId);
+        return code is null ? (Envelope.OkBody(data!), 200) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
+    });
+
+    [HttpGet("{id}/onboarding-checks")]
+    public IResult OnboardingChecks(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("customers:write")) return Envelope.Fail("FORBIDDEN", "customers:write permission required.", 403);
+        var (data, code, message) = customer360.ChecksList(id);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
+    [HttpPost("{id}/onboarding-checks")]
+    public IResult AddOnboardingCheck(string id, AddOnboardingCheckRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var err = Guards.Check(request.CheckCode, "CheckCode", 100);
+        if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("customers:write")) return (Envelope.FailBody("FORBIDDEN", "customers:write permission required."), 403);
+        var (data, code, message) = customer360.AddOnboardingCheck(u, id, request.CheckCode, request.Mandatory);
+        return code is null ? (Envelope.OkBody(data!), 201) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
+    });
+
+    [HttpPost("{id}/onboarding-checks/{checkCode}/met")]
+    public IResult MarkCheckMet(string id, string checkCode) => Idem.Wrap(HttpContext, () =>
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("customers:write")) return (Envelope.FailBody("FORBIDDEN", "customers:write permission required."), 403);
+        var (data, code, message) = customer360.MarkCheckMet(u, id, checkCode);
+        return code is null ? (Envelope.OkBody(data!), 200) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
+    });
+
+    // merge routes hang off their own prefix (leading slash overrides the class route);
+    // preview needs customers:write, execution the elevated customers:merge (Q-S3: R-ADMIN)
+    [HttpPost("/api/v1/customer-merges/preview")]
+    public IResult MergePreview(MergePreviewRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var err = Guards.Check(request.SurvivorId, "SurvivorId") ?? Guards.Check(request.MergedId, "MergedId")
+            ?? Guards.Check(request.Reason, "Reason");
+        if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("customers:write")) return (Envelope.FailBody("FORBIDDEN", "customers:write permission required."), 403);
+        var (data, code, message) = customer360.MergePreview(u, request.SurvivorId, request.MergedId, request.Reason);
+        return code is null ? (Envelope.OkBody(data!), 201) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
+    });
+
+    [HttpPost("/api/v1/customer-merges/{previewId}/executions")]
+    public IResult MergeExecute(string previewId, MergeExecuteRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var u = CurrentUser.From(HttpContext);
+        var (data, code, message) = customer360.MergeExecute(u, previewId);
+        return code is null ? (Envelope.OkBody(data!), 200) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
+    });
 }

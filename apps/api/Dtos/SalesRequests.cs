@@ -47,3 +47,10 @@ public record RevalidateQuoteRequest(DateOnly ExpiresAt, string Reason);
 public record CreatePriceBookRequest(string Name, string Currency, int Precedence);
 public record CreateBookEntryRequest(string ItemSku, decimal MinQty, decimal UnitPrice, DateOnly EffectiveFrom, DateOnly? EffectiveTo = null, string? Rule = null);
 public record CreateContractPriceRequest(string CustomerId, string ItemSku, decimal MinQty, decimal UnitPrice, DateOnly EffectiveFrom, DateOnly? EffectiveTo = null);
+
+// --- deferred-screens wave: S3 customer 360 ---
+
+public record SetHierarchyRequest(string? ParentId);
+public record AddOnboardingCheckRequest(string CheckCode, bool Mandatory = true);
+public record MergePreviewRequest(string SurvivorId, string MergedId, string Reason);
+public record MergeExecuteRequest(string? Reason = null);

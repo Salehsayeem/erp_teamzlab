@@ -26,8 +26,11 @@ public sealed class SalesOrdersController(ISalesOrderService orders) : Controlle
     [HttpPost("{id}/submit")]
     public IResult Submit(string id)
     {
-        var (updated, code, message) = orders.Submit(CurrentUser.From(HttpContext), id);
-        return updated is null ? Envelope.Fail(code!, message!, ErrorStatus.StatusFor(code!)) : Envelope.Ok<object>(updated);
+        var (data, code, message) = orders.Submit(CurrentUser.From(HttpContext), id);
+        // 013 AC2: the onboarding gate returns the unmet control ids as items
+        if (code == "ONBOARDING_CONTROLS_UNMET")
+            return Envelope.From(Envelope.FailBodyItems(code, message!, (object[])data!), ErrorStatus.StatusFor(code));
+        return data is null ? Envelope.Fail(code!, message!, ErrorStatus.StatusFor(code!)) : Envelope.Ok<object>(data);
     }
 
     [HttpPost("{id}/approvals")]

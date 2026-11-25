@@ -7,7 +7,8 @@ namespace Erp.Api.Services;
 public sealed class SalesOrderService(
     ICustomerRepository customers, ISalesOrderRepository orders, IPurchaseOrderRepository costing,
     IInventoryRepository inventory, IJournalRepository journals, IInvoiceRepository invoiceDocs,
-    INumberSeries numbers, IAuditRepository audit, IQuoteRepository quoteRevisions, EntityContext ec, ErpDbContext db) : ISalesOrderService
+    INumberSeries numbers, IAuditRepository audit, IQuoteRepository quoteRevisions,
+    ICustomer360Repository customer360, EntityContext ec, ErpDbContext db) : ISalesOrderService
 {
     public object List() =>
         orders.All().Select(s => new
@@ -38,11 +39,17 @@ public sealed class SalesOrderService(
         return (so, null, null);
     }
 
-    public (SalesOrder? order, string? code, string? message) Submit(CurrentUser u, string id)
+    public (object? data, string? code, string? message) Submit(CurrentUser u, string id)
     {
         var so = orders.Find(id);
         if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
         if (so.Status != SoStatus.Draft) return (null, "SO_NOT_SUBMITTABLE", "Only draft sales orders can be submitted.");
+        // 013 AC2: an account with unmet mandatory onboarding controls cannot submit — the
+        // unmet control ids ride back inside the envelope's error items
+        var unmet = customer360.UnmetControlIds(so.CustomerId);
+        if (unmet.Count > 0)
+            return (unmet.Select(c => (object)new { code = c, detail = "mandatory onboarding control not met" }).ToArray(),
+                "ONBOARDING_CONTROLS_UNMET", "This account has unmet mandatory onboarding controls — clear them before submitting.");
         orders.MarkSubmitted(so);
         audit.Log(u, "submit", "sales_order", id, "SO submitted for approval");
         orders.Save();

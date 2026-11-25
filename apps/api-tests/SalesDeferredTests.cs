@@ -9,7 +9,7 @@ using Xunit;
 // — scenario numbering mirrors brief §7 (1..28) + authz negative sweep (28/Gate 2).
 // Test data uses unique SKUs per test — the class fixture shares one throwaway database.
 
-public class SalesDeferredTests : IClassFixture<TestApiFactory>
+public partial class SalesDeferredTests : IClassFixture<TestApiFactory>
 {
     private readonly TestApiFactory _factory;
     public SalesDeferredTests(TestApiFactory factory) => _factory = factory;
@@ -73,6 +73,82 @@ public class SalesDeferredTests : IClassFixture<TestApiFactory>
         }, Sales);
         Assert.Equal(HttpStatusCode.Created, entry.StatusCode);
         return bookId;
+    }
+
+    // ---- shared flow seeds (same shape as SalesDeepTests — private per class) ----------
+
+    private async Task SeedStock(string sku, decimal qty, decimal price)
+    {
+        var res = await PostAsync("/api/v1/suppliers", new { name = $"Sup {sku}", taxId = $"TRX-{sku}", email = $"{sku.ToLowerInvariant()}@sup.test" }, "U-002");
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var supplierId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        res = await PostAsync("/api/v1/purchase-orders", new
+        {
+            supplierId,
+            lines = new[] { new { itemSku = sku, description = $"Item {sku}", qty, unitPrice = price } },
+        }, "U-002");
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var poId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/purchase-orders/{poId}/submit", new { }, "U-002")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/purchase-orders/{poId}/approvals", new { reason = (string?)null }, Admin)).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync("/api/v1/receipts", new { purchaseOrderId = poId, itemSku = sku, qty }, "U-002")).StatusCode);
+    }
+
+    private async Task<(string customerId, string soId)> SeedConfirmedSo(string sku, decimal qty, decimal price, string? customerId = null, string? creditLimit = null)
+    {
+        customerId ??= await SeedCustomer(creditLimit);
+        var res = await PostAsync("/api/v1/sales-orders", new
+        {
+            customerId,
+            lines = new[] { new { itemSku = sku, description = $"Item {sku}", qty, unitPrice = price } },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var soId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/sales-orders/{soId}/submit", new { }, Sales)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/sales-orders/{soId}/approvals", new { reason = (string?)null }, Admin)).StatusCode);
+        return (customerId, soId);
+    }
+
+    private async Task<string> SeedShippedSo(string sku, decimal qty, decimal price, string? creditLimit = null)
+    {
+        var (_, soId) = await SeedConfirmedSo(sku, qty, price, creditLimit: creditLimit);
+        var res = await PostAsync($"/api/v1/sales-orders/{soId}/shipments", new { itemSku = sku, qty }, Sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        return soId;
+    }
+
+    private async Task<JsonElement> DraftInvoice(string soId, DateOnly? invoiceDate = null)
+    {
+        var body = (object)(invoiceDate is null ? new { } : new { invoiceDate });
+        var res = await PostAsync($"/api/v1/sales-orders/{soId}/invoice-drafts", body, Sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        return (await Json(res)).GetProperty("data");
+    }
+
+    private async Task<(string invoiceId, JsonElement journal)> PostInvoice(string invoiceId, string token, string? idemKey = null)
+    {
+        var res = await PostAsync($"/api/v1/invoices/{invoiceId}/postings", new { }, token, idemKey);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var data = (await Json(res)).GetProperty("data");
+        return (data.GetProperty("invoice").GetProperty("id").GetString()!, data.GetProperty("journal"));
+    }
+
+    private async Task<(string invoiceId, decimal total)> SeedPostedInvoice(decimal qty, decimal price, DateOnly? invoiceDate = null, string? creditLimit = null)
+    {
+        var sku = Tag("SKU");
+        await SeedStock(sku, qty, 10m);
+        var soId = await SeedShippedSo(sku, qty, price, creditLimit);
+        var draft = await DraftInvoice(soId, invoiceDate);
+        var (invoiceId, _) = await PostInvoice(draft.GetProperty("id").GetString()!, Fin);
+        var inv = await GetInvoice(invoiceId);
+        return (invoiceId, inv.GetProperty("total").GetDecimal());
+    }
+
+    private async Task<JsonElement> GetInvoice(string invoiceId)
+    {
+        var invoices = await GetAsync("/api/v1/invoices", Sales); // invoices:read lives on R-SALES
+        return invoices.GetProperty("data").EnumerateArray()
+            .First(i => i.GetProperty("id").GetString() == invoiceId);
     }
 
     // ---- S2 price books (024/025/026) ---------------------------------------------------
@@ -418,5 +494,128 @@ public class SalesDeferredTests : IClassFixture<TestApiFactory>
         }, Sales);
         Assert.Equal(HttpStatusCode.NotFound, bad.StatusCode);
         Assert.Equal("QUOTE_REVISION_NOT_FOUND", (await Json(bad)).GetProperty("error").GetProperty("code").GetString());
+    }
+}
+
+// ==== S3 customer 360: hierarchy, onboarding controls, party merge (012/013/014) ====
+
+public partial class SalesDeferredTests
+{
+    // 10 (012 AC1): self-parent and indirect cycles rejected
+    [Fact]
+    public async Task Customer_Hierarchy_Cycle_And_Self_Parent_Rejected()
+    {
+        var a = await SeedCustomer();
+        var b = await SeedCustomer();
+        var ok = await PostAsync($"/api/v1/customers/{b}/hierarchy", new { parentId = a }, Sales);
+        Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+
+        var self = await PostAsync($"/api/v1/customers/{a}/hierarchy", new { parentId = a }, Sales);
+        Assert.Equal(HttpStatusCode.BadRequest, self.StatusCode);
+        Assert.Equal("CUSTOMER_HIERARCHY_CYCLE", (await Json(self)).GetProperty("error").GetProperty("code").GetString());
+
+        // a → b is set; making b's parent a's ancestor (a) closes a 2-cycle — reject
+        var cycle = await PostAsync($"/api/v1/customers/{a}/hierarchy", new { parentId = b }, Sales);
+        Assert.Equal(HttpStatusCode.BadRequest, cycle.StatusCode);
+        Assert.Equal("CUSTOMER_HIERARCHY_CYCLE", (await Json(cycle)).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    // 10b (012 AC2): detail rollup identifies included entities
+    [Fact]
+    public async Task Customer_Detail_Shows_Hierarchy_Rollup()
+    {
+        var parent = await SeedCustomer();
+        var child = await SeedCustomer();
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/customers/{child}/hierarchy", new { parentId = parent }, Sales)).StatusCode);
+
+        var childDetail = await GetAsync($"/api/v1/customers/{child}", Sales);
+        Assert.Equal(parent, childDetail.GetProperty("data").GetProperty("hierarchy").GetProperty("parentId").GetString());
+
+        var parentDetail = await GetAsync($"/api/v1/customers/{parent}", Sales);
+        var hierarchy = parentDetail.GetProperty("data").GetProperty("hierarchy");
+        Assert.Contains(child, hierarchy.GetProperty("childrenIds").EnumerateArray().Select(c => c.GetString()));
+        var included = hierarchy.GetProperty("includedEntityIds").EnumerateArray().Select(c => c.GetString()).ToList();
+        Assert.Contains(parent, included);
+        Assert.Contains(child, included);
+    }
+
+    // 11 (013 AC2): order submit for account with unmet mandatory check returns control IDs
+    [Fact]
+    public async Task Order_Submit_Returns_Unmet_Onboarding_Control_Ids()
+    {
+        var customerId = await SeedCustomer();
+        var created = await PostAsync($"/api/v1/customers/{customerId}/onboarding-checks",
+            new { checkCode = "KYC-VERIFY", mandatory = true }, Sales);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+
+        var sku = Tag("SKU");
+        await SeedStock(sku, 5m, 2m);
+        var res = await PostAsync("/api/v1/sales-orders", new
+        {
+            customerId,
+            lines = new[] { new { itemSku = sku, description = "Gate probe", qty = 1m, unitPrice = 10m } },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var soId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+
+        var submit = await PostAsync($"/api/v1/sales-orders/{soId}/submit", new { }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, submit.StatusCode);
+        var body = await Json(submit);
+        Assert.Equal("ONBOARDING_CONTROLS_UNMET", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Contains("KYC-VERIFY", body.GetProperty("error").GetProperty("items").EnumerateArray()
+            .Select(i => i.GetProperty("code").GetString()));
+
+        // mark the check met → submit passes
+        var met = await PostAsync($"/api/v1/customers/{customerId}/onboarding-checks/KYC-VERIFY/met", new { }, Sales);
+        Assert.Equal(HttpStatusCode.OK, met.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/sales-orders/{soId}/submit", new { }, Sales)).StatusCode);
+    }
+
+    // 12 (014 AC1–2/edge): merge preview lists reassignments; old id resolves after merge;
+    // posted balances block
+    [Fact]
+    public async Task Customer_Merge_Preview_Executes_And_Posted_Balance_Blocks()
+    {
+        var survivor = await SeedCustomer();
+        var merged = await SeedCustomer();
+        // open order on the merged customer → should be reassigned to the survivor
+        var sku = Tag("SKU");
+        await SeedStock(sku, 5m, 2m);
+        var res = await PostAsync("/api/v1/sales-orders", new
+        {
+            customerId = merged,
+            lines = new[] { new { itemSku = sku, description = "Move me", qty = 1m, unitPrice = 10m } },
+        }, Sales);
+        var soId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+
+        var preview = await PostAsync("/api/v1/customer-merges/preview",
+            new { survivorId = survivor, mergedId = merged, reason = "duplicate account" }, Admin);
+        Assert.Equal(HttpStatusCode.Created, preview.StatusCode);
+        var pv = (await Json(preview)).GetProperty("data");
+        Assert.Equal(1, pv.GetProperty("reassignments").GetProperty("openOrders").GetInt32());
+
+        // merge act is elevated: sales cannot execute (Q-S3: customers:merge on R-ADMIN)
+        var sod = await PostAsync($"/api/v1/customer-merges/{pv.GetProperty("id").GetString()}/executions",
+            new { }, Sales);
+        Assert.Equal(HttpStatusCode.Forbidden, sod.StatusCode);
+
+        var exec = await PostAsync($"/api/v1/customer-merges/{pv.GetProperty("id").GetString()}/executions",
+            new { }, Admin);
+        Assert.Equal(HttpStatusCode.OK, exec.StatusCode);
+
+        // old identifier resolves to the survivor; the open order moved
+        var old = await GetAsync($"/api/v1/customers/{merged}", Sales);
+        Assert.Equal(survivor, old.GetProperty("data").GetProperty("mergedIntoId").GetString());
+        var orders = await GetAsync("/api/v1/sales-orders", Sales);
+        var moved = orders.GetProperty("data").EnumerateArray().First(o => o.GetProperty("id").GetString() == soId);
+        Assert.Equal(survivor, moved.GetProperty("customerId").GetString());
+
+        // posted balance blocks: invoice the other order first, then preview must refuse
+        var second = await SeedPostedInvoice(2m, 50m);
+        var withPosted = (await GetInvoice(second.invoiceId)).GetProperty("customerId").GetString()!;
+        var blocked = await PostAsync("/api/v1/customer-merges/preview",
+            new { survivorId = survivor, mergedId = withPosted, reason = "try to merge a billed account" }, Admin);
+        Assert.Equal(HttpStatusCode.Conflict, blocked.StatusCode);
+        Assert.Equal("MERGE_BLOCKED", (await Json(blocked)).GetProperty("error").GetProperty("code").GetString());
     }
 }

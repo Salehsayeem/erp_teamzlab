@@ -30,6 +30,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPriceBookRepository, PriceBookRepository>();
         services.AddScoped<IPriceResolutionService, PriceResolutionService>();
         services.AddScoped<IQuoteService, QuoteService>();
+        services.AddScoped<ICustomer360Repository, Customer360Repository>();
+        services.AddScoped<ICustomer360Service, Customer360Service>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IJournalRepository, JournalRepository>();
         services.AddScoped<IManufacturingRepository, ManufacturingRepository>();
