@@ -1852,6 +1852,7 @@ export const bn: Dict = {
     // finance / accounting
     ACCOUNT_NOT_FOUND: "হিসাবটি পাওয়া যায়নি।",
     ACCOUNT_NOT_POSTABLE: "ওই হিসাবটি পোস্টিংয়ের জন্য খোলা নেই।",
+    ACCOUNT_DUPLICATE_CODE: "এই কোডের হিসাব এই আইনগত সত্তায় আগে থেকেই আছে।",
     JOURNAL_NOT_FOUND: "জাবেদা পাওয়া যায়নি।",
     JOURNAL_STATE_ERROR: "এই জাবেদায় এই পরিবর্তন করা যাবে না।",
     JOURNAL_ALREADY_REVERSED: "এই জাবেদা ইতিমধ্যে রিভার্স করা হয়েছে।",
@@ -1926,6 +1927,7 @@ export const bn: Dict = {
     PAYROLL_APPROVAL_ERROR: "শুধু অন্য একজন ব্যবহারকারী পে-রান অনুমোদন করতে পারবেন (মেকার-চেকার)।",
     PAYROLL_VALIDATION_BLOCKED: "পেরোল যাচাই এই পে-রানটি আটকে দিয়েছে।",
     PAYROLL_RECONCILIATION_BROKEN: "পেরোল ও জাবেদার সমন্বয় মিলছে না।",
+    PAYROLL_MAPPING_MISSING: "কোনো পে-কোডের হিসাব-ম্যাপিং নেই বা নিষ্ক্রিয় — পোস্টিং আটকে গেছে।",
     PAYSLIP_NOT_FOUND: "পে-স্লিপ পাওয়া যায়নি।",
     // manufacturing
     BOM_NOT_FOUND: "বিওএম সংস্করণ পাওয়া যায়নি।",
@@ -1968,6 +1970,7 @@ export const bn: Dict = {
     ADJUSTMENT_APPROVAL_ERROR: "শুধু অন্য একজন ব্যবহারকারী সমন্বয় অনুমোদন করতে পারবেন (মেকার-চেকার)।",
     ADJUSTMENT_ALREADY_APPROVED: "সমন্বয়টি ইতিমধ্যে অনুমোদিত।",
     ADJUSTMENT_STATE_ERROR: "সমন্বয়ের বর্তমান অবস্থায় এই পরিবর্তন করা যাবে না।",
+    ADJUSTMENT_ERROR: "সমন্বয়ের সঙ্গে একটি পোস্টেড চালানের রেফারেন্স থাকতে হবে।",
     REMINDER_SUPPRESSED: "কমিউনিকেশন গার্ড রিমাইন্ডারটি আটকে দিয়েছে।",
     SO_APPROVAL_ERROR: "শুধু অন্য একজন ব্যবহারকারী সেলস অর্ডার অনুমোদন করতে পারবেন (মেকার-চেকার)।",
     SO_STATE_ERROR: "সেলস অর্ডারের বর্তমান অবস্থায় এই পরিবর্তন করা যাবে না।",

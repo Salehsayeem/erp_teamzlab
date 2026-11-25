@@ -1851,6 +1851,7 @@ export const en = {
     // finance / accounting
     ACCOUNT_NOT_FOUND: "The account was not found.",
     ACCOUNT_NOT_POSTABLE: "That account is not open for posting.",
+    ACCOUNT_DUPLICATE_CODE: "An account with this code already exists for this legal entity.",
     JOURNAL_NOT_FOUND: "The journal was not found.",
     JOURNAL_STATE_ERROR: "That change is not allowed on this journal.",
     JOURNAL_ALREADY_REVERSED: "This journal has already been reversed.",
@@ -1925,6 +1926,7 @@ export const en = {
     PAYROLL_APPROVAL_ERROR: "Only another user can approve the pay run (maker-checker).",
     PAYROLL_VALIDATION_BLOCKED: "Payroll validation blocked this pay run.",
     PAYROLL_RECONCILIATION_BROKEN: "Payroll does not reconcile with its journals.",
+    PAYROLL_MAPPING_MISSING: "A pay code's account mapping is missing or inactive — posting is blocked.",
     PAYSLIP_NOT_FOUND: "The payslip was not found.",
     // manufacturing
     BOM_NOT_FOUND: "The BOM revision was not found.",
@@ -1967,6 +1969,7 @@ export const en = {
     ADJUSTMENT_APPROVAL_ERROR: "Only another user can approve the adjustment (maker-checker).",
     ADJUSTMENT_ALREADY_APPROVED: "The adjustment is already approved.",
     ADJUSTMENT_STATE_ERROR: "That change is not allowed in the adjustment's current state.",
+    ADJUSTMENT_ERROR: "Adjustments must reference a posted invoice.",
     REMINDER_SUPPRESSED: "The reminder was suppressed by a communication guard.",
     SO_APPROVAL_ERROR: "Only another user can approve the sales order (maker-checker).",
     SO_STATE_ERROR: "That change is not allowed in the sales order's current state.",
