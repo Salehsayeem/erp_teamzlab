@@ -1,6 +1,8 @@
 using Erp.Api.Data;
 using Erp.Api.Dtos;
 using Erp.Api.Interfaces;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Erp.Api.Services;
 
@@ -73,8 +75,7 @@ public sealed class AssetService(
         assets.SetEventJournal(evt, journal.Id);
         audit.Log(approver, "approve", "asset_capitalization", eventId, $"Capitalization approved by {approver.Email}; asset {assetId} in service; journal {journal.Id}");
         audit.Emit(approver, "assets.asset.capitalized", new { assetId, eventId, amount = evt.Amount, journalId = journal.Id });
-        assets.Save();
-        return (new { @event = ProjEvent(FindEvent(eventId)), asset = Proj(asset) }, null, null);
+        return SaveApproval(assetId, eventId);
     }
 
     // one balanced journal per run; the Idempotency-Key IS the run id (048 AC1)
@@ -118,7 +119,19 @@ public sealed class AssetService(
         audit.Log(user, "post", "depreciation", journal.Id,
             $"Depreciation run {runId} for period {periodId}: {total:0.00} across {posted.Count} asset(s); journal {journal.Id}");
         audit.Emit(user, "assets.depreciation.posted", new { runId, periodId, totalAmount = total, journalId = journal.Id, assetCount = posted.Count });
-        assets.Save();
+        try
+        {
+            assets.Save();
+        }
+        catch (DbUpdateException ex) when (UniqueViolation(ex))
+        {
+            // journal-race hardening: the app-level already-posted check is read-then-write —
+            // the UNIQUE (tenant, entity, period) index on depreciation_runs is the real guard.
+            // The losing run's Save fails 23505 and its whole transaction (journal + accumulated
+            // increments + run row) rolls back with it.
+            return (null, "DEPRECIATION_PERIOD_ALREADY_POSTED",
+                $"Period {periodId} already has a posted depreciation run; a concurrent run committed first and this retry wrote nothing.");
+        }
         return (new
         {
             id = runId,
@@ -195,8 +208,7 @@ public sealed class AssetService(
         assets.SetEventJournal(evt, journal.Id);
         audit.Log(approver, "approve", "asset_impairment", eventId, $"Impairment of {evt.Amount:0.00} approved by {approver.Email}; journal {journal.Id}");
         audit.Emit(approver, "assets.asset.impaired", new { assetId, eventId, amount = evt.Amount, journalId = journal.Id });
-        assets.Save();
-        return (new { @event = ProjEvent(FindEvent(eventId)), asset = Proj(asset) }, null, null);
+        return SaveApproval(assetId, eventId);
     }
 
     public (object? data, string? code, string? message) ProposeDisposal(CurrentUser user, string assetId, decimal proceeds, string reason)
@@ -253,8 +265,7 @@ public sealed class AssetService(
         audit.Log(approver, "approve", "asset_disposal", eventId,
             $"Disposal approved by {approver.Email}; carrying {carrying:0.00}, proceeds {proceeds:0.00}, {(loss > 0 ? $"loss {loss:0.00}" : gain > 0 ? $"gain {gain:0.00}" : "break-even")}; journal {journal.Id}");
         audit.Emit(approver, "assets.asset.disposed", new { assetId, eventId, carryingValue = carrying, proceeds, loss, gain, journalId = journal.Id });
-        assets.Save();
-        return (new { @event = ProjEvent(FindEvent(eventId)), asset = Proj(asset) }, null, null);
+        return SaveApproval(assetId, eventId);
     }
 
     // shared approval skeleton: record → pending event → maker-checker → permission (PO ordering)
@@ -282,6 +293,26 @@ public sealed class AssetService(
         journals.Add(journal);
         return journal;
     }
+
+    // journal-race hardening: the pending→approved flip is a JournalId-token UPDATE ("" → journal
+    // id) — a stale second approval matches ZERO rows, commits nothing (no second journal, no
+    // second state write) and answers 409 instead of pretending to approve again
+    private (object? data, string? code, string? message) SaveApproval(string assetId, string eventId)
+    {
+        try
+        {
+            assets.Save();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return (null, "ASSET_EVENT_ALREADY_APPROVED",
+                $"Event {eventId} was already approved; the retry carried a stale snapshot and wrote nothing.");
+        }
+        return (new { @event = ProjEvent(FindEvent(eventId)), asset = Proj(assets.FindAsset(assetId)!) }, null, null);
+    }
+
+    private static bool UniqueViolation(DbUpdateException ex) =>
+        ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
 
     private AssetEvent NewEvent(CurrentUser user, string assetId, string eventType, decimal amount) =>
         new(numbers.Next("FAE"), ec.TenantId, ec.EntityId, assetId, eventType, amount, "", user.Id, DateTimeOffset.UtcNow);

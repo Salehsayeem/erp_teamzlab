@@ -1,6 +1,7 @@
 using Erp.Api.Data;
 using Erp.Api.Dtos;
 using Erp.Api.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace Erp.Api.Services;
 
@@ -125,7 +126,18 @@ public sealed class InventoryService(
         inventory.MarkCountClosed(count, closer.Id, DateTimeOffset.UtcNow);
         audit.Log(closer, "close", "stock_count", count.Id, $"Count closed by {closer.Email}; {adjustments.Count} adjustment(s) posted");
         // adjustments + journals + stock + count flip commit in ONE SaveChanges (task-2 §4)
-        inventory.Save();
+        try
+        {
+            inventory.Save();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // journal-race hardening: the guarded Open→Closed UPDATE matched ZERO rows — another
+            // officer closed this count while our snapshot was stale. Nothing above commits: no
+            // duplicated variance journals, no second stock movement.
+            return (null, null, "COUNT_ALREADY_CLOSED",
+                $"Count {countId} was already closed; the retry carried a stale snapshot and wrote nothing.");
+        }
         return (count, adjustments, null, null);
     }
 

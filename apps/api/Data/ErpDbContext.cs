@@ -514,6 +514,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         {
             e.ToTable("counts");
             e.HasKey(x => x.Id);
+            // journal-race hardening: the Open→Closed flip is a token-guarded UPDATE — a stale
+            // second closer matches zero rows and writes no second variance journal/stock move
+            e.Property(x => x.Status).IsConcurrencyToken();
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
             e.HasIndex(x => x.LocationId);
             e.HasOne<StockLocation>().WithMany().HasForeignKey(x => x.LocationId).OnDelete(DeleteBehavior.Restrict);
@@ -819,6 +822,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         {
             e.ToTable("asset_events");
             e.HasKey(x => x.Id);
+            // journal-race hardening: the pending→approved flip is JournalId ""→journal id — a
+            // token so a stale second approval matches zero rows and posts no second journal
+            e.Property(x => x.JournalId).IsConcurrencyToken();
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
             e.HasIndex(x => x.AssetId);
             e.HasIndex(x => new { x.AssetId, x.EventType });
@@ -832,7 +838,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             // tenant/entity columns in the key, a second entity reusing "2026-11" hits 23505
             e.HasKey(x => new { x.Id, x.TenantId, x.LegalEntityId });
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
-            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PeriodId });
+            // journal-race hardening: one run per period is a DB invariant now — the app-level
+            // already-posted check is read-then-write and two concurrent runs both pass it
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PeriodId }).IsUnique();
             e.HasOne<Journal>().WithMany().HasForeignKey(x => x.JournalId).OnDelete(DeleteBehavior.Restrict);
         });
 

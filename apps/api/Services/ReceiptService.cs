@@ -1,5 +1,6 @@
 using Erp.Api.Data;
 using Erp.Api.Interfaces;
+using Microsoft.EntityFrameworkCore;
 
 namespace Erp.Api.Services;
 
@@ -21,7 +22,18 @@ public sealed class ReceiptService(
         var (guardCode, guardMsg) = FinanceGuards.EnsurePeriodOpen(db, ec, DateOnly.FromDateTime(DateTime.UtcNow));
         if (guardCode is not null) return (null, null, guardCode, guardMsg);
 
-        // finding 2: over-receipt is unbounded → reject before any receipt/journal is written (ERP-PROCUREMENT-057)
+        // finding 2: over-receipt is unbounded → reject before any receipt/journal is written
+        // (ERP-PROCUREMENT-057). The guard is an AGGREGATE read (ReceivedQty) — read-then-write:
+        // two concurrent receives both read the same already and BOTH pass. Receive is multi-write
+        // (receipt + stock + AP journal + PO flip), so check+commit are serialized per PO row:
+        // SELECT … FOR UPDATE inside the request transaction (joined, never nested, when
+        // Idem.Wrap opened one), then the AUTHORITATIVE re-check under the lock (journal-race
+        // hardening; same mechanism as JournalService.Reverse / the invoice exposure path).
+        var ownsTx = db.Database.CurrentTransaction is null;
+        using var tx = ownsTx ? db.Database.BeginTransaction() : null;
+        db.PurchaseOrders
+            .FromSql($"SELECT * FROM purchase_orders WHERE id = {poId} AND tenant_id = {ec.TenantId} AND legal_entity_id = {ec.EntityId} FOR UPDATE")
+            .ToList();
         var already = orders.ReceivedQty(poId, itemSku);
         if (already + qty > line.Qty)
             return (null, null, "OVER_RECEIVE", $"Over-receipt blocked for {itemSku}: already received {already} of {line.Qty} ordered, cannot receive {qty} more.");
@@ -49,6 +61,7 @@ public sealed class ReceiptService(
         audit.Emit(user, "procurement.receipt.posted", new { receiptId = receipt.Id, poId, itemSku, qty, journalId = journal.Id });
         // PO update + stock + journal + receipt + audit + outbox commit in ONE SaveChanges (task-2 §4)
         orders.Save();
+        if (ownsTx) tx!.Commit();
         return (receipt, journal, null, null);
     }
 }
