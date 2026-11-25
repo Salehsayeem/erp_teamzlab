@@ -5,7 +5,7 @@ using Erp.Api;
 public record CreateSupplierRequest(string Name, string TaxId, string Email);
 public record CreatePoRequest(string SupplierId, IReadOnlyList<PoLine> Lines);
 public record ApprovePoRequest(string? Reason);
-public record CreateReceiptRequest(string PurchaseOrderId, string ItemSku, decimal Qty);
+public record CreateReceiptRequest(string PurchaseOrderId, string ItemSku, decimal Qty, string? ToleranceOverrideReason = null);
 
 // ==================== T6 PROCUREMENT deep request DTOs ====================
 // Validated with Guards-style checks in the controllers before any service runs. Two deliberate
@@ -68,7 +68,7 @@ public record CreateBlanketReleaseRequest(decimal Amount, string? PoId);
 
 // P4 receipt workspace
 public record CreateDispatchRequest(int OrderVersion, DispatchState State, string? Detail);
-public record CreateAsnRequest(string? ShipmentRef, int OrderVersion, IReadOnlyList<AsnLineInput>? Lines);
+public record CreateAsnRequest(string? PoId, string? ShipmentRef, int OrderVersion, IReadOnlyList<AsnLineInput>? Lines);
 public record AsnLineInput(string? ItemSku, decimal Qty);
 public record CreateInspectionRequest(string? ItemSku, decimal QtyReceived);
 public record DisposeInspectionRequest(InspectionStatus Status, decimal QtyAccepted, decimal QtyRejected, string? DefectCode, string? EvidenceRef);

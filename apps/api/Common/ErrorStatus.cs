@@ -10,7 +10,7 @@ public static class ErrorStatus
         "CATEGORY_CYCLE" or "CATEGORY_DEPRECATED" or "QTY_PRECISION" or "UOM_CONVERSION_INVALID"
             or "DECISION_REASON_REQUIRED" or "EXCEPTION_REASON_REQUIRED" or "DELEGATION_INVALID"
             or "CLAIM_OUTCOME_REQUIRED" or "REVIEW_OUTCOME_REQUIRED" => 400,
-        "FORBIDDEN" or "DELEGATION_SCOPE_DENIED" => 403,
+        "FORBIDDEN" or "DELEGATION_SCOPE_DENIED" or "DISPOSITION_SOD_ERROR" => 403,
         _ when code.EndsWith("_NOT_FOUND", StringComparison.Ordinal) => 404,
         _ => 409,
     };

@@ -564,9 +564,9 @@ public class ProcurementDeferredTests : IClassFixture<TestApiFactory>
 
     private async Task<string> SeedReceipt(string tag, decimal qty = 10m)
     {
-        var (poId, _) = await SeedApprovedPo($"P4-{tag}", qty);
+        var (poId, _) = await SeedApprovedPo(tag, qty);
         var receipt = await PostForData("/api/v1/receipts",
-            new { purchaseOrderId = poId, itemSku = $"SKU-P4-{tag}", qty }, Proc);
+            new { purchaseOrderId = poId, itemSku = $"SKU-{tag}", qty }, Proc);
         return receipt.GetProperty("receipt").GetProperty("id").GetString()!;
     }
 
@@ -576,7 +576,7 @@ public class ProcurementDeferredTests : IClassFixture<TestApiFactory>
         var (poId, _) = await SeedApprovedPo("P4-056", qty: 10m);
         var asn = await PostForData("/api/v1/advance-ship-notices", new
         {
-            shipmentRef = "SHP-P4-056", orderVersion = 1,
+            poId, shipmentRef = "SHP-P4-056", orderVersion = 1,
             lines = new[]
             {
                 new { itemSku = "SKU-P4-056", qty = 15m },   // over the open line → quarantine
@@ -650,7 +650,7 @@ public class ProcurementDeferredTests : IClassFixture<TestApiFactory>
         var inspection = await PostForData($"/api/v1/receipts/{receiptId}/inspections",
             new { itemSku = receiptSku, qtyReceived = 10m }, Qc);
         await PostForData($"/api/v1/receipts/{receiptId}/inspections/{inspection.GetProperty("id").GetString()!}/dispositions",
-            new { status = "Partial", qtyAccepted = 7m, qtyRejected = 3m }, Qc);
+            new { status = "Partial", qtyAccepted = 7m, qtyRejected = 3m, defectCode = "DAMAGE" }, Qc);
 
         var over = await PostAsync("/api/v1/supplier-returns", new
         {
