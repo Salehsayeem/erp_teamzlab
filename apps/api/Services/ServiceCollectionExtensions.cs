@@ -29,6 +29,13 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IJournalRepository, JournalRepository>();
         services.AddScoped<IManufacturingRepository, ManufacturingRepository>();
+        services.AddScoped<IMfgDeferredRepository, MfgDeferredRepository>();
+        // MFG deferred screens (MF1-MF10) — services + the IRequisitionSink stub register wave by
+        // wave with their tests (TDD: each wave's routes ship after its RED is witnessed).
+        // Wave A (MF1-MF3): RoutingService, SchedulingService. The buy-side MRP conversion target
+        // (IRequisitionSink stub, Q-MF1) registers with the MF4 wave.
+        services.AddScoped<IRoutingService, RoutingService>();
+        services.AddScoped<ISchedulingService, SchedulingService>();
         services.AddScoped<IAssetsRepository, AssetsRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
         services.AddScoped<IFiscalPeriodRepository, FiscalPeriodRepository>();

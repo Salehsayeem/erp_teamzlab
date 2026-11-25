@@ -48,10 +48,13 @@ public sealed class ProductionOrderService(
         if (code is not null) return (null, code, message);
 
         var orderId = numbers.Next("MFO");
+        // MF1 (024 AC3): the effective approved routing is resolved at create as the planning
+        // basis — OPTIONAL: orders without routings keep working (scheduling needs one, not release)
+        var plannedRoutingId = ResolveEffectiveRouting(request.OutputSku);
         var order = new ProductionOrder(orderId, ec.TenantId, ec.EntityId, orderId, request.OutputSku,
             request.Unit, request.DemandedQty, request.DemandedQty, // PlannedQty defaults to DemandedQty (008)
             0, 0, ProductionOrderStatus.Draft, request.OverTolerancePct, revision!.Id, null,
-            null, null, null, null, null, user.Id, DateTimeOffset.UtcNow);
+            null, null, null, null, null, user.Id, DateTimeOffset.UtcNow, plannedRoutingId);
         mfg.AddOrder(order);
         audit.Log(user, "create", "production_order", order.Id,
             $"Production order {order.OrderNo} drafted for {request.OutputSku}: demanded {request.DemandedQty} {request.Unit}, " +
@@ -190,6 +193,25 @@ public sealed class ProductionOrderService(
                     $"revision {resolved.Revision} of {order.OutputSku} has no component lines"));
         }
 
+        // MF2 (028 AC3): when the entity policy requires finite scheduling, the order must carry
+        // a PUBLISHED finite schedule run — an infinite-mode published plan is rejected here
+        var routingId = order.PlannedRoutingRevisionId;
+        if (FiniteScheduleRequired())
+        {
+            var publishedRun = (from pub in db.SchedulePublications
+                    join run in db.ScheduleRuns on pub.ScheduleRunId equals run.Id
+                    where pub.TenantId == ec.TenantId && pub.LegalEntityId == ec.EntityId
+                        && run.TenantId == ec.TenantId && run.LegalEntityId == ec.EntityId
+                        && run.OrderId == order.Id
+                    orderby pub.At descending
+                    select run).FirstOrDefault();
+            if (publishedRun is null || publishedRun.Mode != ScheduleRunMode.Finite)
+                prerequisites.Add(("SCHEDULE_NOT_FINITE",
+                    publishedRun is null
+                        ? "the entity policy requires a published finite schedule before release"
+                        : $"the published schedule run {publishedRun.Id} is infinite mode; the policy requires finite (028)"));
+        }
+
         if (prerequisites.Count > 0)
             return (prerequisites.Select(p => (object)new { code = p.Code, detail = p.Detail }).ToArray(),
                 "MFG_RELEASE_BLOCKED",
@@ -200,10 +222,13 @@ public sealed class ProductionOrderService(
         var revisionChanged = revision!.Id != order.PlannedBomRevisionId;
         var plannedRevision = order.PlannedBomRevisionId is { } pid ? mfg.FindBom(pid) : null;
 
+        // MF1 (024 AC3): passing release ALSO freezes the routing revision resolved now
+        var releasedRoutingId = ResolveEffectiveRouting(order.OutputSku) ?? routingId;
+
         var ownsTx = db.Database.CurrentTransaction is null;
         using var tx = ownsTx ? db.Database.BeginTransaction() : null;
         LockOrderRow(order.Id);
-        mfg.SetOrderReleased(order, revision.Id, order.PlannedQty);
+        mfg.SetOrderReleased(order, revision.Id, order.PlannedQty, releasedRoutingId);
         audit.Log(releaser, "release", "production_order", order.Id,
             $"Order {order.OrderNo} released: {order.PlannedQty} {order.Unit} of {order.OutputSku}" +
             (revisionChanged ? $" — revision moved {plannedRevision?.Revision} → {revision.Revision} (022)" : "") +
@@ -224,6 +249,8 @@ public sealed class ProductionOrderService(
             {
                 plannedBomRevisionId = order.PlannedBomRevisionId,
                 releasedBomRevisionId = revision.Id,
+                plannedRoutingRevisionId = order.PlannedRoutingRevisionId,
+                releasedRoutingRevisionId = order.ReleasedRoutingRevisionId,
                 revisionChanged,
             },
         }, null, null);
@@ -658,6 +685,24 @@ public sealed class ProductionOrderService(
         };
     }
 
+    // MF1 (024): the effective APPROVED routing for a sku today — null when the item has no
+    // routing (pilot trim: routings are optional; scheduling refuses orders without one)
+    private string? ResolveEffectiveRouting(string outputSku) =>
+        db.RoutingRevisions
+            .Where(r => r.TenantId == ec.TenantId && r.LegalEntityId == ec.EntityId
+                && r.OutputSku == outputSku && r.Status == RoutingStatus.Approved
+                && r.EffectiveFrom <= Today && (r.EffectiveTo == null || r.EffectiveTo >= Today))
+            .OrderBy(r => r.Revision)
+            .Select(r => r.Id)
+            .FirstOrDefault();
+
+    // MF2 (028): the entity's finite-scheduling policy is tenant data, not a constant
+    private bool FiniteScheduleRequired() =>
+        db.FinanceSettings
+            .Where(s => s.TenantId == ec.TenantId && s.LegalEntityId == ec.EntityId && s.Key == "mfg.finite_schedule_required")
+            .OrderBy(s => s.Id)
+            .FirstOrDefault()?.Value == "true";
+
     // the close reconciliation (013 AC1 + 067 AC3): output, per-component consumption and the WIP
     // ledger are compared one by one; scrap disposal of a component counts as that component's
     // physical consumption; expected consumption is summed per completion so it matches the
@@ -865,6 +910,7 @@ public sealed class ProductionOrderService(
         o.DemandedQty, o.PlannedQty, o.ReleasedQty, o.CompletedQty,
         remainingQty = o.PlannedQty - o.CompletedQty, // computed, never stored twice (008 AC1)
         o.OverTolerancePct, o.PlannedBomRevisionId, o.ReleasedBomRevisionId,
+        o.PlannedRoutingRevisionId, o.ReleasedRoutingRevisionId,
         o.CancelReason, o.ClosedBy, o.ClosedAt, o.ReopenedBy, o.ReopenedAt, o.CreatedBy, o.CreatedAt,
     };
 

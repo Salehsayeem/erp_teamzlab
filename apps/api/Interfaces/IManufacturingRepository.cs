@@ -30,7 +30,7 @@ public interface IManufacturingRepository
     void SetOrderStatus(ProductionOrder order, ProductionOrderStatus status);
     void SetOrderCancelled(ProductionOrder order, string reason);
     void SetOrderPlannedQty(ProductionOrder order, decimal plannedQty);
-    void SetOrderReleased(ProductionOrder order, string releasedBomRevisionId, decimal releasedQty);
+    void SetOrderReleased(ProductionOrder order, string releasedBomRevisionId, decimal releasedQty, string? releasedRoutingRevisionId = null);
     void SetOrderCompletedQty(ProductionOrder order, decimal completedQty);
     void SetOrderClosed(ProductionOrder order, string closedBy, DateTimeOffset closedAt);
     void SetOrderReopened(ProductionOrder order, string reopenedBy, DateTimeOffset reopenedAt);
