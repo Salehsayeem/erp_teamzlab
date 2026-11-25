@@ -35,6 +35,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IForecastService, ForecastService>();
         services.AddScoped<IInvoiceAdapter, StubInvoiceAdapter>();
         services.AddScoped<ISalesDeliveryService, SalesDeliveryService>();
+        services.AddScoped<ISalesDeferredRepository, SalesDeferredRepository>();
+        services.AddScoped<ISalesReturnService, SalesReturnService>();
+        services.AddScoped<IRefundService, RefundService>();
+        services.AddScoped<IReceiptCandidatesService, ReceiptCandidatesService>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IJournalRepository, JournalRepository>();
         services.AddScoped<IManufacturingRepository, ManufacturingRepository>();

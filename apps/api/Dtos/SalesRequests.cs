@@ -74,3 +74,12 @@ public record CreateSnapshotRequest(string Period);
 public record SubmitEinvoiceRequest();
 public record DeliveryAttemptRequest(string Channel, string Recipient);
 public record DeliveryBounceRequest(string Reason);
+
+// --- deferred-screens wave: S7 returns/refunds + S8 receipt candidates ---
+
+public record CreateReturnRequest(string OrderId, IReadOnlyList<ReturnLineInput>? Lines, string? OverrideJustification = null);
+public record ReturnLineInput(string ItemSku, decimal Qty, string? Reason = null, string? Condition = null);
+public record ReceiveReturnRequest(decimal ReceivedQty);
+public record ApproveRefundRequest(string? Reason = null);
+public record CreateReceiptCandidateRequest(string? CustomerId, string BankRef, decimal Amount, string Currency, DateOnly ValueDate, string Channel);
+public record LinkPayerRequest(string CustomerId);

@@ -43,6 +43,13 @@ public partial class SalesDeferredTests : IClassFixture<TestApiFactory>
         return await Json(await client.GetAsync(path));
     }
 
+    private async Task<HttpStatusCode> GetStatusAsync(string path, string token)
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
+        return (await client.GetAsync(path)).StatusCode;
+    }
+
     private static async Task<JsonElement> Json(HttpResponseMessage res)
     {
         await using var stream = await res.Content.ReadAsStreamAsync();
@@ -1026,7 +1033,7 @@ public partial class SalesDeferredTests
         var data = (await Json(receipt)).GetProperty("data");
         Assert.Equal(2m, data.GetProperty("receivedQty").GetDecimal());
         Assert.Equal(2m, data.GetProperty("authorizedQty").GetDecimal());
-        Assert.Equal("PartiallyReceived", data.GetProperty("status").GetString());
+        Assert.Equal("Completed", data.GetProperty("status").GetString()); // fully received
     }
 
     // 23 (062 AC1): posting a credit alone never completes a refund; the refund request links
@@ -1044,15 +1051,21 @@ public partial class SalesDeferredTests
             lines = new[] { new { itemSku = Tag("SKU"), qty = 1m, unitPrice = 25m } },
         }, Sales);
         Assert.Equal(HttpStatusCode.Created, adj.StatusCode);
-        var adjId = (await Json(adj)).GetProperty("data").GetProperty("id").GetString()!;
+        var adjData = (await Json(adj)).GetProperty("data");
+        var adjId = adjData.GetProperty("id").GetString()!;
         Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/adjustments/{adjId}/approvals", new { }, Fin)).StatusCode);
+        // 046: adjustment totals finalize AT APPROVAL — read the total after it posts
+        var adjustments = await GetAsync($"/api/v1/adjustments?invoiceId={invoiceId}", Sales);
+        var adjTotal = adjustments.GetProperty("data").EnumerateArray()
+            .First(a => a.GetProperty("id").GetString() == adjId).GetProperty("total").GetDecimal();
+        Assert.True(adjTotal > 0);
 
         // credit posted — but a refund request still starts at Requested, never Completed
         var refund = await PostAsync($"/api/v1/adjustments/{adjId}/refund-requests", new { }, Sales);
         Assert.Equal(HttpStatusCode.Created, refund.StatusCode);
         var request = (await Json(refund)).GetProperty("data");
         Assert.Equal("Requested", request.GetProperty("status").GetString());
-        Assert.Equal(25m, request.GetProperty("amount").GetDecimal());
+        Assert.Equal(adjTotal, request.GetProperty("amount").GetDecimal());
         var refundId = request.GetProperty("id").GetString()!;
 
         // duplicate request on the same credit → idempotent same record
@@ -1068,8 +1081,9 @@ public partial class SalesDeferredTests
 
         var approved = await PostAsync($"/api/v1/refund-requests/{refundId}/approvals", new { }, Fin);
         Assert.Equal(HttpStatusCode.OK, approved.StatusCode);
-        Assert.Equal("Approved", (await Json(approved)).GetProperty("data").GetProperty("status").GetString());
-        Assert.Equal(Fin, (await Json(approved)).GetProperty("data").GetProperty("approvedBy").GetString());
+        var approvedBody = await Json(approved);
+        Assert.Equal("Approved", approvedBody.GetProperty("data").GetProperty("status").GetString());
+        Assert.Equal(Fin, approvedBody.GetProperty("data").GetProperty("approvedBy").GetString());
     }
 }
 
@@ -1099,7 +1113,7 @@ public partial class SalesDeferredTests
 
         // the unmatched candidate did NOT close anything — invoice open amount unchanged
         var recon = await GetAsync("/api/v1/ar-reconciliation", Sales);
-        var row = recon.GetProperty("data").EnumerateArray()
+        var row = recon.GetProperty("data").GetProperty("rows").EnumerateArray()
             .First(r => r.GetProperty("docId").GetString() == invoiceId);
         Assert.Equal(total, row.GetProperty("openAmount").GetDecimal());
         Assert.Equal("Resolved", row.GetProperty("status").GetString());
@@ -1114,11 +1128,12 @@ public partial class SalesDeferredTests
     }
 
     // 25 (056 AC1-2): recon view shows doc/finance ref/currency/open/as-of and never marks
-    // an invoice settled unless finance state (approved credits) brought the open to zero
+    // an invoice settled unless finance state (approved credits) brought the open to zero.
+    // Adjustments carry pinned tax, so expectations are computed from the actual totals.
     [Fact]
     public async Task Ar_Reconciliation_Marks_State_Explicitly()
     {
-        var (invoiceId, total) = await SeedPostedInvoice(2m, 50m);
+        var (invoiceId, invoiceTotal) = await SeedPostedInvoice(2m, 50m);
         var adj = await PostAsync("/api/v1/adjustments", new
         {
             kind = "Credit", invoiceId, reason = "partial credit",
@@ -1126,27 +1141,160 @@ public partial class SalesDeferredTests
         }, Sales);
         var adjId = (await Json(adj)).GetProperty("data").GetProperty("id").GetString()!;
         Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/adjustments/{adjId}/approvals", new { }, Fin)).StatusCode);
+        var adjustments = await GetAsync($"/api/v1/adjustments?invoiceId={invoiceId}", Sales);
+        var adjTotal = adjustments.GetProperty("data").EnumerateArray()
+            .First(a => a.GetProperty("id").GetString() == adjId).GetProperty("total").GetDecimal();
 
         var recon = await GetAsync("/api/v1/ar-reconciliation", Sales);
-        var row = recon.GetProperty("data").EnumerateArray()
+        var row = recon.GetProperty("data").GetProperty("rows").EnumerateArray()
             .First(r => r.GetProperty("docId").GetString() == invoiceId);
-        Assert.Equal(30m, row.GetProperty("openAmount").GetDecimal()); // 100 − 20 credit
+        Assert.Equal(invoiceTotal - adjTotal, row.GetProperty("openAmount").GetDecimal());
         Assert.Equal("BDT", row.GetProperty("currency").GetString());
         Assert.StartsWith("J-", row.GetProperty("financeRef").GetString()!);
         Assert.Equal("Resolved", row.GetProperty("status").GetString()); // open > 0, journal present
 
-        // a fully credited invoice reads Settled (finance said so), never by candidates
+        // a fully credited invoice reads Settled (finance said so), never by candidates —
+        // the remaining open is 92.00 net 80.00 at the 15% rate
         var adj2 = await PostAsync("/api/v1/adjustments", new
         {
-            kind = "Credit", invoiceId, reason = "full credit",
-            lines = new[] { new { itemSku = Tag("SKU"), qty = 1m, unitPrice = 30m } },
+            kind = "Credit", invoiceId, reason = "remaining credit",
+            lines = new[] { new { itemSku = Tag("SKU"), qty = 1m, unitPrice = 80m } },
         }, Sales);
         var adj2Id = (await Json(adj2)).GetProperty("data").GetProperty("id").GetString()!;
         Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/adjustments/{adj2Id}/approvals", new { }, Fin)).StatusCode);
         var after = await GetAsync("/api/v1/ar-reconciliation", Sales);
-        var settled = after.GetProperty("data").EnumerateArray()
+        var settled = after.GetProperty("data").GetProperty("rows").EnumerateArray()
             .First(r => r.GetProperty("docId").GetString() == invoiceId);
         Assert.Equal(0m, settled.GetProperty("openAmount").GetDecimal());
         Assert.Equal("Settled", settled.GetProperty("status").GetString());
+    }
+}
+
+// ==== S9 rebates + commission boundary (063/064) ====
+
+public partial class SalesDeferredTests
+{
+    private async Task<(string agreementId, string invoiceId, decimal invoiceTotal)> SeedRebateFlow()
+    {
+        var (invoiceId, invoiceTotal) = await SeedPostedInvoice(10m, 100m); // 1000 net + tax
+        var customerId = (await GetInvoice(invoiceId)).GetProperty("customerId").GetString()!;
+        var agreement = await PostAsync("/api/v1/rebate-agreements", new
+        {
+            customerId, basis = "net_sales", ratePct = 5m, accrualPeriod = "Monthly", validFrom = Today.AddDays(-1),
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, agreement.StatusCode);
+        var agreementId = (await Json(agreement)).GetProperty("data").GetProperty("id").GetString()!;
+        return (agreementId, invoiceId, invoiceTotal);
+    }
+
+    // 26 (063 AC1): accrual calculation identifies eligible transactions + agreement version
+    [Fact]
+    public async Task Rebate_Accrual_Identifies_Eligible_Transactions()
+    {
+        var (agreementId, invoiceId, invoiceTotal) = await SeedRebateFlow();
+        var period = $"{Today:yyyy-MM}";
+        var accrual = await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals", new { period }, Sales);
+        Assert.Equal(HttpStatusCode.Created, accrual.StatusCode);
+        var data = (await Json(accrual)).GetProperty("data");
+        Assert.Contains(invoiceId, data.GetProperty("eligibleTxnIds").EnumerateArray().Select(i => i.GetString()));
+        Assert.Equal(invoiceTotal * 0.05m, data.GetProperty("accruedAmount").GetDecimal());
+        Assert.Equal(1, data.GetProperty("agreementVersion").GetInt32());
+
+        // settlement above the APPROVED accrual is refused until finance approves the accrual
+        var claim = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId, period, amount = data.GetProperty("accruedAmount").GetDecimal(),
+            eligibleTxnIds = new[] { invoiceId },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, claim.StatusCode);
+        Assert.Equal("REBATE_EXCEEDS_ACCRUAL", (await Json(claim)).GetProperty("error").GetProperty("code").GetString());
+
+        // maker-checker: R-FIN approves the accrual (rebates:settle)
+        var self = await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals/{period}/approvals", new { }, Sales);
+        Assert.Equal(HttpStatusCode.Forbidden, self.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals/{period}/approvals", new { }, Fin)).StatusCode);
+
+        var ok = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId, period, amount = data.GetProperty("accruedAmount").GetDecimal(),
+            eligibleTxnIds = new[] { invoiceId },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, ok.StatusCode);
+
+        // a claim above the approved accrued amount still refuses
+        var over = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId, period, amount = data.GetProperty("accruedAmount").GetDecimal() * 2,
+            eligibleTxnIds = new[] { invoiceId },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, over.StatusCode);
+        Assert.Equal("REBATE_EXCEEDS_ACCRUAL", (await Json(over)).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    // 27 (064 edge): invoice posting emits a commission event; a credit reversal emits a
+    // linked reversal event on the existing outbox
+    [Fact]
+    public async Task Commission_Events_Ride_The_Outbox_With_Reversal_Links()
+    {
+        var (invoiceId, _) = await SeedPostedInvoice(2m, 50m);
+        var outbox = await GetAsync("/api/v1/outbox", Admin);
+        var posted = outbox.GetProperty("data").EnumerateArray()
+            .Where(e => e.GetProperty("type").GetString() == "sales.commission.event")
+            .FirstOrDefault(e => e.GetProperty("payloadJson").GetString()!.Contains($"\"invoiceId\":\"{invoiceId}\""));
+        Assert.NotEqual(default, posted);
+
+        // reversal: approving a credit adjustment emits a linked reversal event
+        var adj = await PostAsync("/api/v1/adjustments", new
+        {
+            kind = "Credit", invoiceId, reason = "commission reversal probe",
+            lines = new[] { new { itemSku = Tag("SKU"), qty = 1m, unitPrice = 10m } },
+        }, Sales);
+        var adjId = (await Json(adj)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/adjustments/{adjId}/approvals", new { }, Fin)).StatusCode);
+
+        var after = await GetAsync("/api/v1/outbox", Admin);
+        var reversal = after.GetProperty("data").EnumerateArray()
+            .Where(e => e.GetProperty("type").GetString() == "sales.commission.reversed")
+            .FirstOrDefault(e => e.GetProperty("payloadJson").GetString()!.Contains($"\"invoiceId\":\"{invoiceId}\""));
+        Assert.NotEqual(default, reversal);
+        var payload = JsonDocument.Parse(reversal.GetProperty("payloadJson").GetString()!).RootElement;
+        Assert.Equal(invoiceId, payload.GetProperty("sourceInvoiceId").GetString());
+    }
+}
+
+// ==== S10 sales analytics (065) ====
+
+public partial class SalesDeferredTests
+{
+    // 28 (065 AC1-2): totals reconcile to included sources; unauthorized drill-through is 403
+    [Fact]
+    public async Task Analytics_Reconcile_And_Gate_Drill_Through()
+    {
+        var (invoiceId, invoiceTotal) = await SeedPostedInvoice(3m, 40m); // 120 net + tax
+        var customerId = (await GetInvoice(invoiceId)).GetProperty("customerId").GetString()!;
+
+        var billing = await GetAsync("/api/v1/sales-analytics?domain=billing&groupBy=customer", Sales);
+        var data = billing.GetProperty("data");
+        var row = data.GetProperty("rows").EnumerateArray()
+            .FirstOrDefault(r => r.GetProperty("groupKey").GetString() == customerId);
+        Assert.NotEqual(default, row);
+        // the posted invoice's total reconciles into the customer's billed row
+        Assert.True(row.GetProperty("total").GetDecimal() >= invoiceTotal);
+
+        // every row names its drill-through identifiers
+        Assert.NotEmpty(row.GetProperty("docIds").EnumerateArray().Select(i => i.GetString()));
+
+        // orders domain reconciles against the orders list
+        var soId = (await GetInvoice(invoiceId)).GetProperty("salesOrderId").GetString()!;
+        var ordersView = await GetAsync("/api/v1/sales-analytics?domain=orders&groupBy=status", Sales);
+        var ordersData = ordersView.GetProperty("data");
+        Assert.True(ordersData.GetProperty("rows").EnumerateArray().Any());
+
+        // drill-through without the domain permission returns no protected rows: R-FIN holds
+        // no crm:read → the crm domain refuses
+        Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync("/api/v1/sales-analytics?domain=crm", Fin));
+
+        // an unknown domain is a controlled validation error
+        Assert.Equal(HttpStatusCode.BadRequest, await GetStatusAsync("/api/v1/sales-analytics?domain=inventory", Sales));
     }
 }
