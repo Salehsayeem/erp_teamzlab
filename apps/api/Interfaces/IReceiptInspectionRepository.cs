@@ -15,6 +15,8 @@ public interface IReceiptInspectionRepository
     void AddInspection(ReceiptInspection inspection);
     ReceiptInspection? FindInspection(string id);
     List<ReceiptInspection> InspectionsForPo(string poId);
+    List<ReceiptInspection> InspectionsForReceipt(string receiptId);
+    List<SupplierReturn> ReturnsForReceipt(string receiptId);
     void AddReturn(SupplierReturn ret);
     List<SupplierReturn> ReturnsForPo(string poId);
     void AddClaim(SupplierClaim claim);

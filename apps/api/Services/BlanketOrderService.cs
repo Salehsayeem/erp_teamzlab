@@ -72,6 +72,12 @@ public sealed class BlanketOrderService(
         return (release, null, null);
     }
 
+    public object All() => blankets.All().Select(b => new
+    {
+        b.Id, b.SupplierId, b.Currency, b.CeilingAmount, b.ReleasedAmount, b.ValidFrom, b.ValidTo,
+        b.Status, b.Version, b.CreatedBy, b.CreatedAt, remaining = b.CeilingAmount - b.ReleasedAmount,
+    }).ToList();
+
     public object? Detail(string id)
     {
         var order = blankets.Find(id);

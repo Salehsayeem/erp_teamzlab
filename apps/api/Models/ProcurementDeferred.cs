@@ -22,6 +22,8 @@ public enum InspectionStatus { Pending, Accepted, Partial, Rejected }
 public enum ClaimStatus { Open, Closed }
 public enum ClaimKind { Replacement, Credit }
 public enum ScreeningOutcome { Clear, PossibleMatch, Unknown }
+public enum ScreeningDisposition { ConfirmedClear, FalsePositive, ConfirmedMatch }
+public enum ResponseReviewDecision { Approved, Returned }
 public enum ScorecardStatus { Rated, NotRated }
 
 // ---------- P1: requisitions (011–019) ----------

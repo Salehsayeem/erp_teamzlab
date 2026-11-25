@@ -58,6 +58,12 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPurchaseOrderChangeService, PurchaseOrderChangeService>();
         services.AddScoped<IBlanketOrderService, BlanketOrderService>();
         services.AddScoped<IReceiptInspectionService, ReceiptInspectionService>();
+        services.AddScoped<ISupplierQualificationRepository, SupplierQualificationRepository>();
+        services.AddScoped<ISupplierScorecardsRepository, SupplierScorecardsRepository>();
+        services.AddScoped<IProcurementAnalyticsRepository, ProcurementAnalyticsRepository>();
+        services.AddScoped<ISupplierQualificationService, SupplierQualificationService>();
+        services.AddScoped<ISupplierScorecardsService, SupplierScorecardsService>();
+        services.AddScoped<IProcurementAnalyticsService, ProcurementAnalyticsService>();
         services.AddScoped<IBomService, BomService>();
         services.AddScoped<IProductionOrderService, ProductionOrderService>();
         services.AddScoped<ICustomerService, CustomerService>();

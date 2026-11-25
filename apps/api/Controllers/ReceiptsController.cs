@@ -25,6 +25,14 @@ public sealed class ReceiptsController(IReceiptService receipts, IReceiptInspect
 
     // -------- deferred PROCUREMENT wave: inspection workspace (058, Q-P7 SoD) --------
 
+    // deferred PROCUREMENT wave: receipt workspace detail (inspection/returns tabs)
+    [HttpGet("{id}")]
+    public IResult Detail(string id)
+    {
+        var detail = inspections.ReceiptDetail(id);
+        return detail is null ? Envelope.Fail("RECEIPT_NOT_FOUND", "Receipt not found.", 404) : Envelope.Ok<object>(detail);
+    }
+
     [HttpPost("{id}/inspections")]
     public IResult CreateInspection(string id, CreateInspectionRequest request)
     {

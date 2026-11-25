@@ -214,6 +214,27 @@ public sealed class ReceiptInspectionService(
         };
     }
 
+    // receipt-workspace detail: the receipt, its inspection lots and its returns + the PO balances
+    public object? ReceiptDetail(string receiptId)
+    {
+        var receipt = receipts.FindReceipt(receiptId);
+        if (receipt is null) return null;
+        return new
+        {
+            receipt = new { receipt.Id, receipt.PurchaseOrderId, receipt.ItemSku, receipt.Qty, receipt.ReceivedAt, receipt.ReceivedBy },
+            inspections = receipts.InspectionsForReceipt(receiptId).Select(i => new
+            {
+                i.Id, i.ItemSku, i.QtyReceived, i.QtyAccepted, i.QtyRejected, i.Status,
+                i.DefectCode, i.EvidenceRef, i.DispositionedBy, i.DispositionedAt, i.CreatedBy, i.CreatedAt,
+            }).ToList(),
+            returns = receipts.ReturnsForReceipt(receiptId).Select(r => new
+            {
+                r.Id, r.ItemSku, r.Qty, r.Reason, r.Kind, r.CreatedBy, r.CreatedAt,
+            }).ToList(),
+            balances = Balances(receipt.PurchaseOrderId),
+        };
+    }
+
     private decimal AcceptedFor(string poId, string itemSku)
     {
         var received = receipts.ReceiptsForPo(poId).Where(r => r.ItemSku == itemSku).Sum(r => r.Qty);

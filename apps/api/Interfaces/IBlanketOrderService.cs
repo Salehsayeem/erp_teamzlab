@@ -8,5 +8,6 @@ public interface IBlanketOrderService
 {
     (BlanketOrder? Order, string? Code, string? Message) Create(CurrentUser u, string? supplierId, string? currency, decimal ceilingAmount, DateOnly validFrom, DateOnly validTo);
     (BlanketRelease? Release, string? Code, string? Message) Release(CurrentUser u, string blanketOrderId, decimal amount, string? poId);
+    object All();
     object? Detail(string id);
 }

@@ -48,9 +48,15 @@ public sealed class ReceiptInspectionRepository(ErpDbContext db, EntityContext e
 
     public List<ReceiptInspection> InspectionsForPo(string poId) => InspectionsScoped().Where(i => i.PoId == poId).ToList();
 
+    public List<ReceiptInspection> InspectionsForReceipt(string receiptId) =>
+        InspectionsScoped().Where(i => i.ReceiptId == receiptId).OrderBy(i => i.Id).ToList();
+
     public void AddReturn(SupplierReturn ret) => db.SupplierReturns.Add(ret);
 
     public List<SupplierReturn> ReturnsForPo(string poId) => ReturnsScoped().Where(r => r.PoId == poId).ToList();
+
+    public List<SupplierReturn> ReturnsForReceipt(string receiptId) =>
+        ReturnsScoped().Where(r => r.ReceiptId == receiptId).OrderBy(r => r.Id).ToList();
 
     public void AddClaim(SupplierClaim claim) => db.SupplierClaims.Add(claim);
 

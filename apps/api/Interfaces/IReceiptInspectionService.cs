@@ -16,4 +16,5 @@ public interface IReceiptInspectionService
     (SupplierClaim? Claim, string? Code, string? Message) CreateClaim(CurrentUser u, string? receiptId, string? poId, ClaimKind kind, decimal? amount);
     (SupplierClaim? Claim, string? Code, string? Message) CloseClaim(CurrentUser actor, string claimId, string? outcomeCode, string? reconciliationStatus);
     object? Balances(string orderId);
+    object? ReceiptDetail(string receiptId);
 }

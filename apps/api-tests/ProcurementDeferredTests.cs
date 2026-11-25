@@ -558,6 +558,20 @@ public class ProcurementDeferredTests : IClassFixture<TestApiFactory>
         var liveDetail = await GetAsync($"/api/v1/blanket-orders/{liveId}", Proc);
         Assert.Equal(30m, liveDetail.GetProperty("releasedAmount").GetDecimal()); // old releases intact
         Assert.Single(liveDetail.GetProperty("releases").EnumerateArray());
+
+        // list read for the workspace page
+        var list = await GetAsync("/api/v1/blanket-orders", Proc);
+        Assert.Contains(list.EnumerateArray(), b => b.GetProperty("id").GetString() == liveId);
+    }
+
+    [Fact]
+    public async Task Receipt_detail_carries_inspections_and_returns()
+    {
+        var receiptId = await SeedReceipt("P4-detail", qty: 6m);
+        var detail = await GetAsync($"/api/v1/receipts/{receiptId}", Proc);
+        Assert.Equal(receiptId, detail.GetProperty("receipt").GetProperty("id").GetString());
+        Assert.Empty(detail.GetProperty("inspections").EnumerateArray());
+        Assert.NotNull(detail.GetProperty("balances"));
     }
 
     // ==================== P4: receipt workspace (055–059) ====================
@@ -702,6 +716,208 @@ public class ProcurementDeferredTests : IClassFixture<TestApiFactory>
             new { orderVersion = 99, state = "Sent" }, Proc);
         Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
         Assert.Equal("PO_ORDER_VERSION_CONFLICT", ErrorCode(await Json(stale)));
+    }
+
+    // ==================== P5: supplier qualification + scorecards (040–044, 061–062) ====================
+
+    private async Task<string> SeedSupplierId(string tag) => await SeedSupplier(tag);
+
+    [Fact]
+    public async Task Expired_evidence_fails_gate_replacement_preserves_prior_041()
+    {
+        var supplierId = await SeedSupplierId("P5-041");
+        var expired = await PostForData($"/api/v1/suppliers/{supplierId}/evidences", new
+        {
+            evidenceType = "ISO9001", metadataJson = "{\"cert\":\"ISO-1\"}",
+            expiresOn = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
+        }, Proc);
+        Assert.Equal("ISO9001", expired.GetProperty("evidenceType").GetString());
+
+        var status = await GetAsync($"/api/v1/suppliers/{supplierId}/qualification", Proc);
+        Assert.False(status.GetProperty("eligible").GetBoolean()); // expired evidence fails the gate (041 AC2)
+        Assert.Contains(status.GetProperty("expiredEvidences").EnumerateArray(),
+            e => e.GetProperty("id").GetString() == expired.GetProperty("id").GetString());
+
+        // replacement preserves the prior version + its verification (041 AC3)
+        var replacement = await PostForData($"/api/v1/suppliers/{supplierId}/evidences", new
+        {
+            evidenceType = "ISO9001", metadataJson = "{\"cert\":\"ISO-2\"}",
+            expiresOn = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(365)),
+            supersedesId = expired.GetProperty("id").GetString(),
+        }, Proc);
+        Assert.Equal(expired.GetProperty("id").GetString(), replacement.GetProperty("supersedesId").GetString());
+
+        var evidences = await GetAsync($"/api/v1/suppliers/{supplierId}/evidences", Proc);
+        var prior = evidences.EnumerateArray().First(e => e.GetProperty("id").GetString() == expired.GetProperty("id").GetString());
+        Assert.Equal(Proc, prior.GetProperty("verifiedBy").GetString()); // prior row intact with verification
+        Assert.Equal(2, evidences.EnumerateArray().Count());
+
+        var after = await GetAsync($"/api/v1/suppliers/{supplierId}/qualification", Proc);
+        Assert.True(after.GetProperty("eligible").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Screening_possible_match_queued_outage_unknown_043()
+    {
+        var supplierId = await SeedSupplierId("P5-043");
+        var match = await PostForData($"/api/v1/suppliers/{supplierId}/screenings", new
+        {
+            source = "Watchlist", sourceRef = "WL-77",
+        }, Proc);
+        Assert.Equal("PossibleMatch", match.GetProperty("outcome").GetString());
+        Assert.Equal("PendingDisposition", match.GetProperty("status").GetString()); // queued, never auto-confirmed
+
+        // an acting human disposes it (043 AC2) — the stub never confirms on its own
+        var disposed = await PostForData($"/api/v1/screenings/{match.GetProperty("id").GetString()!}/dispositions",
+            new { disposition = "FalsePositive", reason = "different entity, same name" }, Qc);
+        Assert.Equal("FalsePositive", disposed.GetProperty("disposition").GetString());
+
+        var outage = await PostForData($"/api/v1/suppliers/{supplierId}/screenings", new
+        {
+            source = "UNAVAILABLE-SIM", sourceRef = "X-1",
+        }, Proc);
+        Assert.Equal("Unknown", outage.GetProperty("outcome").GetString()); // fail/hold policy: outage → unknown
+    }
+
+    [Fact]
+    public async Task Questionnaire_response_pins_version_and_reviewer_returns_with_comments_040()
+    {
+        var supplierId = await SeedSupplierId("P5-040");
+        var qnr = await PostForData("/api/v1/supplier-questionnaires", new
+        {
+            name = "Onboarding v1",
+            questions = new[] { new { code = "Q1", prompt = "Factory address?", required = true, conditional = false, conditionalOnCode = (string?)null } },
+        }, Proc);
+        Assert.Equal(1, qnr.GetProperty("version").GetInt32());
+
+        var response = await PostForData($"/api/v1/suppliers/{supplierId}/questionnaire-responses", new
+        {
+            questionnaireId = qnr.GetProperty("id").GetString()!, answersJson = "{\"Q1\":\"Dhaka\"}",
+        }, Proc);
+        Assert.Equal(1, response.GetProperty("questionnaireVersion").GetInt32()); // version pinned (040 AC1)
+
+        var returned = await PostForData($"/api/v1/questionnaire-responses/{response.GetProperty("id").GetString()!}/reviews", new
+        {
+            reviewDecision = "Returned", fieldCommentsJson = "{\"Q1\":\"needs the street address\"}",
+        }, Fin);
+        Assert.Equal("Returned", returned.GetProperty("reviewDecision").GetString());
+        Assert.Contains("street", returned.GetProperty("fieldCommentsJson").GetString());
+
+        // a fresh response: returning WITHOUT field-level comments is rejected (040 AC3)
+        var fresh = await PostForData($"/api/v1/suppliers/{supplierId}/questionnaire-responses", new
+        {
+            questionnaireId = qnr.GetProperty("id").GetString()!, answersJson = "{\"Q1\":\"Dhaka\"}",
+        }, Proc);
+        var noComments = await PostAsync($"/api/v1/questionnaire-responses/{fresh.GetProperty("id").GetString()!}/reviews",
+            new { reviewDecision = "Returned" }, Fin);
+        Assert.Equal(HttpStatusCode.BadRequest, noComments.StatusCode);
+        Assert.Equal("VALIDATION_ERROR", ErrorCode(await Json(noComments)));
+    }
+
+    [Fact]
+    public async Task Observation_dispute_retains_original_with_actor_history_061()
+    {
+        var supplierId = await SeedSupplierId("P5-061");
+        var observation = await PostForData($"/api/v1/suppliers/{supplierId}/observations", new
+        {
+            metric = "OnTimeDelivery", value = 72m, period = "2026-Q3", source = "erp",
+        }, Proc);
+        Assert.Equal(72m, observation.GetProperty("value").GetDecimal());
+
+        var disputed = await PostForData($"/api/v1/observations/{observation.GetProperty("id").GetString()!}/disputes", new
+        {
+            reason = "excludes the port-strike week", amendedValue = 91m,
+        }, Fin);
+        Assert.Equal(72m, disputed.GetProperty("value").GetDecimal()); // original retained
+        Assert.Equal(91m, disputed.GetProperty("amendedValue").GetDecimal());
+        Assert.Equal(Fin, disputed.GetProperty("disputedBy").GetString());
+    }
+
+    [Fact]
+    public async Task Scorecard_insufficient_volume_not_rated_closure_needs_reviewer_outcome_062()
+    {
+        var supplierId = await SeedSupplierId("P5-062");
+        var from = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(-1));
+        var to = DateOnly.FromDateTime(DateTime.UtcNow);
+        var scorecard = await PostForData("/api/v1/supplier-scorecards", new { supplierId, periodFrom = from, periodTo = to }, Proc);
+        Assert.Equal("NotRated", scorecard.GetProperty("status").GetString()); // < 3 observations → not rated
+        Assert.Equal(1, scorecard.GetProperty("calcVersion").GetInt32());
+
+        var action = await PostForData($"/api/v1/scorecards/{scorecard.GetProperty("id").GetString()!}/corrective-actions", new
+        {
+            finding = "delivery variance", action = "weekly carrier review",
+        }, Proc);
+        Assert.Equal("Open", action.GetProperty("status").GetString());
+
+        var noOutcome = await PostAsync($"/api/v1/corrective-actions/{action.GetProperty("id").GetString()!}/closures", new { }, Proc);
+        Assert.Equal(HttpStatusCode.Forbidden, noOutcome.StatusCode); // closure is a reviewer act
+
+        var noOutcomeFin = await PostAsync($"/api/v1/corrective-actions/{action.GetProperty("id").GetString()!}/closures", new { }, Fin);
+        Assert.Equal(HttpStatusCode.BadRequest, noOutcomeFin.StatusCode); // reviewer without outcome → 400 (062 AC3)
+        Assert.Equal("REVIEW_OUTCOME_REQUIRED", ErrorCode(await Json(noOutcomeFin)));
+
+        var closed = await PostForData($"/api/v1/corrective-actions/{action.GetProperty("id").GetString()!}/closures",
+            new { outcome = "carrier switched, variance closed" }, Fin);
+        Assert.Equal("Closed", closed.GetProperty("status").GetString());
+        Assert.Equal(Fin, closed.GetProperty("closedBy").GetString());
+
+        // disclosures: metric summary + period + calc version exposed (062 AC1)
+        var detail = await GetAsync($"/api/v1/supplier-scorecards/{scorecard.GetProperty("id").GetString()!}", Proc);
+        Assert.Equal(from, DateOnly.Parse(detail.GetProperty("periodFrom").GetString()!));
+        Assert.Equal(1, detail.GetProperty("calcVersion").GetInt32());
+    }
+
+    // ==================== P6: spend & sourcing analytics (063) ====================
+
+    [Fact]
+    public async Task Spend_reconciles_to_filtered_detail_and_currencies_stay_separate_063()
+    {
+        // golden dataset: two approved POs on two suppliers
+        var supplierA = await SeedSupplier("P6-A");
+        var supplierB = await SeedSupplier("P6-B");
+        foreach (var (supplierId, qty, price) in new[] { (supplierA, 10m, 100m), (supplierB, 5m, 200m) })
+        {
+            var po = await PostForData("/api/v1/purchase-orders", new
+            {
+                supplierId, lines = new[] { new { itemSku = $"SKU-{supplierId}", description = "analytics", qty, unitPrice = price } },
+            }, Proc);
+            var poId = po.GetProperty("id").GetString()!;
+            await PostForData($"/api/v1/purchase-orders/{poId}/submit", new { }, Proc);
+            await PostForData($"/api/v1/purchase-orders/{poId}/approvals", new { reason = (string?)null }, Fin);
+        }
+
+        var from = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
+        var to = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(1));
+        var spend = await GetAsync($"/api/v1/procurement-analytics/spend?groupBy=supplier&from={from:yyyy-MM-dd}&to={to:yyyy-MM-dd}", Proc);
+        Assert.Equal("sum of qty × unitPrice over approved+ purchase orders in the window", spend.GetProperty("definition").GetString());
+        var rows = spend.GetProperty("rows").EnumerateArray().ToList();
+        Assert.Equal(1000m, rows.First(r => r.GetProperty("key").GetString() == supplierA).GetProperty("amount").GetDecimal());
+        Assert.Equal(1000m, rows.First(r => r.GetProperty("key").GetString() == supplierB).GetProperty("amount").GetDecimal());
+        // reconciles to the filtered detail: total == sum of rows (earlier tests' POs also fall in the window)
+        Assert.Equal(rows.Sum(r => r.GetProperty("amount").GetDecimal()), spend.GetProperty("total").GetDecimal());
+        Assert.True(spend.GetProperty("total").GetDecimal() >= 2000m);
+
+        // 063 edge: multi-currency demand lists unconverted amounts separately, never summed
+        await EnsureUom("EA", "Count", 0, isBase: true);
+        foreach (var currency in new[] { "BDT", "USD" })
+        {
+            var cat = await SeedCategory($"P6-{currency}");
+            var req = await PostForData("/api/v1/requisitions", new
+            {
+                purpose = $"demand {currency}", currency,
+                lines = new[] { new { categoryId = cat, description = "x", qty = 1m, unitPrice = 500m, unit = "EA", needBy = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(2)) } },
+            }, Proc);
+            await PostForData($"/api/v1/requisitions/{req.GetProperty("id").GetString()!}/submission", new { }, Proc);
+        }
+        var demand = await GetAsync("/api/v1/procurement-analytics/demand?groupBy=currency", Proc);
+        var demandRows = demand.GetProperty("rows").EnumerateArray().ToList();
+        Assert.Contains(demandRows, r => r.GetProperty("key").GetString() == "BDT"); // earlier tests' reqs, own bucket
+        Assert.Equal(500m, demandRows.First(r => r.GetProperty("key").GetString() == "USD").GetProperty("amount").GetDecimal());
+        Assert.DoesNotContain(demandRows, r => r.GetProperty("currency").GetString() == "USD" && r.GetProperty("amount").GetDecimal() != 500m); // separate unconverted rows
+
+        // sourcing metric exposes the frozen event count
+        var sourcing = await GetAsync("/api/v1/procurement-analytics/sourcing", Proc);
+        Assert.Equal(0, sourcing.GetProperty("rows").EnumerateArray().Count(s => s.GetProperty("key").GetString() == "Awarded" && s.GetProperty("count").GetInt32() < 0));
     }
 
     // ==================== negative-path authz sweep (QA Gate 2 pattern) ====================

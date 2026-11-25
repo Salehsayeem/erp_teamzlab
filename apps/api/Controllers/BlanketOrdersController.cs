@@ -9,6 +9,9 @@ namespace Erp.Api.Controllers;
 [Route("api/v1/blanket-orders")]
 public sealed class BlanketOrdersController(IBlanketOrderService blankets) : ControllerBase
 {
+    [HttpGet]
+    public IResult List() => Envelope.Ok<object>(blankets.All());
+
     [HttpGet("{id}")]
     public IResult Detail(string id)
     {
