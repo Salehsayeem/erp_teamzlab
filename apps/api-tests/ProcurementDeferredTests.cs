@@ -777,6 +777,9 @@ public class ProcurementDeferredTests : IClassFixture<TestApiFactory>
             source = "UNAVAILABLE-SIM", sourceRef = "X-1",
         }, Proc);
         Assert.Equal("Unknown", outage.GetProperty("outcome").GetString()); // fail/hold policy: outage → unknown
+
+        var list = await GetAsync($"/api/v1/suppliers/{supplierId}/screenings", Proc);
+        Assert.True(list.EnumerateArray().Count() >= 2);
     }
 
     [Fact]

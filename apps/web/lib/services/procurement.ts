@@ -553,3 +553,336 @@ export function addSupplierGate(
 export function procError(code: string, message: string, mapped: Record<string, string>, fallback: string): string {
   return mapped[code] ?? `${fallback}: ${message}`;
 }
+
+// ==================== deferred PROCUREMENT wave (P1-P6) ====================
+// camelCase mirrors of the wave's service projections (RequisitionService, ProcurementCatalogService,
+// PurchaseOrderChangeService, BlanketOrderService, ReceiptInspectionService, SupplierQualification-
+// Service, SupplierScorecardsService, ProcurementAnalyticsService).
+
+export type RequisitionStatus = "Draft" | "Submitted" | "Approved" | "Rejected" | "Returned" | "Cancelled";
+export type CategoryStatus = "Active" | "Deprecated";
+export type UomDimension = "Count" | "Length" | "Mass" | "Volume" | "Area" | "Time";
+export type PoChangeStatus = "Pending" | "Approved" | "Rejected";
+export type AckStatus = "Current" | "Superseded";
+export type BlanketStatus = "Active" | "Expired" | "Closed";
+export type DispatchState = "Sent" | "Failed" | "Unknown";
+export type AsnStatus = "Matched" | "Quarantined";
+export type InspectionStatus = "Pending" | "Accepted" | "Partial" | "Rejected";
+export type ClaimKind = "Replacement" | "Credit";
+export type ClaimStatus = "Open" | "Closed";
+export type ScreeningOutcome = "Clear" | "PossibleMatch" | "Unknown";
+export type ScorecardStatus = "Rated" | "NotRated";
+
+export type RequisitionLine = {
+  id: string; categoryId: string; description: string; qty: number; unitPrice: number;
+  unit: string; needBy: string; baseQty: number; baseUnit: string;
+};
+export type Requisition = {
+  id: string; purpose: string; status: RequisitionStatus; version: number; currency: string | null;
+  createdBy: string; createdAt: string; submittedBy: string | null; submittedAt: string | null;
+  ruleId: string | null; ruleVersion: number | null; approverRole: string | null;
+  exceptionCode: string | null; exceptionNarrative: string | null; exceptionEvidenceRef: string | null;
+  exceptionFlaggedAt: string | null;
+  lines: RequisitionLine[]; total: number;
+};
+export type RequisitionStep = {
+  id: string; stepNo: number; approverRole: string; decision: string | null; version: number;
+  decidedBy: string | null; onBehalfOfDelegatorId: string | null; decidedAt: string | null;
+  reason: string | null; ruleVersion: number | null;
+};
+export type RequisitionDecisionRow = {
+  decision: string; reason: string | null; actorId: string; onBehalfOfDelegatorId: string | null;
+  stepVersion: number; at: string;
+};
+export type RequisitionDetail = {
+  requisition: Requisition; lines: RequisitionLine[]; step: RequisitionStep | null;
+  decisions: RequisitionDecisionRow[];
+  budget: { txnId: string; amount: number; currency: string; status: string } | null;
+};
+
+export type ProcurementCategory = {
+  id: string; parentId: string | null; name: string; status: CategoryStatus;
+  effectiveFrom: string; effectiveTo: string | null; externalCode: string | null;
+  createdBy: string; createdAt: string;
+};
+export type UnitOfMeasure = {
+  id: string; code: string; name: string; dimension: UomDimension; precision: number;
+  isBase: boolean; createdBy: string; createdAt: string;
+};
+export type UomConversion = {
+  id: string; fromCode: string; toCode: string; factor: number;
+  effectiveFrom: string; effectiveTo: string | null; createdBy: string; createdAt: string;
+};
+export type PurchaseOrderDetail = {
+  id: string; supplierId: string; status: string; version: number; createdBy: string; createdAt: string;
+  approvedBy: string | null; approvedAt: string | null; rejectionReason: string | null;
+  lines: { id: string | null; itemSku: string; description: string; qty: number; unitPrice: number }[];
+  total: number;
+};
+export type PoChange = {
+  id: string; poId: string; changeNo: number; status: PoChangeStatus; rationale: string;
+  isMaterial: boolean; baseOrderVersion: number; requestedBy: string; requestedAt: string;
+  approvedBy: string | null; approvedAt: string | null;
+};
+export type PoAck = {
+  id: string; poId: string; orderVersion: number; supplierId: string; status: AckStatus;
+  hasDiscrepancy: boolean; receivedBy: string; receivedAt: string; late: boolean;
+};
+export type BlanketOrder = {
+  id: string; supplierId: string; currency: string; ceilingAmount: number; releasedAmount: number;
+  validFrom: string; validTo: string; status: BlanketStatus; version: number;
+  createdBy: string; createdAt: string; remaining: number;
+};
+export type BlanketOrderDetail = BlanketOrder & {
+  releases: { id: string; amount: number; poId: string | null; releasedBy: string; releasedAt: string }[];
+};
+export type DispatchRow = {
+  id: string; poId: string; orderVersion: number; state: DispatchState;
+  detail: string | null; sentBy: string; sentAt: string;
+};
+export type AsnLine = { id: string; itemSku: string; qty: number; quarantined: boolean; quarantineReason: string | null };
+export type Asn = {
+  id: string; poId: string; orderVersion: number; shipmentRef: string; status: AsnStatus;
+  receivedBy: string; receivedAt: string; lines: AsnLine[];
+};
+export type ReceiptRow = {
+  id: string; purchaseOrderId: string; itemSku: string; qty: number; receivedAt: string; receivedBy: string;
+};
+export type InspectionRow = {
+  id: string; itemSku: string; qtyReceived: number; qtyAccepted: number; qtyRejected: number;
+  status: InspectionStatus; defectCode: string | null; evidenceRef: string | null;
+  dispositionedBy: string | null; dispositionedAt: string | null; createdBy: string; createdAt: string;
+};
+export type ReturnRow = { id: string; itemSku: string; qty: number; reason: string; kind: ClaimKind; createdBy: string; createdAt: string };
+export type Balances = {
+  orderId: string; ordered: number; received: number; rejected: number; accepted: number;
+  remaining: number; currency: string | null; calculatedAt: string; sourceVersion: number;
+};
+export type ReceiptDetail = {
+  receipt: ReceiptRow; inspections: InspectionRow[]; returns: ReturnRow[]; balances: Balances | null;
+};
+export type Questionnaire = { id: string; name: string; version: number; createdBy: string; createdAt: string };
+export type QuestionnaireResponseRow = {
+  id: string; supplierId: string; questionnaireId: string; questionnaireVersion: number;
+  answersJson: string; fieldCommentsJson: string | null; reviewDecision: string | null;
+  reviewedBy: string | null; reviewedAt: string | null; createdBy: string; createdAt: string;
+};
+export type Evidence = {
+  id: string; supplierId: string; evidenceType: string; metadataJson: string;
+  expiresOn: string | null; supersedesId: string | null; verifiedBy: string | null;
+  verifiedAt: string | null; createdBy: string; createdAt: string;
+};
+export type QualificationStatus = {
+  supplierId: string; eligible: boolean;
+  expiredEvidences: { id: string; evidenceType: string; expiresOn: string }[];
+  policyGrace: boolean | null; checkedAt: string;
+};
+export type ScreeningRow = {
+  id: string; supplierId: string; source: string; outcome: ScreeningOutcome; status: string;
+  sourceRef: string | null; disposition: string | null; dispositionBy: string | null;
+  dispositionAt: string | null; createdBy: string; createdAt: string;
+};
+export type Observation = {
+  id: string; supplierId: string; metric: string; value: number; period: string; source: string;
+  disputeReason: string | null; amendedValue: number | null; disputedBy: string | null;
+  disputedAt: string | null; createdBy: string; createdAt: string;
+};
+export type RiskProfile = {
+  supplierId: string; score: number; band: string; disposition: string; ruleVersion: number;
+  stale: boolean; sources: string; computedAt: string;
+};
+export type Scorecard = {
+  id: string; supplierId: string; periodFrom: string; periodTo: string; status: ScorecardStatus;
+  calcVersion: number; metrics: Record<string, { definition: string; count: number; mean: number; disputed: boolean }> | null;
+  supplierResponse: string | null; createdBy: string; createdAt: string;
+};
+export type CorrectiveAction = {
+  id: string; scorecardId: string; finding: string; action: string; status: string;
+  outcome: string | null; closedBy: string | null; closedAt: string | null; createdBy: string; createdAt: string;
+};
+export type AnalyticsMetric = {
+  metric: string; groupBy: string; definition: string; from: string | null; to: string | null;
+  total: number | null; rows: { key: string; amount?: number; count?: number; currency?: string | null }[];
+};
+
+const enc = encodeURIComponent;
+
+// --- P1 requisitions ---
+export function fetchRequisitions(token: string, status?: string) {
+  return apiFetch<Requisition[]>(`/api/v1/requisitions${status ? `?status=${enc(status)}` : ""}`, { token });
+}
+export function fetchRequisitionDetail(token: string, id: string) {
+  return apiFetch<RequisitionDetail>(`/api/v1/requisitions/${enc(id)}`, { token });
+}
+export function createRequisition(token: string, body: { purpose: string; currency: string; lines: { categoryId: string; description: string; qty: number; unitPrice: number; unit: string; needBy: string }[] }) {
+  return apiFetch<Requisition>("/api/v1/requisitions", { method: "POST", body, token });
+}
+export function submitRequisition(token: string, id: string, overrideReason?: string | null) {
+  return apiFetch<Requisition>(`/api/v1/requisitions/${enc(id)}/submission`, { method: "POST", body: { overrideReason: overrideReason ?? null }, token });
+}
+export function decideRequisition(token: string, id: string, body: { decision: string; version: number; reason?: string | null }) {
+  return apiFetch<Requisition>(`/api/v1/requisitions/${enc(id)}/decisions`, { method: "POST", body, token });
+}
+export function flagRequisitionException(token: string, id: string, body: { reasonCode: string; narrative: string; evidenceRef?: string | null }) {
+  return apiFetch<Requisition>(`/api/v1/requisitions/${enc(id)}/exceptions`, { method: "POST", body, token });
+}
+export function createApprovalDelegation(token: string, body: { delegateId: string; from: string; to: string; maxAmount?: number | null; categoryId?: string | null; reason: string }) {
+  return apiFetch<{ id: string }>("/api/v1/approval-delegations", { method: "POST", body, token });
+}
+
+// --- P2 taxonomy + units ---
+export function fetchCategories(token: string) {
+  return apiFetch<ProcurementCategory[]>("/api/v1/procurement-categories", { token });
+}
+export function createCategory(token: string, body: { name: string; parentId?: string | null; externalCode?: string | null }) {
+  return apiFetch<ProcurementCategory>("/api/v1/procurement-categories", { method: "POST", body, token });
+}
+export function updateCategory(token: string, id: string, body: { name?: string | null; parentId?: string | null; externalCode?: string | null }) {
+  return apiFetch<ProcurementCategory>(`/api/v1/procurement-categories/${enc(id)}`, { method: "POST", body, token });
+}
+export function deprecateCategory(token: string, id: string) {
+  return apiFetch<ProcurementCategory>(`/api/v1/procurement-categories/${enc(id)}/deprecations`, { method: "POST", body: {}, token });
+}
+export function fetchUnits(token: string) {
+  return apiFetch<UnitOfMeasure[]>("/api/v1/unit-of-measures", { token });
+}
+export function createUom(token: string, body: { code: string; name: string; dimension: UomDimension; precision: number; isBase: boolean }) {
+  return apiFetch<UnitOfMeasure>("/api/v1/unit-of-measures", { method: "POST", body, token });
+}
+export function createConversion(token: string, code: string, body: { toCode: string; factor: number; effectiveFrom: string; effectiveTo?: string | null }) {
+  return apiFetch<UomConversion>(`/api/v1/unit-of-measures/${enc(code)}/conversions`, { method: "POST", body, token });
+}
+
+// --- P3 change control + acks + blanket orders ---
+export function fetchPoDetail(token: string, poId: string) {
+  return apiFetch<PurchaseOrderDetail>(`/api/v1/purchase-orders/${enc(poId)}`, { token });
+}
+export function fetchPoChanges(token: string, poId: string) {
+  return apiFetch<PoChange[]>(`/api/v1/purchase-orders/${enc(poId)}/changes`, { token });
+}
+export function createPoChange(token: string, poId: string, body: { rationale: string; supplierId?: string | null; lines: { itemSku: string; qty?: number | null; unitPrice?: number | null }[] }) {
+  return apiFetch<PoChange>(`/api/v1/purchase-orders/${enc(poId)}/changes`, { method: "POST", body, token });
+}
+export function decidePoChange(token: string, poId: string, changeId: string, approve: boolean) {
+  return apiFetch<PoChange>(`/api/v1/purchase-orders/${enc(poId)}/changes/${enc(changeId)}/decisions`, { method: "POST", body: { approve }, token });
+}
+export function createPoAck(token: string, poId: string, body: { supplierId: string; orderVersion: number; lines: { itemSku: string; status: string }[] }) {
+  return apiFetch<PoAck>(`/api/v1/purchase-orders/${enc(poId)}/acknowledgements`, { method: "POST", body, token });
+}
+export function sendDispatch(token: string, poId: string, body: { orderVersion: number; state: DispatchState; detail?: string | null }) {
+  return apiFetch<DispatchRow>(`/api/v1/purchase-orders/${enc(poId)}/dispatches`, { method: "POST", body, token });
+}
+export function fetchBlanketOrders(token: string) {
+  return apiFetch<BlanketOrder[]>("/api/v1/blanket-orders", { token });
+}
+export function fetchBlanketOrder(token: string, id: string) {
+  return apiFetch<BlanketOrderDetail>(`/api/v1/blanket-orders/${enc(id)}`, { token });
+}
+export function createBlanketOrder(token: string, body: { supplierId: string; currency: string; ceilingAmount: number; validFrom: string; validTo: string }) {
+  return apiFetch<BlanketOrder>("/api/v1/blanket-orders", { method: "POST", body, token });
+}
+export function createBlanketRelease(token: string, id: string, body: { amount: number; poId?: string | null }) {
+  return apiFetch<{ id: string; amount: number }>(`/api/v1/blanket-orders/${enc(id)}/releases`, { method: "POST", body, token });
+}
+
+// --- P4 receipt workspace ---
+export function fetchReceipts(token: string) {
+  return apiFetch<ReceiptRow[]>("/api/v1/receipts", { token });
+}
+export function fetchReceiptDetail(token: string, id: string) {
+  return apiFetch<ReceiptDetail>(`/api/v1/receipts/${enc(id)}`, { token });
+}
+export function fetchAsns(token: string, status?: string) {
+  return apiFetch<Asn[]>(`/api/v1/advance-ship-notices${status ? `?status=${enc(status)}` : ""}`, { token });
+}
+export function intakeAsn(token: string, body: { poId: string; shipmentRef: string; orderVersion: number; lines: { itemSku: string; qty: number }[] }) {
+  return apiFetch<Asn>("/api/v1/advance-ship-notices", { method: "POST", body, token });
+}
+export function createInspection(token: string, receiptId: string, body: { itemSku: string; qtyReceived: number }) {
+  return apiFetch<InspectionRow>(`/api/v1/receipts/${enc(receiptId)}/inspections`, { method: "POST", body, token });
+}
+export function disposeInspection(token: string, receiptId: string, inspectionId: string, body: { status: InspectionStatus; qtyAccepted: number; qtyRejected: number; defectCode?: string | null; evidenceRef?: string | null }) {
+  return apiFetch<InspectionRow>(`/api/v1/receipts/${enc(receiptId)}/inspections/${enc(inspectionId)}/dispositions`, { method: "POST", body, token });
+}
+export function createSupplierReturn(token: string, body: { receiptId: string; poId: string; itemSku: string; qty: number; reason: string; kind: ClaimKind }) {
+  return apiFetch<ReturnRow>("/api/v1/supplier-returns", { method: "POST", body, token });
+}
+export function createSupplierClaim(token: string, body: { receiptId?: string | null; poId: string; kind: ClaimKind; amount?: number | null }) {
+  return apiFetch<{ id: string; status: ClaimStatus }>("/api/v1/supplier-claims", { method: "POST", body, token });
+}
+export function closeSupplierClaim(token: string, id: string, body: { outcomeCode: string; reconciliationStatus: string }) {
+  return apiFetch<{ id: string; status: ClaimStatus }>(`/api/v1/supplier-claims/${enc(id)}/closures`, { method: "POST", body, token });
+}
+export function fetchBalances(token: string, orderId: string) {
+  return apiFetch<Balances>(`/api/v1/procurement-balances?orderId=${enc(orderId)}`, { token });
+}
+
+// --- P5 qualification + scorecards ---
+export function createQuestionnaire(token: string, body: { name: string; questions: { code: string; prompt: string; required: boolean; conditional: boolean; conditionalOnCode?: string | null }[] }) {
+  return apiFetch<Questionnaire>("/api/v1/supplier-questionnaires", { method: "POST", body, token });
+}
+export function createQuestionnaireResponse(token: string, supplierId: string, body: { questionnaireId: string; answersJson: string }) {
+  return apiFetch<QuestionnaireResponseRow>(`/api/v1/suppliers/${enc(supplierId)}/questionnaire-responses`, { method: "POST", body, token });
+}
+export function reviewQuestionnaireResponse(token: string, id: string, body: { reviewDecision: string; fieldCommentsJson?: string | null }) {
+  return apiFetch<QuestionnaireResponseRow>(`/api/v1/questionnaire-responses/${enc(id)}/reviews`, { method: "POST", body, token });
+}
+export function fetchQualification(token: string, supplierId: string) {
+  return apiFetch<QualificationStatus>(`/api/v1/suppliers/${enc(supplierId)}/qualification`, { token });
+}
+export function fetchEvidences(token: string, supplierId: string) {
+  return apiFetch<Evidence[]>(`/api/v1/suppliers/${enc(supplierId)}/evidences`, { token });
+}
+export function createEvidence(token: string, supplierId: string, body: { evidenceType: string; metadataJson: string; expiresOn?: string | null; supersedesId?: string | null }) {
+  return apiFetch<Evidence>(`/api/v1/suppliers/${enc(supplierId)}/evidences`, { method: "POST", body, token });
+}
+export function fetchRiskProfile(token: string, supplierId: string) {
+  return apiFetch<RiskProfile>(`/api/v1/suppliers/${enc(supplierId)}/risk-profile`, { token });
+}
+export function createScreening(token: string, supplierId: string, body: { source: string; sourceRef?: string | null }) {
+  return apiFetch<ScreeningRow>(`/api/v1/suppliers/${enc(supplierId)}/screenings`, { method: "POST", body, token });
+}
+export function fetchScreeningsBySupplier(token: string, supplierId: string) {
+  return apiFetch<ScreeningRow[]>(`/api/v1/suppliers/${enc(supplierId)}/screenings`, { token });
+}
+export function disposeScreening(token: string, id: string, body: { disposition: string; reason: string }) {
+  return apiFetch<ScreeningRow>(`/api/v1/screenings/${enc(id)}/dispositions`, { method: "POST", body, token });
+}
+export function createObservation(token: string, supplierId: string, body: { metric: string; value: number; period: string; source: string }) {
+  return apiFetch<Observation>(`/api/v1/suppliers/${enc(supplierId)}/observations`, { method: "POST", body, token });
+}
+export function disputeObservation(token: string, id: string, body: { reason: string; amendedValue: number }) {
+  return apiFetch<Observation>(`/api/v1/observations/${enc(id)}/disputes`, { method: "POST", body, token });
+}
+export function fetchScorecards(token: string, supplierId: string) {
+  return apiFetch<Scorecard[]>(`/api/v1/suppliers/${enc(supplierId)}/scorecards`, { token });
+}
+export function fetchScorecard(token: string, id: string) {
+  return apiFetch<Scorecard>(`/api/v1/supplier-scorecards/${enc(id)}`, { token });
+}
+export function createScorecard(token: string, body: { supplierId: string; periodFrom: string; periodTo: string }) {
+  return apiFetch<Scorecard>("/api/v1/supplier-scorecards", { method: "POST", body, token });
+}
+export function addScorecardSupplierResponse(token: string, id: string, response: string) {
+  return apiFetch<Scorecard>(`/api/v1/supplier-scorecards/${enc(id)}/supplier-responses`, { method: "POST", body: { response }, token });
+}
+export function createCorrectiveAction(token: string, scorecardId: string, body: { finding: string; action: string }) {
+  return apiFetch<CorrectiveAction>(`/api/v1/scorecards/${enc(scorecardId)}/corrective-actions`, { method: "POST", body, token });
+}
+export function closeCorrectiveAction(token: string, id: string, outcome: string) {
+  return apiFetch<CorrectiveAction>(`/api/v1/corrective-actions/${enc(id)}/closures`, { method: "POST", body: { outcome }, token });
+}
+
+// --- P6 analytics ---
+export function fetchSpend(token: string, groupBy: string, from?: string | null, to?: string | null) {
+  const q = new URLSearchParams({ groupBy });
+  if (from) q.set("from", from);
+  if (to) q.set("to", to);
+  return apiFetch<AnalyticsMetric>(`/api/v1/procurement-analytics/spend?${q.toString()}`, { token });
+}
+export function fetchDemand(token: string) {
+  return apiFetch<AnalyticsMetric>("/api/v1/procurement-analytics/demand?groupBy=currency", { token });
+}
+export function fetchSourcingAnalytics(token: string) {
+  return apiFetch<AnalyticsMetric>("/api/v1/procurement-analytics/sourcing", { token });
+}

@@ -21,6 +21,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { Badge, Button, EmptyState, ErrorState, Input, LoadingSkeleton, Select, Table } from "@/components/uikit";
 import type { Column } from "@/components/uikit";
 import { GATE_SEVERITY_TONES, hasPerm, SUPPLIER_STATUS_TONES, isoDate, statusLabel } from "../../_lib/ui";
+import QualificationSection from "./_sections/qualification";
 
 type Phase = "loading" | "error" | "success";
 type GateForm = { gateCode: string; severity: GateSeverity; effectiveFrom: string; effectiveTo: string; evidenceRef: string };
@@ -217,6 +218,8 @@ export default function SupplierDetailPage() {
       {statusError ? <p className="banner" role="alert">{statusError}</p> : null}
       {gateError ? <p className="banner" role="alert">{gateError}</p> : null}
       {exceptionError ? <p className="banner" role="alert">{exceptionError}</p> : null}
+
+      <QualificationSection supplierId={supplierId} />
 
       <section className="card">
         <h2 className="t-title">{d.identity.title}</h2>

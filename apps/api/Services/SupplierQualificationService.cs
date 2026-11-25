@@ -119,6 +119,8 @@ public sealed class SupplierQualificationService(
         };
     }
 
+    public List<ScreeningResult> ScreeningsFor(string supplierId) => qualification.ScreeningsFor(supplierId).Select(s => s).ToList();
+
     public (ScreeningResult? Screening, string? Code, string? Message) CreateScreening(
         CurrentUser u, string supplierId, string? source, string? sourceRef)
     {

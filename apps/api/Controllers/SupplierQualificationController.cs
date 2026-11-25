@@ -42,6 +42,9 @@ public sealed class SupplierQualificationController(ISupplierQualificationServic
     [HttpGet("suppliers/{id}/risk-profile")]
     public IResult RiskProfile(string id) => Envelope.Ok<object>(qualification.RiskProfile(id));
 
+    [HttpGet("suppliers/{id}/screenings")]
+    public IResult Screenings(string id) => Envelope.Ok<object>(qualification.ScreeningsFor(id));
+
     [HttpPost("suppliers/{id}/screenings")]
     public IResult CreateScreening(string id, AddScreeningRequest request) => Idem.Wrap(HttpContext, request, () =>
     {

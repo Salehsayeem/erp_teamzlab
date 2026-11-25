@@ -14,6 +14,7 @@ public interface ISupplierQualificationService
     object Evidences(string supplierId);
     object Qualification(string supplierId);
     (ScreeningResult? Screening, string? Code, string? Message) CreateScreening(CurrentUser u, string supplierId, string? source, string? sourceRef);
+    List<ScreeningResult> ScreeningsFor(string supplierId);
     (ScreeningResult? Screening, string? Code, string? Message) DisposeScreening(CurrentUser actor, string screeningId, string? disposition, string? reason);
     (SupplierObservation? Observation, string? Code, string? Message) CreateObservation(CurrentUser u, string supplierId, string? metric, decimal value, string? period, string? source);
     (SupplierObservation? Observation, string? Code, string? Message) DisputeObservation(CurrentUser actor, string observationId, string? reason, decimal? amendedValue);
