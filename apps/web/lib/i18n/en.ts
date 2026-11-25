@@ -1848,6 +1848,7 @@ export const en = {
     ITEM_NOT_FOUND: "That item is not a line of this purchase order.",
     RECEIPT_ERROR: "Receipts require an approved or sent purchase order.",
     OVER_RECEIVE: "The received quantity exceeds the ordered quantity.",
+    ASSET_EVENT_ALREADY_APPROVED: "That asset event has already been approved.",
     // finance / accounting
     ACCOUNT_NOT_FOUND: "The account was not found.",
     ACCOUNT_NOT_POSTABLE: "That account is not open for posting.",

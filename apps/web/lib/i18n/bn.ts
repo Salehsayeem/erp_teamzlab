@@ -1849,6 +1849,7 @@ export const bn: Dict = {
     ITEM_NOT_FOUND: "ওই আইটেমটি এই ক্রয়াদেশের লাইন নয়।",
     RECEIPT_ERROR: "গ্রহণের জন্য অনুমোদিত বা প্রেরিত ক্রয়াদেশ দরকার।",
     OVER_RECEIVE: "গৃহীত পরিমাণ ক্রয়াদেশের পরিমাণ ছাড়িয়ে গেছে।",
+    ASSET_EVENT_ALREADY_APPROVED: "এই সম্পত্তি ইভেন্টটি ইতিমধ্যে অনুমোদিত হয়ে গেছে।",
     // finance / accounting
     ACCOUNT_NOT_FOUND: "হিসাবটি পাওয়া যায়নি।",
     ACCOUNT_NOT_POSTABLE: "ওই হিসাবটি পোস্টিংয়ের জন্য খোলা নেই।",
