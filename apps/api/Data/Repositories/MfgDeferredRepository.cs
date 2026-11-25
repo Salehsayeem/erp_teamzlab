@@ -122,6 +122,8 @@ public sealed class MfgDeferredRepository(ErpDbContext db, EntityContext ec) : I
     }
     public SchedulePublication? FindPublication(string scheduleRunId) =>
         Sc<SchedulePublication>().FirstOrDefault(p => p.ScheduleRunId == scheduleRunId);
+    public List<SchedulePublication> AllPublications() =>
+        Sc<SchedulePublication>().OrderByDescending(p => p.At).ToList();
 
     // ---- MF4 ----
     public void AddMrpRun(MrpRun run) => db.MrpRuns.Add(run);

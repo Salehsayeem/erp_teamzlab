@@ -48,7 +48,7 @@ public record SubcontractReceiptRequest(int RoutingOperationSeq, decimal Qty, st
 // ---- MF7 ----
 public record MaintenanceEventRequest(string SourceEventId, int Revision, string ResourceCode, string? AssetId,
     DateTimeOffset WindowStart, DateTimeOffset WindowEnd, string? Reason);
-public record MaintenanceResolutionRequest(string ScheduleRunId, string OrderId, string WorkCenterId,
+public record MaintenanceResolutionRequest(string OutageEventId, string ScheduleRunId, string OrderId, string WorkCenterId,
     string Disposition, string? Reason); // rescheduled | planner_exception
 
 // ---- MF8 ----

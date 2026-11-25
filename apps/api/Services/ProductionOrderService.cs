@@ -196,6 +196,25 @@ public sealed class ProductionOrderService(
         // MF2 (028 AC3): when the entity policy requires finite scheduling, the order must carry
         // a PUBLISHED finite schedule run — an infinite-mode published plan is rejected here
         var routingId = order.PlannedRoutingRevisionId;
+        var releasedRoutingId = ResolveEffectiveRouting(order.OutputSku) ?? routingId;
+
+        // MF6 (050 AC1): subcontract operations must carry valid supplier/service config at
+        // release — a blocked supplier blocks release without an exception path
+        foreach (var op in db.RoutingOperations
+                     .Where(o => o.TenantId == ec.TenantId && o.LegalEntityId == ec.EntityId
+                         && o.RoutingRevisionId == releasedRoutingId && o.Kind == OperationKind.Subcontract)
+                     .ToList())
+        {
+            if (string.IsNullOrWhiteSpace(op.ServiceDescription))
+                prerequisites.Add(("SUBCONTRACT_SERVICE_MISSING", $"subcontract operation {op.OperationCode} (seq {op.Seq}) has no service description"));
+            var supplier = db.Suppliers.FirstOrDefault(s => s.Id == op.SupplierId
+                && s.TenantId == ec.TenantId && s.LegalEntityId == ec.EntityId);
+            if (supplier is null)
+                prerequisites.Add(("SUBCONTRACT_SUPPLIER_MISSING", $"subcontract operation {op.OperationCode} references unknown supplier {op.SupplierId}"));
+            else if (supplier.Status != SupplierLifecycleStatus.Active)
+                prerequisites.Add(("SUBCONTRACT_SUPPLIER_BLOCKED",
+                    $"subcontract operation {op.OperationCode}: supplier {supplier.Name} is {supplier.Status} — release blocked (050)"));
+        }
         if (FiniteScheduleRequired())
         {
             var publishedRun = (from pub in db.SchedulePublications
@@ -221,9 +240,6 @@ public sealed class ProductionOrderService(
         // create is shown as an explicit planned-vs-released delta
         var revisionChanged = revision!.Id != order.PlannedBomRevisionId;
         var plannedRevision = order.PlannedBomRevisionId is { } pid ? mfg.FindBom(pid) : null;
-
-        // MF1 (024 AC3): passing release ALSO freezes the routing revision resolved now
-        var releasedRoutingId = ResolveEffectiveRouting(order.OutputSku) ?? routingId;
 
         var ownsTx = db.Database.CurrentTransaction is null;
         using var tx = ownsTx ? db.Database.BeginTransaction() : null;
@@ -372,6 +388,23 @@ public sealed class ProductionOrderService(
         if (Guards.CheckPositive(request.Qty, "Qty") is { } qtyError) return (null, "VALIDATION_ERROR", qtyError);
         var (revision, lines, code, message) = ReportingScope(order);
         if (code is not null) return (null, code, message);
+
+        // MF6 (052 AC3): completion cannot exceed the ACCEPTED returned quantity when the order
+        // carries subcontract operations — quality-gated receipts only count once accepted
+        var completionRoutingId = order.ReleasedRoutingRevisionId ?? order.PlannedRoutingRevisionId;
+        var hasSubcontractOps = completionRoutingId is not null && db.RoutingOperations.Any(o =>
+            o.TenantId == ec.TenantId && o.LegalEntityId == ec.EntityId
+            && o.RoutingRevisionId == completionRoutingId && o.Kind == OperationKind.Subcontract);
+        if (hasSubcontractOps)
+        {
+            var acceptedTotal = db.SubcontractReceipts
+                .Where(r => r.TenantId == ec.TenantId && r.LegalEntityId == ec.EntityId && r.OrderId == order.Id)
+                .Sum(r => r.AcceptedQty);
+            if (order.CompletedQty + request.Qty > acceptedTotal)
+                return (null, "SUBCONTRACT_ACCEPTANCE_SHORT",
+                    $"Completion of {request.Qty} would take completed to {order.CompletedQty + request.Qty} but only " +
+                    $"{acceptedTotal} units were accepted back from the subcontractor (052 AC3).");
+        }
 
         var periodError = GuardPeriod();
         if (periodError is not null) return (null, periodError.Value.Code, periodError.Value.Message);

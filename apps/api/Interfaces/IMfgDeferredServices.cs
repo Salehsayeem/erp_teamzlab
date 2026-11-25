@@ -53,11 +53,16 @@ public interface IMrpService
 
 public interface IShopFloorService
 {
+    object LaborEntries(string orderId);
+    object CounterEvents(string orderId);
+    object DowntimeEvents(string orderId);
+    object WipTransfers(string orderId);
+    object Corrections();
     (object data, string? code, string? message) ReportLabor(CurrentUser user, string orderId, Dtos.LaborTimeRequest request);
     (object data, string? code, string? message) ApproveLabor(CurrentUser approver, string orderId, string entryId);
     (object data, string? code, string? message) ReportCounter(CurrentUser user, string orderId, Dtos.CounterEventRequest request);
     (object data, string? code, string? message) ReportDowntime(CurrentUser user, string orderId, Dtos.DowntimeEventRequest request);
-    object WipProjection(string orderId);
+    (object data, string? code, string? message) WipProjection(string orderId);
     (object data, string? code, string? message) TransferWip(CurrentUser user, string orderId, Dtos.WipTransferRequest request);
     (object data, string? code, string? message) ProposeCorrection(CurrentUser user, Dtos.CorrectionRequest request);
     (object data, string? code, string? message) ApproveCorrection(CurrentUser approver, string correctionId, Dtos.CorrectionApprovalRequest request);
@@ -68,13 +73,14 @@ public interface ISubcontractService
     (object data, string? code, string? message) AddOperation(CurrentUser user, string routingId, Dtos.AddSubcontractOperationRequest request);
     (object data, string? code, string? message) RecordCustody(CurrentUser user, Dtos.CustodyRequest request);
     object Custodies(string orderId);
+    object Receipts(string orderId);
     (object data, string? code, string? message) Receive(CurrentUser user, string orderId, Dtos.SubcontractReceiptRequest request);
 }
 
 public interface IMaintenanceService
 {
     (object data, string? code, string? message) Ingest(CurrentUser user, Dtos.MaintenanceEventRequest request);
-    object Impacts(string outageEventId);
+    (object data, string? code, string? message) Impacts(string outageEventId);
     (object data, string? code, string? message) ResolveImpact(CurrentUser user, Dtos.MaintenanceResolutionRequest request);
 }
 

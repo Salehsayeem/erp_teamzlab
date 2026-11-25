@@ -49,6 +49,7 @@ public interface IMfgDeferredRepository
     void ResolveConflict(ConflictReport conflict, string resolvedBy, DateTimeOffset at);
     bool AddPublication(SchedulePublication publication); // false when the run is already published
     SchedulePublication? FindPublication(string scheduleRunId);
+    List<SchedulePublication> AllPublications();
 
     // MF4
     void AddMrpRun(MrpRun run);

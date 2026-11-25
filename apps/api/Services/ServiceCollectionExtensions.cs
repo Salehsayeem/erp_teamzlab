@@ -40,6 +40,10 @@ public static class ServiceCollectionExtensions
         // PROCUREMENT slice binds real requisitions (Q-MF1, brief §5b)
         services.AddScoped<IRequisitionSink, MfgRequisitionSinkStub>();
         services.AddScoped<IMrpService, MrpService>();
+        // Wave C (MF5-MF7): shop floor, subcontract, maintenance
+        services.AddScoped<IShopFloorService, ShopFloorService>();
+        services.AddScoped<ISubcontractService, SubcontractService>();
+        services.AddScoped<IMaintenanceService, MaintenanceService>();
         services.AddScoped<IAssetsRepository, AssetsRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
         services.AddScoped<IFiscalPeriodRepository, FiscalPeriodRepository>();
