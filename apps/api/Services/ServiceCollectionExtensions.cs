@@ -44,6 +44,10 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IShopFloorService, ShopFloorService>();
         services.AddScoped<ISubcontractService, SubcontractService>();
         services.AddScoped<IMaintenanceService, MaintenanceService>();
+        // Wave D (MF8/MF9): quality plans/inspections/holds/NCR/CAPA — R-QC consumed, never seeded
+        services.AddScoped<IQualityService, QualityService>();
+        // Wave E (MF10): genealogy, rework, close reconciliation + variance ledger
+        services.AddScoped<IGenealogyService, GenealogyService>();
         services.AddScoped<IAssetsRepository, AssetsRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
         services.AddScoped<IFiscalPeriodRepository, FiscalPeriodRepository>();

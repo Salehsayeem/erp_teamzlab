@@ -123,7 +123,7 @@ public interface IGenealogyService
     (object data, string? code, string? message) LinkReinspection(CurrentUser user, string reworkId, Dtos.ReworkReinspectionRequest request);
     (object data, string? code, string? message) CompleteRework(CurrentUser user, string reworkId);
     object ListRework();
-    object CloseReconciliation(string orderId);
+    (object data, string? code, string? message) CloseReconciliation(string orderId);
     (object data, string? code, string? message) DisposeVariance(CurrentUser user, string orderId, Dtos.VarianceDispositionRequest request);
     (object data, string? code, string? message) DecideVariance(CurrentUser user, string varianceId, Dtos.VarianceDecisionRequest request);
 }

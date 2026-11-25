@@ -389,6 +389,17 @@ public sealed class ProductionOrderService(
         var (revision, lines, code, message) = ReportingScope(order);
         if (code is not null) return (null, code, message);
 
+        // MF10 (065 AC2): lot-controlled items (mfg.lot_controlled_skus profile) cannot complete
+        // a transformation event without the mandatory lot/serial identity
+        var controlled = db.FinanceSettings
+            .Where(s => s.TenantId == ec.TenantId && s.LegalEntityId == ec.EntityId && s.Key == "mfg.lot_controlled_skus")
+            .OrderBy(s => s.Id).FirstOrDefault()?.Value;
+        var lotControlled = controlled?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Contains(order.OutputSku) == true;
+        if (lotControlled && string.IsNullOrWhiteSpace(request.LotSerial))
+            return (null, "LOT_IDENTITY_REQUIRED",
+                $"{order.OutputSku} is lot-controlled — a lot/serial identity is mandatory for completion (065 AC2).");
+
         // MF6 (052 AC3): completion cannot exceed the ACCEPTED returned quantity when the order
         // carries subcontract operations — quality-gated receipts only count once accepted
         var completionRoutingId = order.ReleasedRoutingRevisionId ?? order.PlannedRoutingRevisionId;
@@ -463,6 +474,17 @@ public sealed class ProductionOrderService(
             request.Qty, request.Note, completionJournal.Id, user.Id, DateTimeOffset.UtcNow);
         mfg.AddCompletion(completion);
         mfg.SetOrderCompletedQty(order, order.CompletedQty + request.Qty);
+
+        // MF10 (064, Q-MF4): the transformation event is emitted forward-only with the completion —
+        // immutable inputs (net issues) → output quantity (+ lot identity), one event per completion
+        var netInputs = lines
+            .Select(l => (sku: l.ComponentSku, qty: mfg.IssuesFor(orderId)
+                .Where(i => i.ComponentSku == l.ComponentSku).Sum(i => i.Kind == MovementKind.Issue ? i.Qty : -i.Qty)))
+            .Where(i => i.qty > 0)
+            .Select(i => new { itemSku = i.sku, qty = i.qty }).ToList();
+        db.TransformationEvents.Add(new TransformationEvent(numbers.Next("txp"), ec.TenantId, ec.EntityId,
+            orderId, completionId, order.OutputSku, request.Qty, request.LotSerial,
+            System.Text.Json.JsonSerializer.Serialize(netInputs), user.Id, DateTimeOffset.UtcNow));
 
         // fix round 1 (F1.1): the completion RECEIPTS the output sku — the GL said inventory grew,
         // /stock must agree; the receipt commits with the same SaveChanges as the journal
@@ -608,6 +630,23 @@ public sealed class ProductionOrderService(
                 $"Only Completed orders can be closed (current: {order.Status}); walk the lifecycle first (007).");
 
         var (items, wipDebits, wipCredits, wipRemainder, _, wipItem) = Reconcile(order);
+
+        // MF10 (070 AC3): an unresolved CRITICAL variance blocks close absent an approved
+        // disposition (accepted/overridden by an officer other than the recorder)
+        var criticalVariances = db.VarianceLedger
+            .Where(v => v.TenantId == ec.TenantId && v.LegalEntityId == ec.EntityId
+                && v.OrderId == orderId && v.IsCritical && v.Disposition == "Open")
+            .OrderBy(v => v.BucketCode).ToList();
+        if (criticalVariances.Count > 0)
+            return (criticalVariances.Select(v => (object)new
+            {
+                code = $"variance:{v.BucketCode}",
+                detail = $"unresolved critical variance of {v.QtyVariance} (owner {v.Owner}, recorded {v.CreatedAt:u}) — accept or override before close",
+                qty = v.QtyVariance,
+            }).ToArray(),
+                "MFG_CLOSE_BLOCKED",
+                "Close blocked — unresolved critical variances: " +
+                string.Join("; ", criticalVariances.Select(v => v.BucketCode)));
 
         // 013 AC1: quantity reconciliation is a hard gate — every unreconciled quantity is named
         var quantityItems = items.Where(i => i.Code != "WIP_REMAINDER").ToList();

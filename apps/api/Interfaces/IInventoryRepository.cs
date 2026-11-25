@@ -21,6 +21,8 @@ public interface IInventoryRepository
     void AddAdjustment(StockAdjustment adjustment);
     decimal QtyAt(string locationId, string itemSku);
     decimal QtyOf(string itemSku);
+    // MF9 (059 AC2): open quality-hold quantity for the item — availability = QtyOf − HeldQtyFor
+    decimal HeldQtyFor(string itemSku);
     void ApplyStock(string warehouseId, string locationId, string itemSku, decimal delta);
     void DrawStock(string itemSku, decimal qty);
     void SetStockQty(StockLevel row, decimal qty);

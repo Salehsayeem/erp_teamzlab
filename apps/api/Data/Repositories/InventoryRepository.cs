@@ -74,6 +74,13 @@ public sealed class InventoryRepository(ErpDbContext db, EntityContext ec) : IIn
     public decimal QtyOf(string itemSku) =>
         StockScoped().Where(s => s.ItemSku == itemSku).Sum(s => (decimal?)s.QtyOnHand) ?? 0m;
 
+    // MF9 (059 AC2): availability honors open quality holds — single shared read for every
+    // inventory availability surface
+    public decimal HeldQtyFor(string itemSku) =>
+        db.QualityHolds.Where(h => h.TenantId == ec.TenantId && h.LegalEntityId == ec.EntityId
+                && h.ItemSku == itemSku && h.Status == QualityHoldStatus.Open)
+            .Sum(h => (decimal?)h.Qty) ?? 0m;
+
     public void ApplyStock(string warehouseId, string locationId, string itemSku, decimal delta)
     {
         var row = StockScoped().FirstOrDefault(s => s.LocationId == locationId && s.ItemSku == itemSku);

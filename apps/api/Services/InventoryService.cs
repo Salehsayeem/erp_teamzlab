@@ -15,7 +15,9 @@ public sealed class InventoryService(
     {
         var wh = inventory.FindWarehouse(s.WarehouseId);
         var loc = inventory.FindLocation(s.LocationId);
-        return new { warehouseId = wh!.Id, warehouseCode = wh.Code, locationId = loc!.Id, locationCode = loc.Code, s.ItemSku, s.QtyOnHand };
+        return new { warehouseId = wh!.Id, warehouseCode = wh.Code, locationId = loc!.Id, locationCode = loc.Code,
+            s.ItemSku, s.QtyOnHand,
+            availableQty = s.QtyOnHand - inventory.HeldQtyFor(s.ItemSku) }; // MF9 059: holds reduce availability
     }).ToList();
 
     public object ListWarehouses() => inventory.AllWarehouses();
@@ -55,8 +57,9 @@ public sealed class InventoryService(
         var to = inventory.FindLocation(toLocationId);
         if (to is null) return (null, "LOCATION_NOT_FOUND", "Destination location not found.");
 
-        // ERP-INVENTORY-020: blocking policy — checked before either leg moves
-        var onHand = inventory.QtyAt(from.Id, itemSku);
+        // ERP-INVENTORY-020: blocking policy — checked before either leg moves; MF9 (059 AC2):
+        // open quality holds reduce what is transferable
+        var onHand = inventory.QtyAt(from.Id, itemSku) - inventory.HeldQtyFor(itemSku);
         if (onHand < qty)
             return (null, "INSUFFICIENT_STOCK", $"Insufficient stock for {itemSku} at {from.Code}: available {onHand}, requested {qty}.");
 
