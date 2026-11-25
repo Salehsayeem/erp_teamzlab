@@ -18,7 +18,7 @@ public sealed class SalesOrdersController(ISalesOrderService orders) : Controlle
         if (!u.Has("so:write")) return (Envelope.FailBody("FORBIDDEN", "so:write permission required."), 403);
         var lineErr = Guards.CheckLines(request.Lines);
         if (lineErr is not null) return (Envelope.FailBody("VALIDATION_ERROR", lineErr), 400);
-        var (so, code, error) = orders.Create(u, request.CustomerId, request.Lines);
+        var (so, code, error) = orders.Create(u, request.CustomerId, request.Lines, request.SourceQuoteRevisionId);
         return code is null ? (Envelope.OkBody(so!), 201) : (Envelope.FailBody(code, error!), ErrorStatus.StatusFor(code));
     });
 

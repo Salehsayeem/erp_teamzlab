@@ -3,7 +3,8 @@ namespace Erp.Api.Interfaces;
 public interface ISalesOrderService
 {
     object List();
-    (SalesOrder? order, string? code, string? message) Create(CurrentUser user, string customerId, IReadOnlyList<SoLine> lines);
+    // sourceQuoteRevisionId (030 AC1): the accepted quote revision stamped onto the generated order
+    (SalesOrder? order, string? code, string? message) Create(CurrentUser user, string customerId, IReadOnlyList<SoLine> lines, string? sourceQuoteRevisionId = null);
     (SalesOrder? order, string? code, string? message) Submit(CurrentUser user, string id);
     (SalesOrder? order, string? code, string? message) Approve(CurrentUser approver, string id, string? reason);
     (Shipment? shipment, Journal? journal, string? code, string? message) Ship(CurrentUser user, string id, string itemSku, decimal qty);

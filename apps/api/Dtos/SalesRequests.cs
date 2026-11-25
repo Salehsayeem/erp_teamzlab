@@ -4,7 +4,7 @@ using Erp.Api;
 
 public record CreateCustomerRequest(string Name, string TaxId, string Email,
     decimal? CreditLimit = null, int PaymentTermNetDays = 30, bool RemindersSuppressed = false);
-public record CreateSoRequest(string CustomerId, IReadOnlyList<SoLine> Lines);
+public record CreateSoRequest(string CustomerId, IReadOnlyList<SoLine> Lines, string? SourceQuoteRevisionId = null);
 public record ApproveSoRequest(string? Reason);
 public record ShipRequest(string ItemSku, decimal Qty);
 public record ReleaseCreditRequest();
@@ -34,3 +34,16 @@ public record ApproveAdjustmentRequest(string? Reason);
 public record LogReminderRequest(string InvoiceId, string Channel, string? TemplateVersion, string Recipient);
 public record CreateDisputeRequest(string InvoiceId, string Reason, DateOnly? PromiseDueDate);
 public record ResolveDisputeRequest(string Outcome);
+
+// --- deferred-screens wave: S1 quotes + S2 pricing ---
+
+public record CreateQuoteRequest(string CustomerId, string Currency, IReadOnlyList<QuoteLineRequest>? Lines, string? Terms = null, DateOnly? ExpiresAt = null);
+public record QuoteLineRequest(string ItemSku, decimal Qty, decimal? UnitPrice = null, decimal DiscountPct = 0);
+public record CreateQuoteRevisionRequest(IReadOnlyList<QuoteLineRequest>? Lines, string? Rationale = null, string? Terms = null, DateOnly? ExpiresAt = null);
+public record ApproveQuoteRevisionRequest(string? Reason = null);
+public record AcceptQuoteRequest(string Method, string? ExternalEventId = null, string? EvidenceRef = null);
+public record RevalidateQuoteRequest(DateOnly ExpiresAt, string Reason);
+
+public record CreatePriceBookRequest(string Name, string Currency, int Precedence);
+public record CreateBookEntryRequest(string ItemSku, decimal MinQty, decimal UnitPrice, DateOnly EffectiveFrom, DateOnly? EffectiveTo = null, string? Rule = null);
+public record CreateContractPriceRequest(string CustomerId, string ItemSku, decimal MinQty, decimal UnitPrice, DateOnly EffectiveFrom, DateOnly? EffectiveTo = null);

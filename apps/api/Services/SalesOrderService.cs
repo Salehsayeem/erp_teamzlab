@@ -7,7 +7,7 @@ namespace Erp.Api.Services;
 public sealed class SalesOrderService(
     ICustomerRepository customers, ISalesOrderRepository orders, IPurchaseOrderRepository costing,
     IInventoryRepository inventory, IJournalRepository journals, IInvoiceRepository invoiceDocs,
-    INumberSeries numbers, IAuditRepository audit, EntityContext ec, ErpDbContext db) : ISalesOrderService
+    INumberSeries numbers, IAuditRepository audit, IQuoteRepository quoteRevisions, EntityContext ec, ErpDbContext db) : ISalesOrderService
 {
     public object List() =>
         orders.All().Select(s => new
@@ -16,11 +16,22 @@ public sealed class SalesOrderService(
             total = s.Lines.Sum(l => decimal.Round(l.Qty * l.UnitPrice, 2, MidpointRounding.AwayFromZero)),
         }).ToList();
 
-    public (SalesOrder? order, string? code, string? message) Create(CurrentUser u, string customerId, IReadOnlyList<SoLine> lines)
+    public (SalesOrder? order, string? code, string? message) Create(CurrentUser u, string customerId, IReadOnlyList<SoLine> lines, string? sourceQuoteRevisionId = null)
     {
         if (!customers.Exists(customerId))
             return (null, "CUSTOMER_NOT_FOUND", "Customer does not exist.");
-        var so = new SalesOrder(numbers.Next("SO"), ec.TenantId, ec.EntityId, customerId, SoStatus.Draft, lines, u.Id, DateTimeOffset.UtcNow);
+        // 030 AC1: quote→order conversion — the referenced revision must exist and be Approved;
+        // its id is stamped immutably on the order (visible on the generated order)
+        if (sourceQuoteRevisionId is not null)
+        {
+            var revision = quoteRevisions.FindRevision(sourceQuoteRevisionId);
+            if (revision is null)
+                return (null, "QUOTE_REVISION_NOT_FOUND", "The referenced quote revision does not exist.");
+            if (revision.Status != QuoteRevisionStatus.Approved)
+                return (null, "QUOTE_STATE_ERROR", $"Only approved quote revisions convert to orders (current: {revision.Status}).");
+        }
+        var so = new SalesOrder(numbers.Next("SO"), ec.TenantId, ec.EntityId, customerId, SoStatus.Draft, lines, u.Id, DateTimeOffset.UtcNow,
+            sourceQuoteRevisionId: sourceQuoteRevisionId);
         orders.Add(so);
         audit.Log(u, "create", "sales_order", so.Id, $"SO created for customer {customerId} with {lines.Count} line(s)");
         orders.Save();
