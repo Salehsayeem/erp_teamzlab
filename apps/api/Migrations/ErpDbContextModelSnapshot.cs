@@ -16,7 +16,7 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
     // If you encounter a merge conflict in the line below, it means you need to
     // discard one of the migration branches and recreate its migrations on top of
     // the other branch. See https://aka.ms/efcore-docs-migrations-conflicts for more info.
-    public override string LastMigrationId => "20261124213000_AddFinInvoiceRead";
+    public override string LastMigrationId => "20261125063502_AddDepreciationPeriodUniqueIndex";
 
     protected override void BuildModel(ModelBuilder modelBuilder)
     {
@@ -330,6 +330,7 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .HasColumnName("from_location_id");
 
                 b.Property<string>("JournalId")
+                    .IsConcurrencyToken()
                     .IsRequired()
                     .HasColumnType("text")
                     .HasColumnName("journal_id");
@@ -1371,7 +1372,8 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
 
                 b.HasIndex("TenantId", "LegalEntityId");
 
-                b.HasIndex("TenantId", "LegalEntityId", "PeriodId");
+                b.HasIndex("TenantId", "LegalEntityId", "PeriodId")
+                    .IsUnique();
 
                 b.ToTable("depreciation_runs");
             });
@@ -3845,6 +3847,7 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .HasColumnName("location_id");
 
                 b.Property<int>("Status")
+                    .IsConcurrencyToken()
                     .HasColumnType("integer")
                     .HasColumnName("status");
 
