@@ -125,6 +125,8 @@ public sealed class MfgDeferredRepository(ErpDbContext db, EntityContext ec) : I
 
     // ---- MF4 ----
     public void AddMrpRun(MrpRun run) => db.MrpRuns.Add(run);
+    public void SetMrpRunSnapshot(MrpRun run, string snapshotJson) =>
+        Set(run, nameof(MrpRun.SnapshotJson), snapshotJson);
     public MrpRun? FindMrpRun(string runId) => Sc<MrpRun>().FirstOrDefault(r => r.Id == runId);
     public void SetMrpRunStatus(MrpRun run, MrpRunStatus status, string? failureDetail)
     {

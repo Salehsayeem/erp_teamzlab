@@ -36,6 +36,10 @@ public static class ServiceCollectionExtensions
         // (IRequisitionSink stub, Q-MF1) registers with the MF4 wave.
         services.AddScoped<IRoutingService, RoutingService>();
         services.AddScoped<ISchedulingService, SchedulingService>();
+        // Wave B (MF4): the buy-side MRP conversion target is the IRequisitionSink stub until the
+        // PROCUREMENT slice binds real requisitions (Q-MF1, brief §5b)
+        services.AddScoped<IRequisitionSink, MfgRequisitionSinkStub>();
+        services.AddScoped<IMrpService, MrpService>();
         services.AddScoped<IAssetsRepository, AssetsRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
         services.AddScoped<IFiscalPeriodRepository, FiscalPeriodRepository>();

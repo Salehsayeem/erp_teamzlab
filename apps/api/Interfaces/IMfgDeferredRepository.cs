@@ -52,6 +52,7 @@ public interface IMfgDeferredRepository
 
     // MF4
     void AddMrpRun(MrpRun run);
+    void SetMrpRunSnapshot(MrpRun run, string snapshotJson);
     MrpRun? FindMrpRun(string runId);
     void SetMrpRunStatus(MrpRun run, MrpRunStatus status, string? failureDetail);
     void AddMrpLine(MrpLine line);
