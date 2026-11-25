@@ -15,7 +15,8 @@ public record PoLine(string Id, string ItemSku, string Description, decimal Qty,
 public record PurchaseOrder(
     string Id, string TenantId, string LegalEntityId, string SupplierId, PoStatus Status,
     string CreatedBy, DateTimeOffset CreatedAt,
-    string? ApprovedBy = null, DateTimeOffset? ApprovedAt = null, string? RejectionReason = null)
+    string? ApprovedBy = null, DateTimeOffset? ApprovedAt = null, string? RejectionReason = null,
+    int Version = 1) // bumped on approved material change orders (052/053 ack version pin)
 {
     public List<PoLine> Lines { get; set; } = [];
     public PurchaseOrder(string id, string tenantId, string legalEntityId, string supplierId, PoStatus status,

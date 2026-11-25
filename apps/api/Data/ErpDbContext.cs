@@ -29,6 +29,33 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     public DbSet<ContractObligation> ContractObligations => Set<ContractObligation>();
     public DbSet<PurchaseOrder> PurchaseOrders => Set<PurchaseOrder>();
     public DbSet<Receipt> Receipts => Set<Receipt>();
+    // deferred PROCUREMENT wave (requisitions/taxonomy/change-control/blanket/receipt-workspace/qualification)
+    public DbSet<Requisition> Requisitions => Set<Requisition>();
+    public DbSet<ApprovalRule> ApprovalRules => Set<ApprovalRule>();
+    public DbSet<ApprovalStep> ApprovalSteps => Set<ApprovalStep>();
+    public DbSet<RequisitionDecision> RequisitionDecisions => Set<RequisitionDecision>();
+    public DbSet<BudgetReservation> BudgetReservations => Set<BudgetReservation>();
+    public DbSet<ApprovalDelegation> ApprovalDelegations => Set<ApprovalDelegation>();
+    public DbSet<ProcurementCategory> ProcurementCategories => Set<ProcurementCategory>();
+    public DbSet<UnitOfMeasure> UnitOfMeasures => Set<UnitOfMeasure>();
+    public DbSet<UomConversion> UomConversions => Set<UomConversion>();
+    public DbSet<PurchaseOrderChange> PurchaseOrderChanges => Set<PurchaseOrderChange>();
+    public DbSet<PurchaseOrderAcknowledgement> PurchaseOrderAcknowledgements => Set<PurchaseOrderAcknowledgement>();
+    public DbSet<BlanketOrder> BlanketOrders => Set<BlanketOrder>();
+    public DbSet<BlanketRelease> BlanketReleases => Set<BlanketRelease>();
+    public DbSet<Dispatch> Dispatches => Set<Dispatch>();
+    public DbSet<AdvanceShipNotice> AdvanceShipNotices => Set<AdvanceShipNotice>();
+    public DbSet<ReceiptInspection> ReceiptInspections => Set<ReceiptInspection>();
+    public DbSet<SupplierReturn> SupplierReturns => Set<SupplierReturn>();
+    public DbSet<SupplierClaim> SupplierClaims => Set<SupplierClaim>();
+    public DbSet<SupplierQuestionnaire> SupplierQuestionnaires => Set<SupplierQuestionnaire>();
+    public DbSet<QuestionnaireResponse> QuestionnaireResponses => Set<QuestionnaireResponse>();
+    public DbSet<SupplierEvidence> SupplierEvidences => Set<SupplierEvidence>();
+    public DbSet<SupplierRiskProfile> SupplierRiskProfiles => Set<SupplierRiskProfile>();
+    public DbSet<ScreeningResult> ScreeningResults => Set<ScreeningResult>();
+    public DbSet<SupplierObservation> SupplierObservations => Set<SupplierObservation>();
+    public DbSet<SupplierScorecard> SupplierScorecards => Set<SupplierScorecard>();
+    public DbSet<CorrectiveAction> CorrectiveActions => Set<CorrectiveAction>();
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<SalesOrder> SalesOrders => Set<SalesOrder>();
     public DbSet<Shipment> Shipments => Set<Shipment>();
@@ -134,6 +161,218 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PurchaseOrderId, x.ItemSku });
             e.HasIndex(x => x.PurchaseOrderId);
             e.HasOne<PurchaseOrder>().WithMany().HasForeignKey(x => x.PurchaseOrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // -------- deferred PROCUREMENT wave (tenant+entity on every table from day one, R14) --------
+        mb.Entity<Requisition>(e =>
+        {
+            e.ToTable("requisitions");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+            e.HasIndex(x => x.CreatedBy);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("requisition_lines");
+                l.WithOwner().HasForeignKey("RequisitionId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("RequisitionId", "LineNo");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("RequisitionId");
+                l.HasIndex("TenantId", "LegalEntityId");
+                l.HasIndex("CategoryId");
+            });
+        });
+        mb.Entity<ApprovalRule>(e =>
+        {
+            e.ToTable("approval_rules");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.IsActive });
+        });
+        mb.Entity<ApprovalStep>(e =>
+        {
+            e.ToTable("approval_steps");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.RequisitionId });
+            e.HasIndex(x => x.RequisitionId);
+        });
+        mb.Entity<RequisitionDecision>(e =>
+        {
+            e.ToTable("requisition_decisions");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.RequisitionId });
+        });
+        mb.Entity<BudgetReservation>(e =>
+        {
+            e.ToTable("budget_reservations");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.TxnId }).IsUnique();
+        });
+        mb.Entity<ApprovalDelegation>(e =>
+        {
+            e.ToTable("approval_delegations");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.DelegateId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.DelegatorId });
+        });
+        mb.Entity<ProcurementCategory>(e =>
+        {
+            e.ToTable("procurement_categories");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ParentId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+        });
+        mb.Entity<UnitOfMeasure>(e =>
+        {
+            e.ToTable("unit_of_measures");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+        });
+        mb.Entity<UomConversion>(e =>
+        {
+            e.ToTable("uom_conversions");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.FromCode });
+        });
+        mb.Entity<PurchaseOrderChange>(e =>
+        {
+            e.ToTable("purchase_order_changes");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PoId });
+            e.HasIndex(x => x.PoId);
+            e.HasOne<PurchaseOrder>().WithMany().HasForeignKey(x => x.PoId).OnDelete(DeleteBehavior.Restrict);
+        });
+        mb.Entity<PurchaseOrderAcknowledgement>(e =>
+        {
+            e.ToTable("purchase_order_acknowledgements");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PoId });
+            e.HasIndex(x => x.PoId);
+            e.HasOne<PurchaseOrder>().WithMany().HasForeignKey(x => x.PoId).OnDelete(DeleteBehavior.Restrict);
+        });
+        mb.Entity<BlanketOrder>(e =>
+        {
+            e.ToTable("blanket_orders");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SupplierId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+        });
+        mb.Entity<BlanketRelease>(e =>
+        {
+            e.ToTable("blanket_releases");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.BlanketOrderId });
+            e.HasIndex(x => x.BlanketOrderId);
+        });
+        mb.Entity<Dispatch>(e =>
+        {
+            e.ToTable("dispatches");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PoId });
+            e.HasIndex(x => x.PoId);
+            e.HasOne<PurchaseOrder>().WithMany().HasForeignKey(x => x.PoId).OnDelete(DeleteBehavior.Restrict);
+        });
+        mb.Entity<AdvanceShipNotice>(e =>
+        {
+            e.ToTable("advance_ship_notices");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PoId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+            e.HasIndex(x => x.PoId);
+            e.HasOne<PurchaseOrder>().WithMany().HasForeignKey(x => x.PoId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("advance_ship_notice_lines");
+                l.WithOwner().HasForeignKey("AsnId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("AsnId", "LineNo");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("AsnId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+        mb.Entity<ReceiptInspection>(e =>
+        {
+            e.ToTable("receipt_inspections");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ReceiptId });
+            e.HasIndex(x => x.ReceiptId);
+            e.HasIndex(x => x.PoId);
+            e.HasOne<Receipt>().WithMany().HasForeignKey(x => x.ReceiptId).OnDelete(DeleteBehavior.Restrict);
+        });
+        mb.Entity<SupplierReturn>(e =>
+        {
+            e.ToTable("supplier_returns");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ReceiptId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PoId });
+            e.HasIndex(x => x.ReceiptId);
+            e.HasOne<Receipt>().WithMany().HasForeignKey(x => x.ReceiptId).OnDelete(DeleteBehavior.Restrict);
+        });
+        mb.Entity<SupplierClaim>(e =>
+        {
+            e.ToTable("supplier_claims");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PoId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+        });
+        mb.Entity<SupplierQuestionnaire>(e =>
+        {
+            e.ToTable("supplier_questionnaires");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Name });
+        });
+        mb.Entity<QuestionnaireResponse>(e =>
+        {
+            e.ToTable("questionnaire_responses");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SupplierId });
+            e.HasIndex(x => x.SupplierId);
+            e.HasIndex(x => x.QuestionnaireId);
+        });
+        mb.Entity<SupplierEvidence>(e =>
+        {
+            e.ToTable("supplier_evidences");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SupplierId });
+            e.HasIndex(x => x.SupplierId);
+        });
+        mb.Entity<SupplierRiskProfile>(e =>
+        {
+            e.ToTable("risk_profiles");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SupplierId }).IsUnique();
+        });
+        mb.Entity<ScreeningResult>(e =>
+        {
+            e.ToTable("screening_results");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SupplierId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+            e.HasIndex(x => x.SupplierId);
+        });
+        mb.Entity<SupplierObservation>(e =>
+        {
+            e.ToTable("supplier_observations");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SupplierId });
+            e.HasIndex(x => x.SupplierId);
+        });
+        mb.Entity<SupplierScorecard>(e =>
+        {
+            e.ToTable("supplier_scorecards");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SupplierId });
+            e.HasIndex(x => x.SupplierId);
+        });
+        mb.Entity<CorrectiveAction>(e =>
+        {
+            e.ToTable("corrective_actions");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ScorecardId });
+            e.HasIndex(x => x.ScorecardId);
         });
 
         // task-6 sourcing/contract tables — tenant+entity scope on every table from day one (R14
@@ -948,7 +1187,11 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                      // PEOPLE deep prefixes (AddPeopleDeepSeed). doc_per is reserved: R-PEO3 collapsed
                      // the person entity into the worker register, so nothing consumes it today — the
                      // sequence stays so a later person split keeps its id-space
-                     "per", "wkr", "cmp", "tme", "tmc", "prn" })
+                     "per", "wkr", "cmp", "tme", "tmc", "prn",
+                     // deferred PROCUREMENT wave prefixes — doc_dsp/doc_scr from the brief's list are
+                     // OMITTED: they already exist (sales disputes / MFG scrap), so dispatches and
+                     // scorecards use deterministic natural ids instead
+                     "req", "rql", "cat", "uom", "bko", "blr", "asn", "ins", "rtn", "clm", "qnr", "evd", "obs" })
             mb.HasSequence<long>($"doc_{prefix}");
         mb.HasSequence<long>("doc_a", s => s.StartsAt(2));
     }
@@ -978,8 +1221,14 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             // posting, R-PEO9) — the row is the FULL surviving superset (merge lesson: UpdateData
             // replaces the whole permissions column, so AddPeopleDeepSeed must ship the union of
             // AddFinanceSeed + AddSalesDeepSeed + AddProcurementDeepSeed + payroll, never a delta)
-            new { Id = "R-PROC", Name = "procurement_officer", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer", "sourcing:read", "sourcing:write", "contracts:read", "contracts:write", "suppliers:read" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write" }, TenantId = t, LegalEntityId = le },
+            // deferred PROCUREMENT wave: the rows below are the FULL surviving union of the prior
+            // seed + this wave's additions (merge lesson: UpdateData replaces the whole column).
+            // R-PROC + requisitions/taxonomy/inspection/analytics; R-FIN + approval/review/
+            // override/analytics. R-PROC2 = second procurement officer for maker-checker tests
+            // (Q-S1); R-QC = quality authority for inspections/dispositions (Q-P7, MFG consumes it
+            // later and must never re-seed it — this row is the superset).
+            new { Id = "R-PROC", Name = "procurement_officer", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer", "sourcing:read", "sourcing:write", "contracts:read", "contracts:write", "suppliers:read", "requisitions:write", "requisitions:read", "catalog:write", "receipts:inspect", "analytics:read" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write", "requisitions:approve", "requisitions:read", "requisitions:override", "suppliers:review", "analytics:read" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write",
                     "so:approve",
                     "leads:read", "leads:write", "crm:read", "crm:write", "opps:read", "opps:write",
@@ -995,7 +1244,11 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             // PEOPLE deep (R-PEO9): R-HR is the maker — register/time/payroll:calculate plus the
             // correction-checker permission (time:approve, approver ≠ requester, 027). payroll:approve
             // stays with R-FIN, so the run's calculator and approver are different people by role.
-            new { Id = "R-HR", Name = "hr_officer", Permissions = new[] { "workers:read", "workers:write", "time:read", "time:write", "time:approve", "payroll:read", "payroll:calculate" }, TenantId = t, LegalEntityId = le });
+            new { Id = "R-HR", Name = "hr_officer", Permissions = new[] { "workers:read", "workers:write", "time:read", "time:write", "time:approve", "payroll:read", "payroll:calculate" }, TenantId = t, LegalEntityId = le },
+            // deferred PROCUREMENT wave (Q-S1/Q-P7): full-union copies — R-PROC2 mirrors R-PROC so
+            // maker-checker has two procurement officers; R-QC is the quality authority (MFG consumes)
+            new { Id = "R-PROC2", Name = "procurement_officer_2", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer", "sourcing:read", "sourcing:write", "contracts:read", "contracts:write", "suppliers:read", "requisitions:write", "requisitions:read", "catalog:write", "receipts:inspect", "analytics:read" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-QC", Name = "quality_officer", Permissions = new[] { "receipts:read", "receipts:inspect", "receipts:dispose", "suppliers:review", "analytics:read" }, TenantId = t, LegalEntityId = le });
 
         mb.Entity<User>().HasData(
             new { Id = "U-001", Email = "admin@teamzlab.dev", DisplayName = "Tenant Admin", Active = true, TenantId = t, LegalEntityId = le },
@@ -1005,7 +1258,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new { Id = "U-005", Email = "assets@teamzlab.dev", DisplayName = "Assets Officer", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-006", Email = "evaluator@teamzlab.dev", DisplayName = "Independent Evaluator", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-008", Email = "mfg@teamzlab.dev", DisplayName = "Manufacturing Officer", Active = true, TenantId = t, LegalEntityId = le },
-            new { Id = "U-007", Email = "hr@teamzlab.dev", DisplayName = "HR Officer", Active = true, TenantId = t, LegalEntityId = le });
+            new { Id = "U-007", Email = "hr@teamzlab.dev", DisplayName = "HR Officer", Active = true, TenantId = t, LegalEntityId = le },
+            new { Id = "U-009", Email = "procurve2@teamzlab.dev", DisplayName = "Procure Officer 2", Active = true, TenantId = t, LegalEntityId = le },
+            new { Id = "U-010", Email = "quality@teamzlab.dev", DisplayName = "Quality Officer", Active = true, TenantId = t, LegalEntityId = le });
 
         mb.Entity<Membership>().HasData(
             new Membership("U-001", t, le, "R-ADMIN"),
@@ -1015,7 +1270,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new Membership("U-005", t, le, "R-ASSETS"),
             new Membership("U-006", t, le, "R-EVAL"),
             new Membership("U-008", t, le, "R-MFG"),
-            new Membership("U-007", t, le, "R-HR"));
+            new Membership("U-007", t, le, "R-HR"),
+            new Membership("U-009", t, le, "R-PROC2"),
+            new Membership("U-010", t, le, "R-QC"));
 
         mb.Entity<AuditEvent>().HasData(new
         {
