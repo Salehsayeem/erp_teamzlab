@@ -1,10 +1,26 @@
 // Single API boundary — components never call fetch directly (CLAUDE.md services rule).
 
+import { getDictionary, type Locale } from "@/lib/i18n";
+
 export type ApiResult<T> = { ok: true; data: T } | { ok: false; code: string; message: string };
 
 type ApiOptions = { method?: string; body?: unknown; token?: string | null };
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:5000";
+
+// Locale for API error text. The app shell sets it during render (children render
+// after the shell body, so every fetch already sees the current locale); "en"
+// covers SSR/prerender where no fetch ever runs.
+let activeLocale: Locale = "en";
+export function setApiLocale(locale: Locale): void {
+  activeLocale = locale;
+}
+
+/** errors.<CODE> from the active dictionary; undefined → caller falls back to the API's English message. */
+function localizedError(code: string): string | undefined {
+  const table: Record<string, string> = getDictionary(activeLocale).errors;
+  return table[code];
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
@@ -16,12 +32,15 @@ function asString(v: unknown, fallback: string): string {
 
 /** Narrow the API envelope `{ success, data | error{code,message} }` from unknown JSON. */
 function parseEnvelope<T>(json: unknown, fallbackCode: string): ApiResult<T> {
+  const generic = localizedError("REQUEST_FAILED") ?? "Unexpected response from the server.";
   if (!isRecord(json) || typeof json.success !== "boolean") {
-    return { ok: false, code: fallbackCode, message: "Unexpected response from the server." };
+    return { ok: false, code: fallbackCode, message: localizedError(fallbackCode) ?? generic };
   }
   if (json.success) return { ok: true, data: json.data as T };
   const err = isRecord(json.error) ? json.error : {};
-  return { ok: false, code: asString(err.code, "ERROR"), message: asString(err.message, "Request failed.") };
+  const code = asString(err.code, "ERROR");
+  const apiMessage = asString(err.message, localizedError(code) ?? generic);
+  return { ok: false, code, message: localizedError(code) ?? apiMessage };
 }
 
 export async function apiFetch<T>(path: string, opts: ApiOptions = {}): Promise<ApiResult<T>> {
@@ -38,7 +57,7 @@ export async function apiFetch<T>(path: string, opts: ApiOptions = {}): Promise<
     const json: unknown = await res.json();
     return parseEnvelope<T>(json, `HTTP_${res.status}`);
   } catch {
-    return { ok: false, code: "NETWORK", message: "Network request failed." };
+    return { ok: false, code: "NETWORK", message: localizedError("NETWORK") ?? "Network request failed." };
   }
 }
 
