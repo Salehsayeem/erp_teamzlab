@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
+import { setApiLocale } from "@/lib/services/api";
 import { LocaleSwitch } from "@/components/locale-switch";
 import ThemeToggle from "@/components/theme-toggle";
 import UserMenu from "@/components/user-menu";
@@ -15,6 +16,9 @@ import AppSidebar from "@/components/app-sidebar";
 // content. Client component: owns the mobile drawer state.
 export default function AppShell({ locale, children }: { locale: string; children: ReactNode }) {
   const loc: Locale = isLocale(locale) ? locale : "en";
+  // During this render body — children render (and fetch) after it, so API error
+  // text is localized before any request can resolve. Idempotent, no re-render.
+  setApiLocale(loc);
   const dict = getDictionary(loc);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const pathname = usePathname();

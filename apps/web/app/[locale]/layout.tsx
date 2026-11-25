@@ -31,8 +31,9 @@ export default async function LocaleLayout({ children, params }: { children: Rea
   // SECURITY: the string is a compile-time constant with no interpolated/untrusted
   // content — nothing to sanitize, so dangerouslySetInnerHTML is safe here.
   const themeInit = `try{var t=localStorage.getItem("theme");if(t!=="light")document.documentElement.classList.add("dark");else document.documentElement.classList.remove("dark");}catch(e){document.documentElement.classList.add("dark");}`;
+  // bn renders RTL (ERP-I18N); every component uses logical CSS properties, so it mirrors.
   return (
-    <html lang={locale} dir="ltr">
+    <html lang={locale} dir={locale === "bn" ? "rtl" : "ltr"}>
       <body className={dmSans.className}>
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
         <AppShell locale={locale}>{children}</AppShell>
