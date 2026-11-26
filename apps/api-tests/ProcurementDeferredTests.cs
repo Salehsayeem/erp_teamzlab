@@ -869,6 +869,23 @@ public class ProcurementDeferredTests : IClassFixture<TestApiFactory>
         Assert.Equal(Fin, disputed.GetProperty("disputedBy").GetString());
     }
 
+    // filing a dispute (an amended value a reviewer may act on) is a suppliers:review act
+    [Fact]
+    public async Task Observation_dispute_requires_suppliers_review_403_061()
+    {
+        var supplierId = await SeedSupplierId("P5-061B");
+        var observation = await PostForData($"/api/v1/suppliers/{supplierId}/observations", new
+        {
+            metric = "OnTimeDelivery", value = 72m, period = "2026-Q3", source = "erp",
+        }, Proc);
+        var res = await PostAsync($"/api/v1/observations/{observation.GetProperty("id").GetString()!}/disputes", new
+        {
+            reason = "not a reviewer's dispute to file", amendedValue = 1m,
+        }, Eval);
+        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        Assert.Equal("FORBIDDEN", ErrorCode(await Json(res)));
+    }
+
     [Fact]
     public async Task Scorecard_insufficient_volume_not_rated_closure_needs_reviewer_outcome_062()
     {

@@ -80,10 +80,13 @@ public sealed class RebateService(
         if (!u.Has("rebates:write")) return (null, "FORBIDDEN", "rebates:write permission required.");
         var accrual = deferred.FindAccrual(agreementId, period);
         var approvedCap = accrual is { Status: RebateAccrualStatus.Approved } a ? a.ApprovedAmount ?? a.AccruedAmount : 0;
-        if (amount > approvedCap)
-            return (null, "REBATE_EXCEEDS_ACCRUAL",
-                $"Claim {amount:0.00} exceeds the approved accrued amount {approvedCap:0.00} — settle less or attach a documented adjustment.");
+        // 063 AC2: the cap is cumulative — pending + settled claims reserve against one accrual
         var claims = deferred.ClaimsFor(agreementId, period);
+        var committed = claims.Where(c => c.Status is RebateClaimStatus.Submitted or RebateClaimStatus.Approved)
+            .Sum(c => c.Amount);
+        if (amount + committed > approvedCap)
+            return (null, "REBATE_EXCEEDS_ACCRUAL",
+                $"Claim {amount:0.00} would put claims at {committed + amount:0.00} against the approved accrued amount {approvedCap:0.00} — settle less or attach a documented adjustment.");
         var claim = new RebateClaim($"{agreementId}:{period}:C{claims.Count + 1}", ec.TenantId, ec.EntityId,
             agreementId, period, amount, agreement.Version,
             JsonSerializer.Serialize(eligibleTxnIds, Idem.JsonOptions), RebateClaimStatus.Submitted,

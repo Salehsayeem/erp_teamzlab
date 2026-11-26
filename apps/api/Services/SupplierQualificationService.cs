@@ -186,6 +186,8 @@ public sealed class SupplierQualificationService(
     {
         var observation = qualification.FindObservation(observationId);
         if (observation is null) return (null, "OBSERVATION_NOT_FOUND", "Observation not found.");
+        if (!actor.Has("suppliers:review"))
+            return (null, "FORBIDDEN", "suppliers:review permission required to dispute an observation.");
         if (string.IsNullOrWhiteSpace(reason) || amendedValue is null)
             return (null, "VALIDATION_ERROR", "A dispute needs a reason and an amended value (061 AC2).");
         if (observation.DisputedBy is not null)

@@ -1260,6 +1260,63 @@ public partial class SalesDeferredTests
         var payload = JsonDocument.Parse(reversal.GetProperty("payloadJson").GetString()!).RootElement;
         Assert.Equal(invoiceId, payload.GetProperty("sourceInvoiceId").GetString());
     }
+
+    // 29 (063 AC2): the cap is cumulative — Submitted+Approved claims together may not exceed
+    // the approved accrual, so per-claim checks alone can't double-settle one accrual
+    [Fact]
+    public async Task Rebate_Claims_Are_Capped_Cumulatively_At_The_Approved_Accrual()
+    {
+        // full-cap claim settles → a second full-cap claim must refuse (50 !> 50 per-claim)
+        var (agreementId, invoiceId, _) = await SeedRebateFlow(); // 1000 net @ 5% → accrual 50
+        var period = $"{Today:yyyy-MM}";
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals", new { period }, Sales)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals/{period}/approvals", new { }, Fin)).StatusCode);
+
+        var first = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId, period, amount = 50m, eligibleTxnIds = new[] { invoiceId },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync(
+            $"/api/v1/rebate-claims/{(await Json(first)).GetProperty("data").GetProperty("id").GetString()!}/approvals",
+            new { }, Fin)).StatusCode);
+
+        var second = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId, period, amount = 50m, eligibleTxnIds = new[] { invoiceId },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        Assert.Equal("REBATE_EXCEEDS_ACCRUAL", (await Json(second)).GetProperty("error").GetProperty("code").GetString());
+
+        // partial remainder: half the accrual settles → a full-cap claim refuses, a
+        // remainder-sized claim still fits
+        var (agreement2, invoice2, _) = await SeedRebateFlow();
+        var period2 = $"{Today:yyyy-MM}";
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/rebate-agreements/{agreement2}/accruals", new { period = period2 }, Sales)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/rebate-agreements/{agreement2}/accruals/{period2}/approvals", new { }, Fin)).StatusCode);
+
+        var half = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId = agreement2, period = period2, amount = 25m, eligibleTxnIds = new[] { invoice2 },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, half.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync(
+            $"/api/v1/rebate-claims/{(await Json(half)).GetProperty("data").GetProperty("id").GetString()!}/approvals",
+            new { }, Fin)).StatusCode);
+
+        var over = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId = agreement2, period = period2, amount = 50m, eligibleTxnIds = new[] { invoice2 },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, over.StatusCode);
+        Assert.Equal("REBATE_EXCEEDS_ACCRUAL", (await Json(over)).GetProperty("error").GetProperty("code").GetString());
+
+        var remainder = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId = agreement2, period = period2, amount = 25m, eligibleTxnIds = new[] { invoice2 },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, remainder.StatusCode);
+    }
 }
 
 // ==== S10 sales analytics (065) ====
