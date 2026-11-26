@@ -755,7 +755,7 @@ public partial class _20261125072428_AddProcDeferredScreens : Migration
             values: new object[,]
             {
                 { "U-009", true, "Procure Officer 2", "procurve2@teamzlab.dev", "LE-001", "T-001" },
-                { "U-010", true, "Quality Officer", "quality@teamzlab.dev", "LE-001", "T-001" }
+                { "U-011", true, "Quality Officer", "quality@teamzlab.dev", "LE-001", "T-001" }
             });
 
         migrationBuilder.InsertData(
@@ -764,7 +764,7 @@ public partial class _20261125072428_AddProcDeferredScreens : Migration
             values: new object[,]
             {
                 { "LE-001", "T-001", "U-009", "R-PROC2" },
-                { "LE-001", "T-001", "U-010", "R-QC" }
+                { "LE-001", "T-001", "U-011", "R-QC" }
             });
 
         migrationBuilder.CreateIndex(
@@ -1151,7 +1151,7 @@ public partial class _20261125072428_AddProcDeferredScreens : Migration
         migrationBuilder.DeleteData(
             table: "memberships",
             keyColumns: new[] { "legal_entity_id", "tenant_id", "user_id" },
-            keyValues: new object[] { "LE-001", "T-001", "U-010" });
+            keyValues: new object[] { "LE-001", "T-001", "U-011" });
 
         migrationBuilder.DeleteData(
             table: "roles",
@@ -1171,7 +1171,7 @@ public partial class _20261125072428_AddProcDeferredScreens : Migration
         migrationBuilder.DeleteData(
             table: "users",
             keyColumn: "id",
-            keyValue: "U-010");
+            keyValue: "U-011");
 
         migrationBuilder.DropColumn(
             name: "version",
