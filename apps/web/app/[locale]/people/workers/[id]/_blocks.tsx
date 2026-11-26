@@ -65,11 +65,11 @@ export function WorkerDeferredBlocks({ workerId, token, locale }: { workerId: st
   }
 
   const taskColumns: Column<OnboardingTaskWithOverdue>[] = useMemo(() => [
-    { key: "task", label: tc.obColumns.task, render: (x) => x.name },
-    { key: "due", label: tc.obColumns.due, mono: true, render: (x) => fmtDay(x.dueDate, locale) },
+    { key: "task", label: tc.obColumns.task, render: (x) => x.task.name },
+    { key: "due", label: tc.obColumns.due, mono: true, render: (x) => fmtDay(x.task.dueDate, locale) },
     { key: "status", label: tc.obColumns.status, render: (x) => (
         <span className="inline-flex" style={{ gap: "0.25rem" }}>
-          <Badge tone={peopleTone(x.status)}>{peopleStatusLabel(t, x.status)}</Badge>
+          <Badge tone={peopleTone(x.task.status)}>{peopleStatusLabel(t, x.task.status)}</Badge>
           {x.overdue ? <Badge tone="danger">{tc.overdueBadge}</Badge> : null}
         </span>
       ) },

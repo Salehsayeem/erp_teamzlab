@@ -81,10 +81,10 @@ export default function OnboardingPage() {
   async function submitWaive() {
     if (!token || !waiving || !waiveReason.trim()) return;
     setBusy(true);
-    const res = await waiveOnboardingTask(token, waiving.id, waiveReason.trim());
+    const res = await waiveOnboardingTask(token, waiving.task.id, waiveReason.trim());
     setBusy(false);
     if (!res.ok) { setFormError(peopleActionError(t, res.code, res.message)); return; }
-    push("success", waiving.taskKey);
+    push("success", waiving.task.taskKey);
     setWaiving(null); setWaiveReason("");
     void load(loadedFor);
   }
@@ -92,25 +92,25 @@ export default function OnboardingPage() {
   async function complete(task: OnboardingTaskWithOverdue) {
     if (!token) return;
     setBusy(true);
-    const res = await completeOnboardingTask(token, task.id);
+    const res = await completeOnboardingTask(token, task.task.id);
     setBusy(false);
     if (!res.ok) { setFormError(peopleActionError(t, res.code, res.message)); return; }
-    push("success", task.taskKey);
+    push("success", task.task.taskKey);
     void load(loadedFor);
   }
 
   const columns: Column<OnboardingTaskWithOverdue>[] = useMemo(() => [
-    { key: "task", label: tc.columns.task, render: (x) => x.name + " (" + x.taskKey + ")" },
-    { key: "due", label: tc.columns.due, mono: true, render: (x) => fmtDay(x.dueDate, locale) },
-    { key: "owner", label: tc.columns.owner, mono: true, render: (x) => x.ownerRole },
-    { key: "required", label: tc.columns.required, render: (x) => (x.required ? "✓" : "—") },
+    { key: "task", label: tc.columns.task, render: (x) => x.task.name + " (" + x.task.taskKey + ")" },
+    { key: "due", label: tc.columns.due, mono: true, render: (x) => fmtDay(x.task.dueDate, locale) },
+    { key: "owner", label: tc.columns.owner, mono: true, render: (x) => x.task.ownerRole },
+    { key: "required", label: tc.columns.required, render: (x) => (x.task.required ? "✓" : "—") },
     { key: "status", label: tc.columns.status, render: (x) => (
         <span className="inline-flex" style={{ gap: "0.25rem" }}>
-          <Badge tone={peopleTone(x.status)}>{peopleStatusLabel(t, x.status)}</Badge>
+          <Badge tone={peopleTone(x.task.status)}>{peopleStatusLabel(t, x.task.status)}</Badge>
           {x.overdue ? <Badge tone="danger">{tc.overdueBadge}</Badge> : null}
         </span>
       ) },
-    { key: "actions", label: "", render: (x) => canWrite === true && x.status === "Pending" ? (
+    { key: "actions", label: "", render: (x) => canWrite === true && x.task.status === "Pending" ? (
         <span className="inline-flex" style={{ gap: "0.25rem" }}>
           <Button variant="secondary" onClick={() => void complete(x)}>{tc.complete}</Button>
           <Button variant="secondary" onClick={() => setWaiving(x)}>{tc.waive}</Button>
@@ -157,7 +157,7 @@ export default function OnboardingPage() {
         )}
       </section>
 
-      <Modal open={waiving !== null} onClose={() => setWaiving(null)} title={tc.waive + " — " + (waiving?.taskKey ?? "")} closeLabel={t.common.cancel} busy={busy}>
+      <Modal open={waiving !== null} onClose={() => setWaiving(null)} title={tc.waive + " — " + (waiving?.task.taskKey ?? "")} closeLabel={t.common.cancel} busy={busy}>
         <p className="t-caption">{tc.waiveHint}</p>
         <Input id="ob-waive-reason" label={tc.waiveReason} value={waiveReason} onChange={(e) => setWaiveReason(e.target.value)} />
         <p><Button onClick={() => void submitWaive()} loading={busy}>{tc.waive}</Button></p>

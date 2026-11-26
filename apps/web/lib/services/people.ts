@@ -383,7 +383,7 @@ export function fetchPositionAssignments(token: string, employmentId?: string | 
 }
 
 export type OnboardingTaskRow = { id: string; employmentId: string; taskKey: string; name: string; dueDate: string; ownerRole: string; required: boolean; status: string; decidedBy: string | null; decisionReason: string | null };
-export type OnboardingTaskWithOverdue = OnboardingTaskRow & { overdue: boolean };
+export type OnboardingTaskWithOverdue = { task: OnboardingTaskRow; overdue: boolean }; // API wraps each task with a computed overdue flag
 
 export function createOnboardingTemplate(token: string, body: { categoryCode: string; taskKey: string; name: string; dueOffsetDays: number; ownerRole: string; required: boolean }) {
   return apiFetch<OnboardingTaskRow>("/api/v1/onboarding-templates", { method: "POST", body, token });
