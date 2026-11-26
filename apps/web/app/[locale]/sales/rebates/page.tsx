@@ -50,6 +50,7 @@ export default function RebatesPage() {
   const { meId, permissions, meReady, meFailed, retryMe } = useSalesMe(token);
 
   const [agreements, setAgreements] = useState<RebateAgreementRow[] | null>(null);
+  const [agreementsLoadError, setAgreementsLoadError] = useState<string | null>(null);
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
 
@@ -95,12 +96,16 @@ export default function RebatesPage() {
     const res = await listRebateAgreements(token);
     if (res.ok) {
       setAgreements(res.data);
+      setAgreementsLoadError(null);
       setPhase("success");
     } else {
       setAgreements(null);
-      setPhase("error");
+      // reading agreements needs its own permission; settling only needs
+      // rebates:settle — a 403 here must not gate the whole page (R-FIN dead-end)
+      setAgreementsLoadError(salesActionError(t, res.code, res.message));
+      setPhase("success");
     }
-  }, [token]);
+  }, [token, t]);
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
@@ -215,7 +220,6 @@ export default function RebatesPage() {
   const settleGate = hasPermission(permissions, "rebates:settle");
 
   if (!ready || (phase === "loading" && agreements === null)) return <LoadingSkeleton rows={7} />;
-  if (phase === "error") return <ErrorState message={tc.loadFailed ?? ""} retryLabel={t.common.retry} onRetry={() => void load()} />;
 
   const list = agreements ?? [];
   return (
@@ -230,7 +234,9 @@ export default function RebatesPage() {
 
       <section className="card">
         <h2 className="t-title">{tc.agreementsTitle}</h2>
-        {list.length === 0 ? <EmptyState title={tc.noAgreements} /> : (
+        {agreementsLoadError ? (
+          <ErrorState message={agreementsLoadError} retryLabel={t.common.retry} onRetry={() => void load()} />
+        ) : list.length === 0 ? <EmptyState title={tc.noAgreements} /> : (
           <div className="table-scroll">
             <table className="table table--lines">
               <thead>
