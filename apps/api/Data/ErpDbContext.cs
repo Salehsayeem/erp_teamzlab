@@ -67,6 +67,32 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     public DbSet<AdjustmentDocument> SalesAdjustments => Set<AdjustmentDocument>();
     public DbSet<CollectionReminder> CollectionReminders => Set<CollectionReminder>();
     public DbSet<Dispute> Disputes => Set<Dispute>();
+    // deferred-screens wave (S1..S9): quotes, pricing, order lifecycle, forecast, e-invoice/
+    // delivery, returns/refunds, receipt candidates, rebates
+    public DbSet<Quote> Quotes => Set<Quote>();
+    public DbSet<QuoteRevision> QuoteRevisions => Set<QuoteRevision>();
+    public DbSet<QuoteApproval> QuoteApprovals => Set<QuoteApproval>();
+    public DbSet<QuoteAcceptance> QuoteAcceptances => Set<QuoteAcceptance>();
+    public DbSet<PriceBook> PriceBooks => Set<PriceBook>();
+    public DbSet<CustomerContractPrice> CustomerContractPrices => Set<CustomerContractPrice>();
+    public DbSet<CustomerOnboardingCheck> CustomerOnboardingChecks => Set<CustomerOnboardingCheck>();
+    public DbSet<PartyMerge> PartyMerges => Set<PartyMerge>();
+    public DbSet<SalesOrderAmendment> SalesOrderAmendments => Set<SalesOrderAmendment>();
+    public DbSet<OrderHold> OrderHolds => Set<OrderHold>();
+    public DbSet<OrderCancellation> OrderCancellations => Set<OrderCancellation>();
+    public DbSet<RecurringSchedule> RecurringSchedules => Set<RecurringSchedule>();
+    public DbSet<RecurringOccurrence> RecurringOccurrences => Set<RecurringOccurrence>();
+    public DbSet<ForecastSubmission> ForecastSubmissions => Set<ForecastSubmission>();
+    public DbSet<ForecastSnapshot> ForecastSnapshots => Set<ForecastSnapshot>();
+    public DbSet<EinvoiceSubmission> EinvoiceSubmissions => Set<EinvoiceSubmission>();
+    public DbSet<InvoiceDelivery> InvoiceDeliveries => Set<InvoiceDelivery>();
+    public DbSet<SalesReturn> SalesReturns => Set<SalesReturn>();
+    public DbSet<ReturnReceipt> ReturnReceipts => Set<ReturnReceipt>();
+    public DbSet<RefundRequest> RefundRequests => Set<RefundRequest>();
+    public DbSet<ReceiptCandidate> ReceiptCandidates => Set<ReceiptCandidate>();
+    public DbSet<RebateAgreement> RebateAgreements => Set<RebateAgreement>();
+    public DbSet<RebateAccrual> RebateAccruals => Set<RebateAccrual>();
+    public DbSet<RebateClaim> RebateClaims => Set<RebateClaim>();
     public DbSet<Warehouse> Warehouses => Set<Warehouse>();
     public DbSet<StockLocation> Locations => Set<StockLocation>();
     public DbSet<StockLevel> Stock => Set<StockLevel>();
@@ -180,6 +206,7 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     {
         ConfigureProcurement(mb);
         ConfigureSales(mb);
+        ConfigureSalesDeferred(mb);
         ConfigureInventory(mb);
         ConfigureManufacturing(mb);
         ConfigureManufacturingDeferred(mb);
@@ -631,6 +658,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                 l.WithOwner().HasForeignKey("SoId");
                 l.Property<int>("LineNo").ValueGeneratedOnAdd();
                 l.HasKey("SoId", "LineNo");
+                // shared-owned SoLine (so_amendments/recurring_schedules join below) resolves Id
+                // as required — pin it back to nullable or existing rows (NULL ids) break the ALTER
+                l.Property<string>("Id").IsRequired(false);
                 l.Property<string>("TenantId");
                 l.Property<string>("LegalEntityId");
                 l.HasIndex("SoId");
@@ -779,6 +809,314 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.InvoiceId });
             e.HasIndex(x => x.InvoiceId);
             e.HasOne<Invoice>().WithMany().HasForeignKey(x => x.InvoiceId).OnDelete(DeleteBehavior.Restrict);
+        });
+    }
+
+    // --- deferred-screens wave (S1..S9): quotes, pricing, order lifecycle, forecast,
+    // e-invoice/delivery, returns/refunds, receipt candidates, rebates. Same day-one rules:
+    // tenant+entity on every table, every FK indexed, money documents carry status
+    // concurrency tokens. Self-referencing customer columns (hierarchy/merge) are indexed
+    // without FK constraints — EF cannot bind two navigation-less self refs cleanly and the
+    // rows are never hard-deleted (Restrict everywhere).
+    private static void ConfigureSalesDeferred(ModelBuilder mb)
+    {
+        mb.Entity<Customer>(e =>
+        {
+            // 012/014: hierarchy parent + merge redirect on the existing customers table
+            e.HasIndex(x => x.ParentCustomerId);
+            e.HasIndex(x => x.MergedIntoId);
+        });
+
+        mb.Entity<Quote>(e =>
+        {
+            e.ToTable("quotes");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.CustomerId });
+            e.HasIndex(x => x.CustomerId);
+            e.Property(x => x.Status).IsConcurrencyToken(); // double-accept race (030 AC2)
+            e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<QuoteRevision>(e =>
+        {
+            e.ToTable("quote_revisions");
+            e.HasKey(x => x.Id); // natural key "{quoteId}:R{n}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.QuoteId);
+            e.Property(x => x.Status).IsConcurrencyToken(); // approval vs. acceptance race
+            e.HasOne<Quote>().WithMany().HasForeignKey(x => x.QuoteId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("quote_lines");
+                l.WithOwner().HasForeignKey("RevisionId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("RevisionId", "LineNo");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("RevisionId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<QuoteApproval>(e =>
+        {
+            e.ToTable("quote_approvals");
+            e.HasKey(x => x.Id); // natural key "{revisionId}:{approverId}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.RevisionId);
+            e.HasOne<QuoteRevision>().WithMany().HasForeignKey(x => x.RevisionId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<QuoteAcceptance>(e =>
+        {
+            e.ToTable("quote_acceptances");
+            e.HasKey(x => x.Id); // natural key "{revisionId}:{externalEventId ?? token}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.RevisionId);
+            // 030 AC2: duplicate external acceptance event → idempotent replay (nulls distinct)
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ExternalEventId }).IsUnique();
+            e.HasOne<QuoteRevision>().WithMany().HasForeignKey(x => x.RevisionId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<PriceBook>(e =>
+        {
+            e.ToTable("price_books");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.OwnsMany(x => x.Entries, l =>
+            {
+                l.ToTable("price_book_entries");
+                l.WithOwner().HasForeignKey("BookId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("BookId", "LineNo");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("BookId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<CustomerContractPrice>(e =>
+        {
+            e.ToTable("customer_contract_prices");
+            e.HasKey(x => x.Id); // natural key customer+sku+from+minQty
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.CustomerId, x.ItemSku });
+            e.HasIndex(x => x.CustomerId);
+            e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<CustomerOnboardingCheck>(e =>
+        {
+            e.ToTable("customer_onboarding_checks");
+            e.HasKey(x => x.Id); // natural key "{customerId}:{checkCode}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.CustomerId);
+            e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<PartyMerge>(e =>
+        {
+            e.ToTable("party_merges");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.SurvivorId);
+            e.HasIndex(x => x.MergedId);
+        });
+
+        mb.Entity<SalesOrderAmendment>(e =>
+        {
+            e.ToTable("so_amendments"); // order_amendments is MFG's table (name-collision lesson)
+            e.HasKey(x => x.Id); // natural key "{soId}:A{n}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.SalesOrderId);
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasOne<SalesOrder>().WithMany().HasForeignKey(x => x.SalesOrderId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("so_amendment_lines");
+                l.WithOwner().HasForeignKey("AmendmentId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("AmendmentId", "LineNo");
+                l.Property<string>("Id").IsRequired(false);
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("AmendmentId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<OrderHold>(e =>
+        {
+            e.ToTable("order_holds");
+            e.HasKey(x => x.Id); // natural key "{soId}:H{n}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SalesOrderId, x.Status });
+            e.HasIndex(x => x.SalesOrderId);
+            e.Property(x => x.Status).IsConcurrencyToken(); // double-release race
+            e.HasOne<SalesOrder>().WithMany().HasForeignKey(x => x.SalesOrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<OrderCancellation>(e =>
+        {
+            e.ToTable("order_cancellations");
+            e.HasKey(x => x.Id); // natural key "{soId}:C{n}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.SalesOrderId);
+            e.HasOne<SalesOrder>().WithMany().HasForeignKey(x => x.SalesOrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<RecurringSchedule>(e =>
+        {
+            e.ToTable("recurring_schedules");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.CustomerId);
+            e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("recurring_schedule_lines");
+                l.WithOwner().HasForeignKey("ScheduleId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("ScheduleId", "LineNo");
+                l.Property<string>("Id").IsRequired(false);
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("ScheduleId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<RecurringOccurrence>(e =>
+        {
+            e.ToTable("recurring_occurrences");
+            e.HasKey(x => x.Id); // natural key "{scheduleId}:{periodKey}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            // 040 AC1: ≤1 occurrence per (schedule, period) — the unique index backs the
+            // idempotent generation under concurrency
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ScheduleId, x.PeriodKey }).IsUnique();
+            e.HasIndex(x => x.ScheduleId);
+            e.HasIndex(x => x.OrderId);
+            e.HasOne<RecurringSchedule>().WithMany().HasForeignKey(x => x.ScheduleId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<SalesOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ForecastSubmission>(e =>
+        {
+            e.ToTable("forecast_submissions");
+            e.HasKey(x => x.Id); // natural key "{ownerId}:{period}:{category}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Period });
+        });
+
+        mb.Entity<ForecastSnapshot>(e =>
+        {
+            e.ToTable("forecast_snapshots");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Period });
+        });
+
+        mb.Entity<EinvoiceSubmission>(e =>
+        {
+            e.ToTable("einvoice_submissions");
+            e.HasKey(x => x.Id); // natural key "{invoiceId}:EIV:{n}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.InvoiceId);
+            e.HasOne<Invoice>().WithMany().HasForeignKey(x => x.InvoiceId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<InvoiceDelivery>(e =>
+        {
+            e.ToTable("invoice_deliveries");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.InvoiceId, x.Attempt });
+            e.HasIndex(x => x.InvoiceId);
+            e.HasOne<Invoice>().WithMany().HasForeignKey(x => x.InvoiceId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<SalesReturn>(e =>
+        {
+            e.ToTable("sales_returns");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.SalesOrderId);
+            e.HasIndex(x => x.CustomerId);
+            e.HasOne<SalesOrder>().WithMany().HasForeignKey(x => x.SalesOrderId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("sales_return_lines");
+                l.WithOwner().HasForeignKey("ReturnId");
+                l.Property<int>("LineNo").ValueGeneratedOnAdd();
+                l.HasKey("ReturnId", "LineNo");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("ReturnId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<ReturnReceipt>(e =>
+        {
+            e.ToTable("return_receipts");
+            e.HasKey(x => x.Id); // natural key "{returnId}:R{n}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.ReturnId);
+            e.HasOne<SalesReturn>().WithMany().HasForeignKey(x => x.ReturnId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<RefundRequest>(e =>
+        {
+            e.ToTable("refund_requests");
+            e.HasKey(x => x.Id); // natural key "{adjustmentId}:REF" — one refund per credit
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.AdjustmentId);
+            e.HasIndex(x => x.InvoiceId);
+            e.Property(x => x.Status).IsConcurrencyToken(); // double-approval race (062)
+            e.HasOne<AdjustmentDocument>().WithMany().HasForeignKey(x => x.AdjustmentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Invoice>().WithMany().HasForeignKey(x => x.InvoiceId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ReceiptCandidate>(e =>
+        {
+            e.ToTable("receipt_candidates");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.CustomerId);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+            e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<RebateAgreement>(e =>
+        {
+            e.ToTable("rebate_agreements");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.CustomerId);
+            e.HasOne<Customer>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<RebateAccrual>(e =>
+        {
+            e.ToTable("rebate_accruals");
+            e.HasKey(x => x.Id); // natural key "{agreementId}:{period}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.AgreementId);
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasOne<RebateAgreement>().WithMany().HasForeignKey(x => x.AgreementId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<RebateClaim>(e =>
+        {
+            e.ToTable("rebate_claims");
+            e.HasKey(x => x.Id); // natural key "{agreementId}:{period}:C{n}"
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.AgreementId);
+            e.Property(x => x.Status).IsConcurrencyToken(); // double-settlement race (063)
+            e.HasOne<RebateAgreement>().WithMany().HasForeignKey(x => x.AgreementId).OnDelete(DeleteBehavior.Restrict);
         });
     }
 
@@ -2019,7 +2357,10 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                      // deferred PROCUREMENT wave prefixes — doc_dsp/doc_scr from the brief's list are
                      // OMITTED: they already exist (sales disputes / MFG scrap), so dispatches and
                      // scorecards use deterministic natural ids instead
-                     "req", "rql", "cat", "uom", "bko", "blr", "asn", "ins", "rtn", "clm", "qnr", "evd", "obs" })
+                     "req", "rql", "cat", "uom", "bko", "blr", "asn", "ins", "rtn", "clm", "qnr", "evd", "obs",
+                     // deferred SALES wave prefixes (AddSalesDeferredScreens): quotes, price
+                     // books, recurring schedules, deliveries, RMAs, receipt candidates, rebates
+                     "qte", "pbl", "rcs", "dlv", "rma", "rcp", "rbt" })
             mb.HasSequence<long>($"doc_{prefix}");
         mb.HasSequence<long>("doc_a", s => s.StartsAt(2));
     }
@@ -2058,6 +2399,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             // inspections/dispositions (Q-P7, MFG consumes it later and must never re-seed it).
             new { Id = "R-PROC", Name = "procurement_officer", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer", "sourcing:read", "sourcing:write", "contracts:read", "contracts:write", "suppliers:read", "requisitions:write", "requisitions:read", "catalog:write", "receipts:inspect", "analytics:read" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write",
+                    // deferred-screens SALES union (S7/S9/S8 refunds/rebates/ar-recon — money
+                    // leaves the company only through R-FIN, 062/063; forecast read 018)
+                    "refunds:approve", "rebates:settle", "forecasts:read",
                     // deferred-screens PEOPLE additions (brief §3): leave:adjust (032 elevated manual
                     // ledger), payroll:release (payment-file/garnishment release ≠ calculation
                     // approval, 050), payroll:close (period close + waivers, 054),
@@ -2069,7 +2413,12 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write",
                     "so:approve",
                     "leads:read", "leads:write", "crm:read", "crm:write", "opps:read", "opps:write",
-                    "invoices:read", "invoices:write", "collections:read", "collections:write" }, TenantId = t, LegalEntityId = le },
+                    "invoices:read", "invoices:write", "collections:read", "collections:write",
+                    // deferred-screens SALES union (S1/S2/S4/S5/S7/S8/S9 — quotes, pricing,
+                    // recurring, forecast, returns, receipt candidates, rebates; Q-S1/Q-S2)
+                    "quotes:write", "quotes:approve", "pricebooks:write", "recurring:write",
+                    "forecasts:read", "forecasts:write", "returns:write",
+                    "receipts-candidates:write", "rebates:write" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-ASSETS", Name = "assets_officer", Permissions = new[] { "assets:read", "assets:write", "assets:approve", "projects:write", "projects:approve", "cases:write", "cases:read" }, TenantId = t, LegalEntityId = le },
             // task-6: independent evaluators (031 AC1) — read + score only, no buyer permissions
             new { Id = "R-EVAL", Name = "evaluator", Permissions = new[] { "sourcing:read", "sourcing:evaluate" }, TenantId = t, LegalEntityId = le },
@@ -2123,7 +2472,15 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             // (ManufacturingDeferredTests.Planner matches). Q-PM5: a second MFG user so
             // maker-checker is exercisable INSIDE R-MFG (schedule publish override, rework
             // approval ≠ completion actor, labor approval ≠ reporter)
-            new { Id = "U-012", Email = "mfg.planner@teamzlab.dev", DisplayName = "Manufacturing Planner", Active = true, TenantId = t, LegalEntityId = le });
+            new { Id = "U-012", Email = "mfg.planner@teamzlab.dev", DisplayName = "Manufacturing Planner", Active = true, TenantId = t, LegalEntityId = le },
+            // union-merge renumber: SALES's branch seeded the sales manager as U-009, but the
+            // PROC merge took U-009 for the second procurement officer — the manager ships as
+            // U-014 (SalesDeferredTests.SalesManager matches). U-013 stays seed-free: the MFG
+            // WaveD quality fixture inserts its own checker (Qc2) there via direct SQL at
+            // test time, and a seeded U-013 would break that fixture's bootstrap
+            // Q-S1: second sales user — quote/amendment maker-checker needs a sales-capable
+            // approver that is not U-004 (instance-level approver ≠ issuer, 023/034)
+            new { Id = "U-014", Email = "sales-manager@teamzlab.dev", DisplayName = "Sales Manager", Active = true, TenantId = t, LegalEntityId = le });
 
         mb.Entity<Membership>().HasData(
             new Membership("U-001", t, le, "R-ADMIN"),
@@ -2137,7 +2494,8 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new Membership("U-010", t, le, "R-HR"),
             new Membership("U-009", t, le, "R-PROC2"),
             new Membership("U-011", t, le, "R-QC"),
-            new Membership("U-012", t, le, "R-MFG"));
+            new Membership("U-012", t, le, "R-MFG"),
+            new Membership("U-014", t, le, "R-SALES"));
 
         mb.Entity<AuditEvent>().HasData(new
         {
@@ -2173,6 +2531,14 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         // R-PEO2: the overtime multiplier is a finance setting (data, not a constant); default 1.5
         mb.Entity<FinanceSetting>().HasData(
             new FinanceSetting("FS-payroll-ot", t, le, "payroll.ot_multiplier", "1.5"));
+
+        // deferred-screens SALES (data, not constants): quote approval threshold (023 AC1),
+        // discount stacking cap (025 AC2), forecast stage weights (018 AC1 weighted bucket)
+        mb.Entity<FinanceSetting>().HasData(
+            new FinanceSetting("FS-quotes-threshold", t, le, "quotes.approval_threshold", "10000"),
+            new FinanceSetting("FS-discount-cap", t, le, "sales.discount_cap_pct", "15"),
+            new FinanceSetting("FS-stage-weights", t, le, "sales.stage_weights",
+                "{\"Prospecting\":0.1,\"Qualification\":0.2,\"Discovery\":0.3,\"Proposal\":0.5,\"Negotiation\":0.75,\"Closed\":0.9}"));
 
         // deferred PROCUREMENT wave: the one active requisition approval rule route resolution falls
         // back to (Q-P2 fixed maker-checker — the row's version is snapshotted onto approvals, no

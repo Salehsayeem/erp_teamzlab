@@ -4,9 +4,10 @@ using Erp.Api;
 
 public record CreateCustomerRequest(string Name, string TaxId, string Email,
     decimal? CreditLimit = null, int PaymentTermNetDays = 30, bool RemindersSuppressed = false);
-public record CreateSoRequest(string CustomerId, IReadOnlyList<SoLine> Lines);
+public record CreateSoRequest(string CustomerId, IReadOnlyList<SoLine> Lines, string? SourceQuoteRevisionId = null);
 public record ApproveSoRequest(string? Reason);
-public record ShipRequest(string ItemSku, decimal Qty);
+// ExpectedDate (037): stamped on the line when a shipment leaves a measurable remainder
+public record ShipRequest(string ItemSku, decimal Qty, DateOnly? ExpectedDate = null);
 public record ReleaseCreditRequest();
 
 // --- task-7 SALES deep ---
@@ -34,3 +35,58 @@ public record ApproveAdjustmentRequest(string? Reason);
 public record LogReminderRequest(string InvoiceId, string Channel, string? TemplateVersion, string Recipient);
 public record CreateDisputeRequest(string InvoiceId, string Reason, DateOnly? PromiseDueDate);
 public record ResolveDisputeRequest(string Outcome);
+
+// --- deferred-screens wave: S1 quotes + S2 pricing ---
+
+public record CreateQuoteRequest(string CustomerId, string Currency, IReadOnlyList<QuoteLineRequest>? Lines, string? Terms = null, DateOnly? ExpiresAt = null);
+public record QuoteLineRequest(string ItemSku, decimal Qty, decimal? UnitPrice = null, decimal DiscountPct = 0);
+public record CreateQuoteRevisionRequest(IReadOnlyList<QuoteLineRequest>? Lines, string? Rationale = null, string? Terms = null, DateOnly? ExpiresAt = null);
+public record ApproveQuoteRevisionRequest(string? Reason = null);
+public record AcceptQuoteRequest(string Method, string? ExternalEventId = null, string? EvidenceRef = null);
+public record RevalidateQuoteRequest(DateOnly ExpiresAt, string Reason);
+
+public record CreatePriceBookRequest(string Name, string Currency, int Precedence);
+public record CreateBookEntryRequest(string ItemSku, decimal MinQty, decimal UnitPrice, DateOnly EffectiveFrom, DateOnly? EffectiveTo = null, string? Rule = null);
+public record CreateContractPriceRequest(string CustomerId, string ItemSku, decimal MinQty, decimal UnitPrice, DateOnly EffectiveFrom, DateOnly? EffectiveTo = null);
+
+// --- deferred-screens wave: S3 customer 360 ---
+
+public record SetHierarchyRequest(string? ParentId);
+public record AddOnboardingCheckRequest(string CheckCode, bool Mandatory = true);
+public record MergePreviewRequest(string SurvivorId, string MergedId, string Reason);
+public record MergeExecuteRequest(string? Reason = null);
+
+// --- deferred-screens wave: S4 order lifecycle ---
+
+public record PlaceHoldRequest(string HoldType, string Reason, string? Source = null);
+public record ReleaseHoldRequest(string? Reason = null);
+public record CreateAmendmentRequest(IReadOnlyList<SoLine>? Lines, string Rationale);
+public record ApproveAmendmentRequest(string? Reason = null);
+public record CancelOrderRequest(string Reason, string Scope);
+public record CreateScheduleRequest(string CustomerId, string Frequency, DateOnly NextRunDate, IReadOnlyList<SoLine>? Lines);
+public record GenerateRequest(string Period);
+public record PauseRequest();
+
+// --- deferred-screens wave: S5 forecast + S6 e-invoice/delivery ---
+
+public record SubmitForecastRequest(string Owner, string Period, string Category, decimal? OverrideValue = null);
+public record CreateSnapshotRequest(string Period);
+public record SubmitEinvoiceRequest();
+public record DeliveryAttemptRequest(string Channel, string Recipient);
+public record DeliveryBounceRequest(string Reason);
+
+// --- deferred-screens wave: S7 returns/refunds + S8 receipt candidates ---
+
+public record CreateReturnRequest(string OrderId, IReadOnlyList<ReturnLineInput>? Lines, string? OverrideJustification = null);
+public record ReturnLineInput(string ItemSku, decimal Qty, string? Reason = null, string? Condition = null);
+public record ReceiveReturnRequest(decimal ReceivedQty);
+public record ApproveRefundRequest(string? Reason = null);
+public record CreateReceiptCandidateRequest(string? CustomerId, string BankRef, decimal Amount, string Currency, DateOnly ValueDate, string Channel);
+public record LinkPayerRequest(string CustomerId);
+
+// --- deferred-screens wave: S9 rebates + S10 analytics ---
+
+public record CreateRebateAgreementRequest(string CustomerId, string Basis, decimal RatePct, string AccrualPeriod, DateOnly ValidFrom);
+public record CalculateAccrualRequest(string Period);
+public record CreateRebateClaimRequest(string AgreementId, string Period, decimal Amount, IReadOnlyList<string>? EligibleTxnIds);
+public record ApproveRebateClaimRequest(string? Reason = null);

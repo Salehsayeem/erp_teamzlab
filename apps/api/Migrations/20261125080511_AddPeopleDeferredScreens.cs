@@ -979,7 +979,10 @@ public partial class _20261125080511_AddPeopleDeferredScreens : Migration
             keyColumn: "id",
             keyValue: "R-FIN",
             column: "permissions",
-            value: new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write", "leave:adjust", "payroll:release", "payroll:close", "people:analytics:read", "requisitions:approve", "requisitions:read", "requisitions:override", "suppliers:review", "analytics:read" });
+            // union-merge (SALES wave) end-state: last write to R-FIN in the chain — carries the
+            // FULL union incl. SALES's refunds:approve / rebates:settle / forecasts:read so the
+            // final DB state byte-matches the HasData seed array (never a delta)
+            value: new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write", "refunds:approve", "rebates:settle", "forecasts:read", "leave:adjust", "payroll:release", "payroll:close", "people:analytics:read", "requisitions:approve", "requisitions:read", "requisitions:override", "suppliers:review", "analytics:read" });
 
         migrationBuilder.UpdateData(
             table: "roles",

@@ -21,5 +21,10 @@ public static class Envelope
     public static object FailBodyItems(string code, string message, object[] items) =>
         new { success = false, error = new { code, message, items } };
 
+    // failure that also pins a structured record (e.g. an e-invoice submission kept for
+    // provenance while transmission is blocked) — the record rides inside the error object
+    public static object FailBodyDetail(string code, string message, object detail) =>
+        new { success = false, error = new { code, message, detail } };
+
     public static IResult From(object body, int status) => Results.Json(body, statusCode: status);
 }

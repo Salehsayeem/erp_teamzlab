@@ -9,7 +9,7 @@ namespace Erp.Api.Controllers;
 // surface; everything else lives under /invoices and /adjustments.
 [ApiController]
 [Route("api/v1")]
-public sealed class InvoicesController(IInvoiceService invoices, ICollectionService collections) : ControllerBase
+public sealed class InvoicesController(IInvoiceService invoices, ICollectionService collections, ISalesDeliveryService delivery) : ControllerBase
 {
     // drafts are drafted from the order — the editor side of the 043 separation
     [HttpPost("sales-orders/{soId}/invoice-drafts")]
@@ -107,5 +107,50 @@ public sealed class InvoicesController(IInvoiceService invoices, ICollectionServ
         var u = CurrentUser.From(HttpContext);
         var (invoice, code, message) = invoices.Discard(u, id);
         return code is null ? Envelope.Ok<object>(invoice!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
+    // --- deferred-screens wave (S6): e-invoice adapter + delivery tracking ---
+
+    [HttpPost("invoices/{id}/einvoice-submissions")]
+    public IResult SubmitEinvoice(string id, SubmitEinvoiceRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("invoices:write")) return (Envelope.FailBody("FORBIDDEN", "invoices:write permission required."), 403);
+        var (data, code, message) = delivery.SubmitEinvoice(u, id);
+        // NotEnabled keeps the submission record for provenance and blocks transmission
+        if (code == "EINVOICE_NOT_ENABLED")
+            return (Envelope.FailBodyDetail(code, message!, data!), ErrorStatus.StatusFor(code));
+        return code is null ? (Envelope.OkBody(data!), 201) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
+    });
+
+    [HttpPost("invoices/{id}/delivery-attempts")]
+    public IResult AddDelivery(string id, DeliveryAttemptRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var err = Guards.Check(request.Channel, "Channel", 50) ?? Guards.CheckEmail(request.Recipient);
+        if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("invoices:write")) return (Envelope.FailBody("FORBIDDEN", "invoices:write permission required."), 403);
+        var (data, code, message) = delivery.AddDeliveryAttempt(u, id, request.Channel, request.Recipient);
+        return code is null ? (Envelope.OkBody(data!), 201) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
+    });
+
+    [HttpPost("invoices/{id}/delivery-attempts/{deliveryId}/bounce")]
+    public IResult BounceDelivery(string deliveryId, DeliveryBounceRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var err = Guards.Check(request.Reason, "Reason");
+        if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("invoices:write")) return (Envelope.FailBody("FORBIDDEN", "invoices:write permission required."), 403);
+        var (data, code, message) = delivery.MarkBounced(u, deliveryId, request.Reason);
+        return code is null ? (Envelope.OkBody(data!), 200) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
+    });
+
+    [HttpGet("invoices/{id}/deliveries")]
+    public IResult Deliveries(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("invoices:read")) return Envelope.Fail("FORBIDDEN", "invoices:read permission required.", 403);
+        var (data, code, message) = delivery.DeliveriesFor(id);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
     }
 }

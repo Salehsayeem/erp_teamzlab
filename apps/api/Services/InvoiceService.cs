@@ -57,11 +57,13 @@ public sealed class InvoiceService(
     {
         var so = orders.Find(soId);
         if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
-        if (so.Status is not (SoStatus.Shipped or SoStatus.Invoiced))
-            return (null, "SO_NOT_BILLABLE", $"Only shipped sales orders can be invoiced (current: {so.Status}).");
-
+        // 036: invoice eligibility is per shipment (partial fulfillment bills what shipped) —
+        // a Confirmed order with an unbilled shipment event drafts like a fully shipped one,
+        // while an order with nothing billable keeps the house SO_NOT_BILLABLE / ALREADY_BILLED split
         var shipments = orders.ShipmentsFor(soId);
         var source = shipments.FirstOrDefault(sh => invoices.FindBySourceEvent(sh.Id) is null);
+        if (so.Status is not (SoStatus.Confirmed or SoStatus.Shipped or SoStatus.Invoiced) || (source is null && so.Status == SoStatus.Confirmed))
+            return (null, "SO_NOT_BILLABLE", $"Only shipped sales orders can be invoiced (current: {so.Status}).");
         if (source is null)
             return (null, "ALREADY_BILLED",
                 $"Every shipment of {soId} is already billed (source events {string.Join(", ", shipments.Select(s => s.Id))}).");
@@ -128,6 +130,13 @@ public sealed class InvoiceService(
         {
             invoiceId, journalId = journal.Id, dueDate, total, subTotal, taxTotal,
             currency = invoice.Currency, customerId = invoice.CustomerId,
+        });
+        // 064 AC1: commission boundary — the event identifies the credited owner (the source
+        // order's maker), the source transaction, and the event date; no compensation engine
+        audit.Emit(approver, "sales.commission.event", new
+        {
+            invoiceId, sourceTxnId = invoice.SalesOrderId, customerId = invoice.CustomerId,
+            eventDate = DateTimeOffset.UtcNow, invoiceDate = invoice.InvoiceDate, total,
         });
         try
         {
@@ -245,6 +254,13 @@ public sealed class InvoiceService(
             $"{adjustment.Kind} memo {adjustmentId} approved: total {total:0.00} (net {subTotal:0.00}, tax {taxTotal:0.00}); journal {journal.Id}");
         audit.Emit(approver, "sales.adjustment.approved",
             new { adjustmentId, kind = adjustment.Kind.ToString(), invoiceId = invoice.Id, total, journalId = journal.Id });
+        // 064 edge: a credit reversal emits a LINKED commission reversal event
+        if (adjustment.Kind == AdjustmentKind.Credit)
+            audit.Emit(approver, "sales.commission.reversed", new
+            {
+                sourceInvoiceId = invoice.Id, adjustmentId, amount = total,
+                eventDate = DateTimeOffset.UtcNow,
+            });
         try
         {
             invoices.Save();
