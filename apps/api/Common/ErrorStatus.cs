@@ -6,7 +6,11 @@ public static class ErrorStatus
     public static int StatusFor(string code) => code switch
     {
         "VALIDATION_ERROR" => 400,
-        "FORBIDDEN" => 403,
+        // deferred PROCUREMENT wave — brief-named 400s + validation-shaped codes
+        "CATEGORY_CYCLE" or "CATEGORY_DEPRECATED" or "QTY_PRECISION" or "UOM_CONVERSION_INVALID"
+            or "DECISION_REASON_REQUIRED" or "EXCEPTION_REASON_REQUIRED" or "DELEGATION_INVALID"
+            or "CLAIM_OUTCOME_REQUIRED" or "REVIEW_OUTCOME_REQUIRED" => 400,
+        "FORBIDDEN" or "DELEGATION_SCOPE_DENIED" or "DISPOSITION_SOD_ERROR" => 403,
         _ when code.EndsWith("_NOT_FOUND", StringComparison.Ordinal) => 404,
         _ => 409,
     };

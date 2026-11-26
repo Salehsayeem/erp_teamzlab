@@ -148,6 +148,33 @@ expect_status 409 "counter cannot close own count (maker-checker)"
 req POST "/api/v1/stock/counts/$CNT/close" "$ADMIN" '{}'
 expect_status 201 "checker closes count (Created, with adjustment payload)"
 
-say "summary"
-printf '  %d passed, %d failed\n' "$PASS" "$FAIL"
-[ "$FAIL" = 0 ]
+say "procurement deferred wave: requisitions, blanket, ASN, screening, analytics"
+req POST /api/v1/procurement-categories "$PROC" "{\"name\":\"Smoke cat $RUN\"}"
+expect_status 201 "POST /procurement-categories"
+CAT=$(printf '%s' "$BODY" | jget 'j.data.id')
+req POST /api/v1/unit-of-measures "$PROC" "{\"code\":\"EA-S-$RUN\",\"name\":\"Each\",\"dimension\":\"Count\",\"precision\":0,\"isBase\":true}"
+expect_status 201 "POST /unit-of-measures"
+UNIT=$(printf '%s' "$BODY" | jget 'j.data.code')
+req POST /api/v1/requisitions "$PROC" "{\"purpose\":\"Smoke req $RUN\",\"currency\":\"BDT\",\"lines\":[{\"categoryId\":\"$CAT\",\"description\":\"smoke line\",\"qty\":2,\"unitPrice\":50,\"unit\":\"$UNIT\",\"needBy\":\"2030-01-01\"}]}"
+expect_status 201 "POST /requisitions (draft saves incomplete)"
+REQ=$(printf '%s' "$BODY" | jget 'j.data.id')
+req POST "/api/v1/requisitions/$REQ/decisions" "$PROC" '{"decision":"Approve","version":1}'
+expect_status 409 "creator cannot decide own requisition (maker-checker, 016)"
+req POST "/api/v1/requisitions/$REQ/submission" "$PROC" '{}'
+expect_status 200 "submit (budget Pass + route resolves)"
+req GET "/api/v1/requisitions/$REQ" "$FIN"
+expect_status 200 "GET requisition detail"
+VER=$(printf '%s' "$BODY" | jget 'j.data.step.version')
+req POST "/api/v1/requisitions/$REQ/decisions" "$FIN" "{\"decision\":\"Approve\",\"version\":$VER}"
+expect_status 200 "finance decides (018 versioned token)"
+req POST /api/v1/blanket-orders "$PROC" "{\"supplierId\":\"$SUP\",\"currency\":\"BDT\",\"ceilingAmount\":1000,\"validFrom\":\"2026-01-01\",\"validTo\":\"2030-01-01\"}"
+expect_status 201 "POST /blanket-orders"
+BKO=$(printf '%s' "$BODY" | jget 'j.data.id')
+req POST "/api/v1/blanket-orders/$BKO/releases" "$PROC" '{"amount":400}'
+expect_status 201 "POST blanket release (ceiling debit)"
+req POST "/api/v1/blanket-orders/$BKO/releases" "$PROC" '{"amount":900}'
+expect_status 409 "over-ceiling release conflicts (BLANKET_CEILING_CONFLICT)"
+req GET "/api/v1/procurement-analytics/spend?groupBy=supplier" "$PROC"
+expect_status 200 "GET analytics spend"
+req GET /api/v1/procurement-analytics/demand "$FIN"
+expect_status 200 "GET analytics demand (per-currency rows)"

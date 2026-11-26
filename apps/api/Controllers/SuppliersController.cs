@@ -6,10 +6,24 @@ namespace Erp.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/suppliers")]
-public sealed class SuppliersController(ISupplierService suppliers) : ControllerBase
+public sealed class SuppliersController(ISupplierService suppliers, ISupplierQualificationService qualification) : ControllerBase
 {
     [HttpGet]
     public IResult List() => Envelope.Ok<object>(suppliers.List());
+
+    // deferred PROCUREMENT wave (041): expiry-gated evidence intake; the gate reads via
+    // GET {id}/qualification — expired evidence fails eligibility absent policy grace
+    [HttpGet("{id}/evidences")]
+    public IResult Evidences(string id) => Envelope.Ok<object>(qualification.Evidences(id));
+
+    [HttpPost("{id}/evidences")]
+    public IResult AddEvidence(string id, AddEvidenceRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("suppliers:write")) return (Envelope.FailBody("FORBIDDEN", "suppliers:write permission required."), 403);
+        var (evidence, code, error) = qualification.CreateEvidence(u, id, request.EvidenceType, request.MetadataJson, request.ExpiresOn, request.SupersedesId);
+        return code is null ? (Envelope.OkBody(evidence!), 201) : (Envelope.FailBody(code, error!), ErrorStatus.StatusFor(code));
+    });
 
     [HttpGet("{id}/gates")]
     public IResult Gates(string id)

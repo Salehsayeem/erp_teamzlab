@@ -34,8 +34,13 @@ export default function AppSidebar({
       items: [
         { href: "procurement/suppliers", label: dict.nav.suppliers },
         { href: "procurement/purchase-orders", label: dict.nav.purchaseOrders },
+        { href: "procurement/requisitions", label: dict.nav.requisitions },
         { href: "procurement/sourcing", label: dict.nav.sourcing },
         { href: "procurement/contracts", label: dict.nav.contracts },
+        { href: "procurement/categories", label: dict.nav.categories },
+        { href: "procurement/blanket-orders", label: dict.nav.blanketOrders },
+        { href: "procurement/receipts", label: dict.nav.receipts },
+        { href: "procurement/analytics", label: dict.nav.analytics },
       ],
     },
     {

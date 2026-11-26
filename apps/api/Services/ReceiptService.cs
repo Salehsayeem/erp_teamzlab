@@ -8,8 +8,15 @@ public sealed class ReceiptService(
     IPurchaseOrderRepository orders, IInventoryRepository inventory, IJournalRepository journals,
     INumberSeries numbers, IAuditRepository audit, EntityContext ec, ErpDbContext db) : IReceiptService
 {
+    // deferred PROCUREMENT wave: tenant-scoped receipt list for the receipt workspace
+    public object List() =>
+        db.Receipts.Where(r => r.TenantId == ec.TenantId && r.LegalEntityId == ec.EntityId)
+            .OrderBy(r => r.Id)
+            .Select(r => new { r.Id, r.PurchaseOrderId, r.ItemSku, r.Qty, r.ReceivedAt, r.ReceivedBy })
+            .ToList();
+
     public (Receipt? receipt, Journal? journal, string? code, string? message) Receive(
-        CurrentUser user, string poId, string itemSku, decimal qty)
+        CurrentUser user, string poId, string itemSku, decimal qty, string? toleranceOverrideReason = null)
     {
         var po = orders.Find(poId);
         if (po is null) return (null, null, "PO_NOT_FOUND", "Purchase order not found.");
@@ -36,7 +43,14 @@ public sealed class ReceiptService(
             .ToList();
         var already = orders.ReceivedQty(poId, itemSku);
         if (already + qty > line.Qty)
-            return (null, null, "OVER_RECEIVE", $"Over-receipt blocked for {itemSku}: already received {already} of {line.Qty} ordered, cannot receive {qty} more.");
+        {
+            // 057 AC1: over open qty is blocked WITHOUT an audited tolerance override; with one the
+            // receipt proceeds and the override is recorded (receipts:write carries the override)
+            if (string.IsNullOrWhiteSpace(toleranceOverrideReason))
+                return (null, null, "OVER_RECEIVE", $"Over-receipt blocked for {itemSku}: already received {already} of {line.Qty} ordered, cannot receive {qty} more.");
+            audit.Log(user, "tolerance-override", "receipt", poId,
+                $"Tolerance override by {user.Email}: receiving {qty} of {itemSku} (already {already}/{line.Qty}): {toleranceOverrideReason}");
+        }
 
         var receipt = new Receipt(numbers.Next("RC"), ec.TenantId, ec.EntityId, poId, itemSku, qty, DateTimeOffset.UtcNow, user.Id);
         orders.AddReceipt(receipt);
