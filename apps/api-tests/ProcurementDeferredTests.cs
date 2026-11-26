@@ -516,18 +516,50 @@ public class ProcurementDeferredTests : IClassFixture<TestApiFactory>
         }, Proc);
         var blanketId = blanket.GetProperty("id").GetString()!;
 
-        var releases = await Task.WhenAll(Enumerable.Range(0, 2).Select(i =>
+        // three-way overlap widens the race window; every release is over half the ceiling so any
+        // two successes would overrun — the lost-update shape must be impossible, not lucky
+        var releases = await Task.WhenAll(Enumerable.Range(0, 3).Select(i =>
             PostAsync($"/api/v1/blanket-orders/{blanketId}/releases", new { amount = 60m }, Proc)));
         var statuses = releases.Select(r => r.StatusCode).ToList();
         Assert.True(statuses.Count(s => s == HttpStatusCode.Created) == 1,
             $"expected exactly one 201, got [{string.Join(", ", releases.Select(r => $"{(int)r.StatusCode}:{r.Content.ReadAsStringAsync().Result}"))}]");
-        Assert.Equal(1, statuses.Count(s => s == HttpStatusCode.Conflict));
+        Assert.Equal(2, statuses.Count(s => s == HttpStatusCode.Conflict));
         var loser = await Json(releases.First(r => r.StatusCode == HttpStatusCode.Conflict));
         Assert.Equal("BLANKET_CEILING_CONFLICT", ErrorCode(loser));
 
+        // fix-round-1 invariant: the debited ceiling equals the release rows — a stale post-lock
+        // re-read lets the loser overwrite the winner's debit (both 201s, ceiling silent)
         var detail = await GetAsync($"/api/v1/blanket-orders/{blanketId}", Proc);
+        var releaseSum = detail.GetProperty("releases").EnumerateArray().Sum(r => r.GetProperty("amount").GetDecimal());
+        Assert.Equal(releaseSum, detail.GetProperty("releasedAmount").GetDecimal());
         Assert.True(detail.GetProperty("releasedAmount").GetDecimal() <= 100m); // ceiling never negative/overrun
         Assert.Equal(60m, detail.GetProperty("releasedAmount").GetDecimal());
+    }
+
+    [Fact]
+    public async Task Release_with_idempotency_key_succeeds_and_replays_054()
+    {
+        var supplierId = await SeedSupplier("P3-054k");
+        var blanket = await PostForData("/api/v1/blanket-orders", new
+        {
+            supplierId, currency = "BDT", ceilingAmount = 500m,
+            validFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1)),
+            validTo = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(30)),
+        }, Proc);
+        var blanketId = blanket.GetProperty("id").GetString()!;
+
+        // money POSTs carry an Idempotency-Key — Idem.Wrap opens the transaction, so the release
+        // must join it, never nest a second BeginTransaction
+        var first = await PostForData($"/api/v1/blanket-orders/{blanketId}/releases",
+            new { amount = 40m }, Proc, idemKey: "P3-054k-key");
+        var replay = await PostAsync($"/api/v1/blanket-orders/{blanketId}/releases",
+            new { amount = 40m }, Proc, idemKey: "P3-054k-key");
+        Assert.True(replay.IsSuccessStatusCode, $"replay → {(int)replay.StatusCode}: {await replay.Content.ReadAsStringAsync()}");
+        Assert.Equal(first.GetProperty("id").GetString(), (await Json(replay)).GetProperty("data").GetProperty("id").GetString());
+
+        var detail = await GetAsync($"/api/v1/blanket-orders/{blanketId}", Proc);
+        Assert.Equal(40m, detail.GetProperty("releasedAmount").GetDecimal()); // replay debited once
+        Assert.Single(detail.GetProperty("releases").EnumerateArray());
     }
 
     [Fact]
@@ -948,5 +980,103 @@ public class ProcurementDeferredTests : IClassFixture<TestApiFactory>
             new { delegateId = Proc2, from = DateTimeOffset.UtcNow, to = DateTimeOffset.UtcNow.AddHours(1), reason = "nope" }, Proc);
         Assert.Equal(HttpStatusCode.Forbidden, delegation.StatusCode); // Proc has no requisitions:approve
         Assert.Equal("FORBIDDEN", ErrorCode(await Json(delegation)));
+    }
+
+    // ==================== fix round 1 (findings I1–I6, S1, R) ====================
+
+    [Fact]
+    public async Task Disposition_needs_receipts_dispose_permission_beyond_receiver_sod()
+    {
+        var receiptId = await SeedReceipt("P4-perm", qty: 4m);
+        var receipt = await GetAsync("/api/v1/receipts", Proc);
+        var receiptSku = receipt.EnumerateArray().First(r => r.GetProperty("id").GetString() == receiptId)
+            .GetProperty("itemSku").GetString()!;
+        var inspection = await PostForData($"/api/v1/receipts/{receiptId}/inspections",
+            new { itemSku = receiptSku, qtyReceived = 4m }, Qc);
+
+        // Proc2 is NOT the receiver (Proc is), so the SoD rule would pass — the 403 must come
+        // from the receipts:dispose permission gate (I1: it was seeded but never enforced)
+        var res = await PostAsync($"/api/v1/receipts/{receiptId}/inspections/{inspection.GetProperty("id").GetString()!}/dispositions",
+            new { status = "Accepted", qtyAccepted = 4m, qtyRejected = 0m }, Proc2);
+        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        Assert.Equal("FORBIDDEN", ErrorCode(await Json(res)));
+
+        var disposed = await PostForData($"/api/v1/receipts/{receiptId}/inspections/{inspection.GetProperty("id").GetString()!}/dispositions",
+            new { status = "Accepted", qtyAccepted = 4m, qtyRejected = 0m }, Qc);
+        Assert.Equal("Accepted", disposed.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Response_review_and_screening_disposition_need_suppliers_review()
+    {
+        var supplierId = await SeedSupplierId("P5-authz");
+        var qnr = await PostForData("/api/v1/supplier-questionnaires", new
+        {
+            name = "Authz v1",
+            questions = new[] { new { code = "Q1", prompt = "Factory address?", required = true, conditional = false, conditionalOnCode = (string?)null } },
+        }, Proc);
+        var response = await PostForData($"/api/v1/suppliers/{supplierId}/questionnaire-responses", new
+        {
+            questionnaireId = qnr.GetProperty("id").GetString()!, answersJson = "{\"Q1\":\"Dhaka\"}",
+        }, Proc);
+        var screening = await PostForData($"/api/v1/suppliers/{supplierId}/screenings", new
+        {
+            source = "Watchlist", sourceRef = "WL-A",
+        }, Proc);
+
+        // Eval (R-EVAL, sourcing-only) holds no suppliers:review — both reviewer acts must 403
+        var review = await PostAsync($"/api/v1/questionnaire-responses/{response.GetProperty("id").GetString()!}/reviews",
+            new { reviewDecision = "Approved" }, Eval);
+        Assert.Equal(HttpStatusCode.Forbidden, review.StatusCode);
+        Assert.Equal("FORBIDDEN", ErrorCode(await Json(review)));
+
+        var dispose = await PostAsync($"/api/v1/screenings/{screening.GetProperty("id").GetString()!}/dispositions",
+            new { disposition = "FalsePositive", reason = "not the same entity" }, Eval);
+        Assert.Equal(HttpStatusCode.Forbidden, dispose.StatusCode);
+        Assert.Equal("FORBIDDEN", ErrorCode(await Json(dispose)));
+    }
+
+    [Fact]
+    public async Task List_carries_pending_step_version_and_queue_decision_succeeds()
+    {
+        var (id, detail) = await SubmitRequisition("P1-listv");
+
+        // the decide endpoint validates the PENDING STEP's version token (018 AC2) — the list
+        // row must carry that token, not the requisition's record version (I6: dead queue action)
+        var list = await GetAsync("/api/v1/requisitions?status=Submitted", Proc);
+        var row = list.EnumerateArray().First(r => r.GetProperty("id").GetString() == id);
+        Assert.True(row.TryGetProperty("stepVersion", out var stepVersionEl), "list rows carry the pending step's version token");
+        Assert.Equal(detail.GetProperty("step").GetProperty("version").GetInt32(), stepVersionEl.GetInt32());
+
+        var decided = await PostForData($"/api/v1/requisitions/{id}/decisions",
+            new { decision = "Approve", version = stepVersionEl.GetInt32() }, Fin);
+        Assert.Equal("Approved", decided.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Supplier_scorecards_route_serves_by_supplier()
+    {
+        var supplierId = await SeedSupplierId("P5-062r");
+        var scorecard = await PostForData("/api/v1/supplier-scorecards", new
+        {
+            supplierId,
+            periodFrom = DateOnly.FromDateTime(DateTime.UtcNow.AddMonths(-1)),
+            periodTo = DateOnly.FromDateTime(DateTime.UtcNow),
+        }, Proc);
+
+        var list = await GetAsync($"/api/v1/suppliers/{supplierId}/scorecards", Proc);
+        Assert.Contains(list.EnumerateArray(), s => s.GetProperty("id").GetString() == scorecard.GetProperty("id").GetString());
+    }
+
+    [Fact]
+    public async Task Purchase_orders_version_column_defaults_to_one_not_zero()
+    {
+        // ruling R: pre-migration PO rows must land at v1 (ack validation rejects 1..Version < 1)
+        await using var conn = new NpgsqlConnection(_factory.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT column_default FROM information_schema.columns WHERE table_name = 'purchase_orders' AND column_name = 'version'", conn);
+        var def = (string)(await cmd.ExecuteScalarAsync())!;
+        Assert.Contains("1", def);
     }
 }

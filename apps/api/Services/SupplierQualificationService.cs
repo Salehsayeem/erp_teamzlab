@@ -55,6 +55,8 @@ public sealed class SupplierQualificationService(
     {
         var response = qualification.FindResponse(responseId);
         if (response is null) return (null, "QUESTIONNAIRE_NOT_FOUND", "Response not found.");
+        if (!actor.Has("suppliers:review"))
+            return (null, "FORBIDDEN", "suppliers:review permission required to review a questionnaire response.");
         if (!Enum.TryParse<ResponseReviewDecision>(reviewDecision, out var decision) || reviewDecision is null
             || !Enum.IsDefined(decision))
             return (null, "VALIDATION_ERROR", "Review decision must be Approved or Returned.");
@@ -150,6 +152,8 @@ public sealed class SupplierQualificationService(
     {
         var screening = qualification.FindScreening(screeningId);
         if (screening is null) return (null, "SCREENING_NOT_FOUND", "Screening not found.");
+        if (!actor.Has("suppliers:review"))
+            return (null, "FORBIDDEN", "suppliers:review permission required to dispose a screening.");
         if (!Enum.TryParse<ScreeningDisposition>(disposition, out var outcome) || disposition is null || !Enum.IsDefined(outcome))
             return (null, "VALIDATION_ERROR", "Disposition must be ConfirmedClear, FalsePositive or ConfirmedMatch.");
         if (screening.Status is not "PendingDisposition")

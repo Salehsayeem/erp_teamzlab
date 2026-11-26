@@ -58,7 +58,7 @@ public partial class _20261125072428_AddProcDeferredScreens : Migration
             table: "purchase_orders",
             type: "integer",
             nullable: false,
-            defaultValue: 0);
+            defaultValue: 1); // ruling R: model default is 1 — pre-migration PO rows at v0 would fail ack validation (1..Version)
 
         migrationBuilder.CreateTable(
             name: "advance_ship_notices",

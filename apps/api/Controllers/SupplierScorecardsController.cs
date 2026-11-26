@@ -35,6 +35,21 @@ public sealed class SupplierScorecardsController(ISupplierScorecardsService scor
     }
 }
 
+// I5: the qualification page reads a supplier's scorecards by supplier id (ForSupplier) —
+// same suppliers:read gate as GET {id}/gates on SuppliersController; repo query is tenant-scoped
+[ApiController]
+[Route("api/v1/suppliers")]
+public sealed class SupplierScorecardListController(ISupplierScorecardsService scorecards) : ControllerBase
+{
+    [HttpGet("{id}/scorecards")]
+    public IResult ForSupplier(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("suppliers:read")) return Envelope.Fail("FORBIDDEN", "suppliers:read permission required.", 403);
+        return Envelope.Ok<object>(scorecards.ForSupplier(id));
+    }
+}
+
 [ApiController]
 [Route("api/v1/scorecards/{scorecardId}/corrective-actions")]
 public sealed class CorrectiveActionsController(ISupplierScorecardsService scorecards) : ControllerBase

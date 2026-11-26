@@ -8,6 +8,7 @@ public interface IRequisitionRepository
     List<Requisition> All(RequisitionStatus? status);
     void Add(Requisition requisition);
     ApprovalStep? FindStep(string requisitionId);
+    Dictionary<string, int> PendingStepVersions(IReadOnlyCollection<string> requisitionIds);
     void AddStep(ApprovalStep step);
     List<RequisitionDecision> DecisionsFor(string requisitionId);
     void AddDecision(RequisitionDecision decision);

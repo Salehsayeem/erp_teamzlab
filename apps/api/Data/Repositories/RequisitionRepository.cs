@@ -40,6 +40,17 @@ public sealed class RequisitionRepository(ErpDbContext db, EntityContext ec) : I
     public ApprovalStep? FindStep(string requisitionId) =>
         StepsScoped().Where(s => s.RequisitionId == requisitionId).OrderBy(s => s.StepNo).FirstOrDefault();
 
+    // fix I6: the pending decision token per requisition, one query — the decide endpoint
+    // validates against the step's version, not the requisition's record version
+    public Dictionary<string, int> PendingStepVersions(IReadOnlyCollection<string> requisitionIds)
+    {
+        if (requisitionIds.Count == 0) return [];
+        return StepsScoped().Where(s => s.Decision == null && requisitionIds.Contains(s.RequisitionId))
+            .OrderBy(s => s.RequisitionId).ThenBy(s => s.StepNo).ToList()
+            .GroupBy(s => s.RequisitionId)
+            .ToDictionary(g => g.Key, g => g.First().Version);
+    }
+
     public void AddStep(ApprovalStep step) => db.ApprovalSteps.Add(step);
 
     // append-only history view (017 AC3) — insertion order preserved for equal instants

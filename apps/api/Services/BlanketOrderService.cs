@@ -41,34 +41,37 @@ public sealed class BlanketOrderService(
         if (amount <= 0)
             return (null, "VALIDATION_ERROR", "Release amount must be greater than 0.");
 
-        // serialize per blanket — the expiry/ceiling checks and the debit commit under one row lock
-        using var tx = db.Database.BeginTransaction();
+        // serialize per blanket — the expiry/ceiling checks and the debit commit under one row lock;
+        // join Idem.Wrap's transaction when it opened one (nested BeginTransaction throws)
+        var ownsTx = db.Database.CurrentTransaction is null;
+        using var tx = ownsTx ? db.Database.BeginTransaction() : null;
         if (!LockBlanketRow(blanketOrderId))
             return (null, "BLANKET_NOT_FOUND", "Blanket order not found.");
-        order = blankets.Find(blanketOrderId)!; // authoritative re-read under the lock
+        // authoritative re-read under the lock — a tracked Find would replay the pre-lock instance
+        // from the identity map and re-validate the ceiling against stale amounts (journal-race
+        // hardening: same fresh-aggregate pattern as ReceiptService.ReceivedQty / SourcingService.ApprovedQtyForLot)
+        var fresh = db.BlanketOrders
+            .Where(b => b.TenantId == ec.TenantId && b.LegalEntityId == ec.EntityId && b.Id == blanketOrderId)
+            .Select(b => new { b.Status, b.ValidTo, b.ReleasedAmount, b.CeilingAmount })
+            .FirstOrDefault();
+        if (fresh is null) return (null, "BLANKET_NOT_FOUND", "Blanket order not found.");
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
-        if (order.Status is BlanketStatus.Expired or BlanketStatus.Closed || order.ValidTo < today)
-        {
-            tx.Rollback();
+        if (fresh.Status is BlanketStatus.Expired or BlanketStatus.Closed || fresh.ValidTo < today)
             return (null, "BLANKET_EXPIRED",
-                $"Blanket order {blanketOrderId} expired {order.ValidTo:yyyy-MM-dd}; new releases are blocked (054 AC3).");
-        }
-        if (order.ReleasedAmount + amount > order.CeilingAmount)
-        {
-            tx.Rollback();
+                $"Blanket order {blanketOrderId} expired {fresh.ValidTo:yyyy-MM-dd}; new releases are blocked (054 AC3).");
+        if (fresh.ReleasedAmount + amount > fresh.CeilingAmount)
             return (null, "BLANKET_CEILING_CONFLICT",
-                $"Ceiling exceeded: {order.ReleasedAmount:0.##} already released + {amount:0.##} > {order.CeilingAmount:0.##} (054 AC1).");
-        }
+                $"Ceiling exceeded: {fresh.ReleasedAmount:0.##} already released + {amount:0.##} > {fresh.CeilingAmount:0.##} (054 AC1).");
 
         var release = new BlanketRelease(numbers.Next("BLR"), ec.TenantId, ec.EntityId, blanketOrderId,
             amount, poId, u.Id, DateTimeOffset.UtcNow);
         blankets.AddRelease(release);
-        blankets.SetField(order, nameof(BlanketOrder.ReleasedAmount), order.ReleasedAmount + amount);
+        blankets.SetField(order, nameof(BlanketOrder.ReleasedAmount), fresh.ReleasedAmount + amount);
         blankets.SetField(order, nameof(BlanketOrder.Version), order.Version + 1);
         audit.Log(u, "release", "blanket_order", blanketOrderId,
-            $"Release {release.Id}: {amount:0.##} {order.Currency} debited against ceiling ({order.ReleasedAmount + amount:0.##}/{order.CeilingAmount:0.##})");
+            $"Release {release.Id}: {amount:0.##} {order.Currency} debited against ceiling ({fresh.ReleasedAmount + amount:0.##}/{fresh.CeilingAmount:0.##})");
         blankets.Save();
-        tx.Commit();
+        if (ownsTx) tx!.Commit();
         return (release, null, null);
     }
 

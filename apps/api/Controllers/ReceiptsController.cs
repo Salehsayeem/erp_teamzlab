@@ -45,7 +45,9 @@ public sealed class ReceiptsController(IReceiptService receipts, IReceiptInspect
     [HttpPost("{id}/inspections/{inspectionId}/dispositions")]
     public IResult DisposeInspection(string id, string inspectionId, DisposeInspectionRequest request)
     {
-        var (inspection, code, error) = inspections.DisposeInspection(CurrentUser.From(HttpContext), id, inspectionId,
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("receipts:dispose")) return Envelope.Fail("FORBIDDEN", "receipts:dispose permission required.", 403);
+        var (inspection, code, error) = inspections.DisposeInspection(u, id, inspectionId,
             request.Status, request.QtyAccepted, request.QtyRejected, request.DefectCode, request.EvidenceRef);
         return code is null ? Envelope.Ok<object>(inspection!) : Envelope.Fail(code, error!, ErrorStatus.StatusFor(code));
     }

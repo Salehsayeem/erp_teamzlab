@@ -11,8 +11,21 @@ public sealed class RequisitionService(
     IProcurementCatalogService catalog, INumberSeries numbers, IAuditRepository audit,
     IIdentityRepository identities, EntityContext ec) : IRequisitionService
 {
-    public object List(RequisitionStatus? status) =>
-        requisitions.All(status).Select(ProjRequisition).ToList();
+    // fix I6: the list also carries the pending step's version token — the decide endpoint
+    // validates against the STEP version (018 AC2), so the queue tab can decide from the list
+    public object List(RequisitionStatus? status)
+    {
+        var rows = requisitions.All(status);
+        var tokens = requisitions.PendingStepVersions(rows.Select(r => r.Id).ToList());
+        return rows.Select(r => new
+        {
+            r.Id, r.Purpose, r.Status, r.Version, r.Currency, r.CreatedBy, r.CreatedAt,
+            r.SubmittedBy, r.SubmittedAt, r.RuleId, r.RuleVersion, r.ApproverRole,
+            r.ExceptionCode, r.ExceptionNarrative, r.ExceptionEvidenceRef, r.ExceptionFlaggedAt,
+            stepVersion = tokens.TryGetValue(r.Id, out var v) ? v : (int?)null,
+            total = r.Lines.Sum(l => decimal.Round(l.Qty * l.UnitPrice, 2, MidpointRounding.AwayFromZero)),
+        }).ToList();
+    }
 
     public (Requisition? requisition, string? code, string? message) Create(
         CurrentUser u, string? purpose, string? currency, IReadOnlyList<RequisitionLineInput>? lines)
