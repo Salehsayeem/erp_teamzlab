@@ -73,6 +73,14 @@ export function mfgActionError(t: Dict, code: string, message: string): string {
   return label ? `${label}: ${message}` : `${t.mfg.actionFailed}: ${message}`;
 }
 
+// MF1-MF10 codes live in the TOP-LEVEL errors map (lib/i18n), not mfg.errors — resolve
+// through it; unknown codes fall back to the API message like mfgActionError.
+export function deferredActionError(t: Dict, code: string, message: string): string {
+  if (code === "NETWORK") return t.common.networkError;
+  const label = (t.errors as Record<string, string>)[code];
+  return label ? `${label}: ${message}` : `${t.mfg.actionFailed}: ${message}`;
+}
+
 /** Module-local status labels first, then the shared common.status entries. */
 export function mfgStatusLabel(t: Dict, status: string): string {
   const local = (t.mfg.statuses as Record<string, string>)[status];

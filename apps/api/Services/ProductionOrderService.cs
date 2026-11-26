@@ -48,10 +48,13 @@ public sealed class ProductionOrderService(
         if (code is not null) return (null, code, message);
 
         var orderId = numbers.Next("MFO");
+        // MF1 (024 AC3): the effective approved routing is resolved at create as the planning
+        // basis — OPTIONAL: orders without routings keep working (scheduling needs one, not release)
+        var plannedRoutingId = ResolveEffectiveRouting(request.OutputSku);
         var order = new ProductionOrder(orderId, ec.TenantId, ec.EntityId, orderId, request.OutputSku,
             request.Unit, request.DemandedQty, request.DemandedQty, // PlannedQty defaults to DemandedQty (008)
             0, 0, ProductionOrderStatus.Draft, request.OverTolerancePct, revision!.Id, null,
-            null, null, null, null, null, user.Id, DateTimeOffset.UtcNow);
+            null, null, null, null, null, user.Id, DateTimeOffset.UtcNow, plannedRoutingId);
         mfg.AddOrder(order);
         audit.Log(user, "create", "production_order", order.Id,
             $"Production order {order.OrderNo} drafted for {request.OutputSku}: demanded {request.DemandedQty} {request.Unit}, " +
@@ -190,6 +193,44 @@ public sealed class ProductionOrderService(
                     $"revision {resolved.Revision} of {order.OutputSku} has no component lines"));
         }
 
+        // MF2 (028 AC3): when the entity policy requires finite scheduling, the order must carry
+        // a PUBLISHED finite schedule run — an infinite-mode published plan is rejected here
+        var routingId = order.PlannedRoutingRevisionId;
+        var releasedRoutingId = ResolveEffectiveRouting(order.OutputSku) ?? routingId;
+
+        // MF6 (050 AC1): subcontract operations must carry valid supplier/service config at
+        // release — a blocked supplier blocks release without an exception path
+        foreach (var op in db.RoutingOperations
+                     .Where(o => o.TenantId == ec.TenantId && o.LegalEntityId == ec.EntityId
+                         && o.RoutingRevisionId == releasedRoutingId && o.Kind == OperationKind.Subcontract)
+                     .ToList())
+        {
+            if (string.IsNullOrWhiteSpace(op.ServiceDescription))
+                prerequisites.Add(("SUBCONTRACT_SERVICE_MISSING", $"subcontract operation {op.OperationCode} (seq {op.Seq}) has no service description"));
+            var supplier = db.Suppliers.FirstOrDefault(s => s.Id == op.SupplierId
+                && s.TenantId == ec.TenantId && s.LegalEntityId == ec.EntityId);
+            if (supplier is null)
+                prerequisites.Add(("SUBCONTRACT_SUPPLIER_MISSING", $"subcontract operation {op.OperationCode} references unknown supplier {op.SupplierId}"));
+            else if (supplier.Status != SupplierLifecycleStatus.Active)
+                prerequisites.Add(("SUBCONTRACT_SUPPLIER_BLOCKED",
+                    $"subcontract operation {op.OperationCode}: supplier {supplier.Name} is {supplier.Status} — release blocked (050)"));
+        }
+        if (FiniteScheduleRequired())
+        {
+            var publishedRun = (from pub in db.SchedulePublications
+                    join run in db.ScheduleRuns on pub.ScheduleRunId equals run.Id
+                    where pub.TenantId == ec.TenantId && pub.LegalEntityId == ec.EntityId
+                        && run.TenantId == ec.TenantId && run.LegalEntityId == ec.EntityId
+                        && run.OrderId == order.Id
+                    orderby pub.At descending
+                    select run).FirstOrDefault();
+            if (publishedRun is null || publishedRun.Mode != ScheduleRunMode.Finite)
+                prerequisites.Add(("SCHEDULE_NOT_FINITE",
+                    publishedRun is null
+                        ? "the entity policy requires a published finite schedule before release"
+                        : $"the published schedule run {publishedRun.Id} is infinite mode; the policy requires finite (028)"));
+        }
+
         if (prerequisites.Count > 0)
             return (prerequisites.Select(p => (object)new { code = p.Code, detail = p.Detail }).ToArray(),
                 "MFG_RELEASE_BLOCKED",
@@ -203,7 +244,7 @@ public sealed class ProductionOrderService(
         var ownsTx = db.Database.CurrentTransaction is null;
         using var tx = ownsTx ? db.Database.BeginTransaction() : null;
         LockOrderRow(order.Id);
-        mfg.SetOrderReleased(order, revision.Id, order.PlannedQty);
+        mfg.SetOrderReleased(order, revision.Id, order.PlannedQty, releasedRoutingId);
         audit.Log(releaser, "release", "production_order", order.Id,
             $"Order {order.OrderNo} released: {order.PlannedQty} {order.Unit} of {order.OutputSku}" +
             (revisionChanged ? $" — revision moved {plannedRevision?.Revision} → {revision.Revision} (022)" : "") +
@@ -224,6 +265,8 @@ public sealed class ProductionOrderService(
             {
                 plannedBomRevisionId = order.PlannedBomRevisionId,
                 releasedBomRevisionId = revision.Id,
+                plannedRoutingRevisionId = order.PlannedRoutingRevisionId,
+                releasedRoutingRevisionId = order.ReleasedRoutingRevisionId,
                 revisionChanged,
             },
         }, null, null);
@@ -346,6 +389,34 @@ public sealed class ProductionOrderService(
         var (revision, lines, code, message) = ReportingScope(order);
         if (code is not null) return (null, code, message);
 
+        // MF10 (065 AC2): lot-controlled items (mfg.lot_controlled_skus profile) cannot complete
+        // a transformation event without the mandatory lot/serial identity
+        var controlled = db.FinanceSettings
+            .Where(s => s.TenantId == ec.TenantId && s.LegalEntityId == ec.EntityId && s.Key == "mfg.lot_controlled_skus")
+            .OrderBy(s => s.Id).FirstOrDefault()?.Value;
+        var lotControlled = controlled?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Contains(order.OutputSku) == true;
+        if (lotControlled && string.IsNullOrWhiteSpace(request.LotSerial))
+            return (null, "LOT_IDENTITY_REQUIRED",
+                $"{order.OutputSku} is lot-controlled — a lot/serial identity is mandatory for completion (065 AC2).");
+
+        // MF6 (052 AC3): completion cannot exceed the ACCEPTED returned quantity when the order
+        // carries subcontract operations — quality-gated receipts only count once accepted
+        var completionRoutingId = order.ReleasedRoutingRevisionId ?? order.PlannedRoutingRevisionId;
+        var hasSubcontractOps = completionRoutingId is not null && db.RoutingOperations.Any(o =>
+            o.TenantId == ec.TenantId && o.LegalEntityId == ec.EntityId
+            && o.RoutingRevisionId == completionRoutingId && o.Kind == OperationKind.Subcontract);
+        if (hasSubcontractOps)
+        {
+            var acceptedTotal = db.SubcontractReceipts
+                .Where(r => r.TenantId == ec.TenantId && r.LegalEntityId == ec.EntityId && r.OrderId == order.Id)
+                .Sum(r => r.AcceptedQty);
+            if (order.CompletedQty + request.Qty > acceptedTotal)
+                return (null, "SUBCONTRACT_ACCEPTANCE_SHORT",
+                    $"Completion of {request.Qty} would take completed to {order.CompletedQty + request.Qty} but only " +
+                    $"{acceptedTotal} units were accepted back from the subcontractor (052 AC3).");
+        }
+
         var periodError = GuardPeriod();
         if (periodError is not null) return (null, periodError.Value.Code, periodError.Value.Message);
 
@@ -403,6 +474,17 @@ public sealed class ProductionOrderService(
             request.Qty, request.Note, completionJournal.Id, user.Id, DateTimeOffset.UtcNow);
         mfg.AddCompletion(completion);
         mfg.SetOrderCompletedQty(order, order.CompletedQty + request.Qty);
+
+        // MF10 (064, Q-MF4): the transformation event is emitted forward-only with the completion —
+        // immutable inputs (net issues) → output quantity (+ lot identity), one event per completion
+        var netInputs = lines
+            .Select(l => (sku: l.ComponentSku, qty: mfg.IssuesFor(orderId)
+                .Where(i => i.ComponentSku == l.ComponentSku).Sum(i => i.Kind == MovementKind.Issue ? i.Qty : -i.Qty)))
+            .Where(i => i.qty > 0)
+            .Select(i => new { itemSku = i.sku, qty = i.qty }).ToList();
+        db.TransformationEvents.Add(new TransformationEvent(numbers.Next("txp"), ec.TenantId, ec.EntityId,
+            orderId, completionId, order.OutputSku, request.Qty, request.LotSerial,
+            System.Text.Json.JsonSerializer.Serialize(netInputs), user.Id, DateTimeOffset.UtcNow));
 
         // fix round 1 (F1.1): the completion RECEIPTS the output sku — the GL said inventory grew,
         // /stock must agree; the receipt commits with the same SaveChanges as the journal
@@ -549,6 +631,23 @@ public sealed class ProductionOrderService(
 
         var (items, wipDebits, wipCredits, wipRemainder, _, wipItem) = Reconcile(order);
 
+        // MF10 (070 AC3): an unresolved CRITICAL variance blocks close absent an approved
+        // disposition (accepted/overridden by an officer other than the recorder)
+        var criticalVariances = db.VarianceLedger
+            .Where(v => v.TenantId == ec.TenantId && v.LegalEntityId == ec.EntityId
+                && v.OrderId == orderId && v.IsCritical && v.Disposition == "Open")
+            .OrderBy(v => v.BucketCode).ToList();
+        if (criticalVariances.Count > 0)
+            return (criticalVariances.Select(v => (object)new
+            {
+                code = $"variance:{v.BucketCode}",
+                detail = $"unresolved critical variance of {v.QtyVariance} (owner {v.Owner}, recorded {v.CreatedAt:u}) — accept or override before close",
+                qty = v.QtyVariance,
+            }).ToArray(),
+                "MFG_CLOSE_BLOCKED",
+                "Close blocked — unresolved critical variances: " +
+                string.Join("; ", criticalVariances.Select(v => v.BucketCode)));
+
         // 013 AC1: quantity reconciliation is a hard gate — every unreconciled quantity is named
         var quantityItems = items.Where(i => i.Code != "WIP_REMAINDER").ToList();
         if (quantityItems.Count > 0)
@@ -657,6 +756,24 @@ public sealed class ProductionOrderService(
             _ => (matches[0], null, null),
         };
     }
+
+    // MF1 (024): the effective APPROVED routing for a sku today — null when the item has no
+    // routing (pilot trim: routings are optional; scheduling refuses orders without one)
+    private string? ResolveEffectiveRouting(string outputSku) =>
+        db.RoutingRevisions
+            .Where(r => r.TenantId == ec.TenantId && r.LegalEntityId == ec.EntityId
+                && r.OutputSku == outputSku && r.Status == RoutingStatus.Approved
+                && r.EffectiveFrom <= Today && (r.EffectiveTo == null || r.EffectiveTo >= Today))
+            .OrderBy(r => r.Revision)
+            .Select(r => r.Id)
+            .FirstOrDefault();
+
+    // MF2 (028): the entity's finite-scheduling policy is tenant data, not a constant
+    private bool FiniteScheduleRequired() =>
+        db.FinanceSettings
+            .Where(s => s.TenantId == ec.TenantId && s.LegalEntityId == ec.EntityId && s.Key == "mfg.finite_schedule_required")
+            .OrderBy(s => s.Id)
+            .FirstOrDefault()?.Value == "true";
 
     // the close reconciliation (013 AC1 + 067 AC3): output, per-component consumption and the WIP
     // ledger are compared one by one; scrap disposal of a component counts as that component's
@@ -865,6 +982,7 @@ public sealed class ProductionOrderService(
         o.DemandedQty, o.PlannedQty, o.ReleasedQty, o.CompletedQty,
         remainingQty = o.PlannedQty - o.CompletedQty, // computed, never stored twice (008 AC1)
         o.OverTolerancePct, o.PlannedBomRevisionId, o.ReleasedBomRevisionId,
+        o.PlannedRoutingRevisionId, o.ReleasedRoutingRevisionId,
         o.CancelReason, o.ClosedBy, o.ClosedAt, o.ReopenedBy, o.ReopenedAt, o.CreatedBy, o.CreatedAt,
     };
 

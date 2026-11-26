@@ -746,7 +746,7 @@ public partial class _20261125072428_AddProcDeferredScreens : Migration
             values: new object[,]
             {
                 { "R-PROC2", "LE-001", "procurement_officer_2", new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer", "sourcing:read", "sourcing:write", "contracts:read", "contracts:write", "suppliers:read", "requisitions:write", "requisitions:read", "catalog:write", "receipts:inspect", "analytics:read" }, "T-001" },
-                { "R-QC", "LE-001", "quality_officer", new[] { "receipts:read", "receipts:inspect", "receipts:dispose", "suppliers:review", "analytics:read" }, "T-001" }
+                { "R-QC", "LE-001", "quality_officer", new[] { "receipts:read", "receipts:inspect", "receipts:dispose", "suppliers:review", "analytics:read", "quality:inspect", "quality:dispose", "mfg:read" }, "T-001" }
             });
 
         migrationBuilder.InsertData(

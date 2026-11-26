@@ -99,11 +99,14 @@ public sealed class ManufacturingRepository(ErpDbContext db, EntityContext ec) :
     public void SetOrderPlannedQty(ProductionOrder order, decimal plannedQty) =>
         Set(order, nameof(ProductionOrder.PlannedQty), plannedQty);
 
-    public void SetOrderReleased(ProductionOrder order, string releasedBomRevisionId, decimal releasedQty)
+    public void SetOrderReleased(ProductionOrder order, string releasedBomRevisionId, decimal releasedQty,
+        string? releasedRoutingRevisionId = null)
     {
         Set(order, nameof(ProductionOrder.Status), ProductionOrderStatus.Released);
         Set(order, nameof(ProductionOrder.ReleasedBomRevisionId), releasedBomRevisionId);
         Set(order, nameof(ProductionOrder.ReleasedQty), releasedQty);
+        // MF1 (024 AC3): released orders freeze the routing revision + sequence too
+        Set(order, nameof(ProductionOrder.ReleasedRoutingRevisionId), releasedRoutingRevisionId);
     }
 
     public void SetOrderCompletedQty(ProductionOrder order, decimal completedQty) =>

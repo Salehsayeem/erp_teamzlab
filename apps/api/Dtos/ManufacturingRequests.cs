@@ -23,7 +23,9 @@ public record MaterialIssueRequest(string ComponentSku, decimal Qty);
 
 public record IssueReturnRequest(string IssueId, decimal Qty);
 
-public record CompletionRequest(decimal Qty, string? Note);
+// MF10 (065): optional lot/serial identity — required when the output sku is lot-controlled
+// (mfg.lot_controlled_skus profile); the transformation event carries it forward-only
+public record CompletionRequest(decimal Qty, string? Note, string? LotSerial = null);
 
 public record ScrapRequest(string ItemSku, decimal Qty, string ReasonCode, ScrapDisposition Disposition);
 

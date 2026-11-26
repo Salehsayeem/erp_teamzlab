@@ -39,7 +39,10 @@ public record ProductionOrder(string Id, string TenantId, string LegalEntityId, 
     string Unit, decimal DemandedQty, decimal PlannedQty, decimal ReleasedQty, decimal CompletedQty,
     ProductionOrderStatus Status, decimal OverTolerancePct, string? PlannedBomRevisionId, string? ReleasedBomRevisionId,
     string? CancelReason, string? ClosedBy, DateTimeOffset? ClosedAt, string? ReopenedBy, DateTimeOffset? ReopenedAt,
-    string CreatedBy, DateTimeOffset CreatedAt);
+    string CreatedBy, DateTimeOffset CreatedAt,
+    // MF1 (024 AC3): released orders freeze the routing revision — resolved as the planning basis
+    // at create, frozen at release (optional params keep every existing call site compiling)
+    string? PlannedRoutingRevisionId = null, string? ReleasedRoutingRevisionId = null);
 
 // 008 AC3: post-release quantity amendments as versioned change rows (pre-release edits mutate in place)
 public record OrderAmendment(string Id, string TenantId, string LegalEntityId, string OrderId,

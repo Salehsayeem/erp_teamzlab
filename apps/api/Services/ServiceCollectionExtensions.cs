@@ -29,6 +29,25 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IJournalRepository, JournalRepository>();
         services.AddScoped<IManufacturingRepository, ManufacturingRepository>();
+        services.AddScoped<IMfgDeferredRepository, MfgDeferredRepository>();
+        // MFG deferred screens (MF1-MF10) — services + the IRequisitionSink stub register wave by
+        // wave with their tests (TDD: each wave's routes ship after its RED is witnessed).
+        // Wave A (MF1-MF3): RoutingService, SchedulingService. The buy-side MRP conversion target
+        // (IRequisitionSink stub, Q-MF1) registers with the MF4 wave.
+        services.AddScoped<IRoutingService, RoutingService>();
+        services.AddScoped<ISchedulingService, SchedulingService>();
+        // Wave B (MF4): the buy-side MRP conversion target is the IRequisitionSink stub until the
+        // PROCUREMENT slice binds real requisitions (Q-MF1, brief §5b)
+        services.AddScoped<IRequisitionSink, MfgRequisitionSinkStub>();
+        services.AddScoped<IMrpService, MrpService>();
+        // Wave C (MF5-MF7): shop floor, subcontract, maintenance
+        services.AddScoped<IShopFloorService, ShopFloorService>();
+        services.AddScoped<ISubcontractService, SubcontractService>();
+        services.AddScoped<IMaintenanceService, MaintenanceService>();
+        // Wave D (MF8/MF9): quality plans/inspections/holds/NCR/CAPA — R-QC consumed, never seeded
+        services.AddScoped<IQualityService, QualityService>();
+        // Wave E (MF10): genealogy, rework, close reconciliation + variance ledger
+        services.AddScoped<IGenealogyService, GenealogyService>();
         services.AddScoped<IAssetsRepository, AssetsRepository>();
         services.AddScoped<IAuditRepository, AuditRepository>();
         services.AddScoped<IFiscalPeriodRepository, FiscalPeriodRepository>();

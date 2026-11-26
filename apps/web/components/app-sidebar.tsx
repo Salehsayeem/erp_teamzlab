@@ -94,6 +94,14 @@ export default function AppSidebar({
       items: [
         { href: "mfg/boms", label: dict.nav.boms },
         { href: "mfg/production-orders", label: dict.nav.productionOrders },
+        { href: "mfg/routings", label: dict.nav.routings },
+        { href: "mfg/scheduling", label: dict.nav.scheduling },
+        { href: "mfg/dispatch", label: dict.nav.dispatch },
+        { href: "mfg/mrp", label: dict.nav.mrp },
+        { href: "mfg/shop-floor", label: dict.nav.shopFloor },
+        { href: "mfg/subcontract", label: dict.nav.subcontract },
+        { href: "mfg/quality", label: dict.nav.quality },
+        { href: "mfg/genealogy", label: dict.nav.genealogy },
       ],
     },
     {

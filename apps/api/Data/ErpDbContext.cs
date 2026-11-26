@@ -80,6 +80,45 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     public DbSet<MaterialIssue> MaterialIssues => Set<MaterialIssue>();
     public DbSet<CompletionReport> CompletionReports => Set<CompletionReport>();
     public DbSet<ScrapReport> ScrapReports => Set<ScrapReport>();
+    // MFG deferred screens (MF1-MF10) — one DbSet per new aggregate (ManufacturingDeferred.cs)
+    public DbSet<RoutingRevision> RoutingRevisions => Set<RoutingRevision>();
+    public DbSet<RoutingOperation> RoutingOperations => Set<RoutingOperation>();
+    public DbSet<WorkCenter> WorkCenters => Set<WorkCenter>();
+    public DbSet<ResourceCalendar> ResourceCalendars => Set<ResourceCalendar>();
+    public DbSet<ScheduleRun> ScheduleRuns => Set<ScheduleRun>();
+    public DbSet<OperationPlacement> OperationPlacements => Set<OperationPlacement>();
+    public DbSet<ScheduleScenario> ScheduleScenarios => Set<ScheduleScenario>();
+    public DbSet<ScheduleOverride> ScheduleOverrides => Set<ScheduleOverride>();
+    public DbSet<ConflictReport> ConflictReports => Set<ConflictReport>();
+    public DbSet<SchedulePublication> SchedulePublications => Set<SchedulePublication>();
+    public DbSet<MrpRun> MrpRuns => Set<MrpRun>();
+    public DbSet<MrpLine> MrpLines => Set<MrpLine>();
+    public DbSet<ActionMessage> ActionMessages => Set<ActionMessage>();
+    public DbSet<MrpPublication> MrpPublications => Set<MrpPublication>();
+    public DbSet<LaborTimeEntry> LaborTimeEntries => Set<LaborTimeEntry>();
+    public DbSet<CounterEvent> CounterEvents => Set<CounterEvent>();
+    public DbSet<DowntimeEvent> DowntimeEvents => Set<DowntimeEvent>();
+    public DbSet<WipTransfer> WipTransfers => Set<WipTransfer>();
+    public DbSet<CorrectionRecord> CorrectionRecords => Set<CorrectionRecord>();
+    public DbSet<SubcontractCustody> SubcontractCustodies => Set<SubcontractCustody>();
+    public DbSet<SubcontractReceipt> SubcontractReceipts => Set<SubcontractReceipt>();
+    public DbSet<MaintenanceAvailabilityEvent> MaintenanceAvailabilityEvents => Set<MaintenanceAvailabilityEvent>();
+    public DbSet<MaintenanceImpact> MaintenanceImpacts => Set<MaintenanceImpact>();
+    public DbSet<QualityPlan> QualityPlans => Set<QualityPlan>();
+    public DbSet<QualityCharacteristic> QualityCharacteristics => Set<QualityCharacteristic>();
+    public DbSet<SamplingPlan> SamplingPlans => Set<SamplingPlan>();
+    public DbSet<Inspection> Inspections => Set<Inspection>();
+    public DbSet<InspectionResult> InspectionResults => Set<InspectionResult>();
+    public DbSet<QualityHold> QualityHolds => Set<QualityHold>();
+    public DbSet<Nonconformance> Nonconformances => Set<Nonconformance>();
+    public DbSet<NcObject> NcObjects => Set<NcObject>();
+    public DbSet<ContainmentAction> ContainmentActions => Set<ContainmentAction>();
+    public DbSet<CapaCase> CapaCases => Set<CapaCase>();
+    public DbSet<CapaAction> CapaActions => Set<CapaAction>();
+    public DbSet<CapaVerification> CapaVerifications => Set<CapaVerification>();
+    public DbSet<TransformationEvent> TransformationEvents => Set<TransformationEvent>();
+    public DbSet<ReworkOrder> ReworkOrders => Set<ReworkOrder>();
+    public DbSet<VarianceLedger> VarianceLedger => Set<VarianceLedger>();
     public DbSet<Journal> Journals => Set<Journal>();
     public DbSet<FixedAsset> Assets => Set<FixedAsset>();
     public DbSet<AssetEvent> AssetEvents => Set<AssetEvent>();
@@ -143,6 +182,7 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         ConfigureSales(mb);
         ConfigureInventory(mb);
         ConfigureManufacturing(mb);
+        ConfigureManufacturingDeferred(mb);
         ConfigurePeople(mb);
         ConfigurePeopleDeferred(mb);
         ConfigureFinance(mb);
@@ -854,6 +894,12 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.Property(x => x.Status).IsConcurrencyToken();
             e.HasOne<BomRevision>().WithMany().HasForeignKey(x => x.PlannedBomRevisionId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne<BomRevision>().WithMany().HasForeignKey(x => x.ReleasedBomRevisionId).OnDelete(DeleteBehavior.Restrict);
+            // MF1 (024 AC3): released orders freeze the routing revision + sequence — resolved at
+            // create (planning basis) and frozen at release, same discipline as the BOM columns
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PlannedRoutingRevisionId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ReleasedRoutingRevisionId });
+            e.HasOne<RoutingRevision>().WithMany().HasForeignKey(x => x.PlannedRoutingRevisionId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<RoutingRevision>().WithMany().HasForeignKey(x => x.ReleasedRoutingRevisionId).OnDelete(DeleteBehavior.Restrict);
         });
 
         mb.Entity<OrderAmendment>(e =>
@@ -900,6 +946,399 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasOne<Journal>().WithMany().HasForeignKey(x => x.JournalId).OnDelete(DeleteBehavior.Restrict);
         });
     }
+
+    // --- MFG deferred screens (MF1-MF10, ERP-MFG-024..070) — tenant+entity scope on every table
+    // from day one (R14), every FK indexed, ids from the shared doc_ sequences (partition
+    // prefixes rot/wkc/srn/scn/cfl/mrp/lbt/cme/dwn/wtr/mcr/sub/mav/qpl/qin/qhd/ncr/cpa/txp/rwk/vln).
+    // Concurrency tokens on every guarded state flip (holds, NC closure, CAPA closure, labor
+    // approval, inspection finalization, rework) — a stale second actor updates ZERO rows.
+    private static void ConfigureManufacturingDeferred(ModelBuilder mb)
+    {
+        // ---- MF1: routings / work centers / calendars ----
+        mb.Entity<RoutingRevision>(e =>
+        {
+            e.ToTable("routing_revisions");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OutputSku, x.Revision }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+        });
+
+        mb.Entity<RoutingOperation>(e =>
+        {
+            e.ToTable("routing_operations");
+            e.HasKey(x => x.Id); // natural key {routingRevisionId}:{seq}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.RoutingRevisionId);
+            e.HasIndex(x => new { x.RoutingRevisionId, x.Seq }).IsUnique();
+            e.HasIndex(x => x.WorkCenterId);
+            e.HasOne<RoutingRevision>().WithMany().HasForeignKey(x => x.RoutingRevisionId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<WorkCenter>().WithMany().HasForeignKey(x => x.WorkCenterId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<WorkCenter>(e =>
+        {
+            e.ToTable("work_centers");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+        });
+
+        mb.Entity<ResourceCalendar>(e =>
+        {
+            e.ToTable("resource_calendars");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.WorkCenterId);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.WorkCenterId, x.WindowStart });
+            // maintenance materialization idempotency: one window per source event
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SourceEventId }).IsUnique()
+                .HasFilter("source_event_id IS NOT NULL");
+            e.HasOne<WorkCenter>().WithMany().HasForeignKey(x => x.WorkCenterId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ---- MF2: scheduling ----
+        mb.Entity<ScheduleRun>(e =>
+        {
+            e.ToTable("schedule_runs");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<OperationPlacement>(e =>
+        {
+            e.ToTable("operation_placements");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.ScheduleRunId);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasOne<ScheduleRun>().WithMany().HasForeignKey(x => x.ScheduleRunId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ScheduleScenario>(e =>
+        {
+            e.ToTable("schedule_scenarios");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.BaseRunId);
+            e.HasOne<ScheduleRun>().WithMany().HasForeignKey(x => x.BaseRunId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ScheduleOverride>(e =>
+        {
+            e.ToTable("schedule_overrides");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.ScenarioId);
+            e.HasOne<ScheduleScenario>().WithMany().HasForeignKey(x => x.ScenarioId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ConflictReport>(e =>
+        {
+            e.ToTable("conflict_reports");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.ScheduleRunId);
+            e.HasOne<ScheduleRun>().WithMany().HasForeignKey(x => x.ScheduleRunId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<SchedulePublication>(e =>
+        {
+            e.ToTable("schedule_publications");
+            e.HasKey(x => x.Id); // natural key = the run id — published events idempotent per run (030)
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ScheduleRunId }).IsUnique();
+            e.HasOne<ScheduleRun>().WithMany().HasForeignKey(x => x.ScheduleRunId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ---- MF4: MRP ----
+        mb.Entity<MrpRun>(e =>
+        {
+            e.ToTable("mrp_runs");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+        });
+
+        mb.Entity<MrpLine>(e =>
+        {
+            e.ToTable("mrp_lines");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.RunId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.RunId, x.LineNo }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ItemSku }); // netting scans
+            // conversion idempotency backstop: a planned order converts exactly once
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ConvertedOrderId }).IsUnique()
+                .HasFilter("converted_order_id IS NOT NULL");
+            e.HasOne<MrpRun>().WithMany().HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ActionMessage>(e =>
+        {
+            e.ToTable("action_messages");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.RunId);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.State });
+            e.HasOne<MrpRun>().WithMany().HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<MrpPublication>(e =>
+        {
+            e.ToTable("mrp_publications");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.RunId }).IsUnique(); // idempotent on run id (040)
+            e.HasOne<MrpRun>().WithMany().HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ---- MF5: shop-floor reporting extensions ----
+        mb.Entity<LaborTimeEntry>(e =>
+        {
+            e.ToTable("labor_time_entries");
+            e.HasKey(x => x.Id);
+            // 044 AC3: approved entries are immutable — a stale second approval writes nothing
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.WorkerEmploymentId, x.Status }); // approval queue
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<CounterEvent>(e =>
+        {
+            e.ToTable("counter_events");
+            e.HasKey(x => x.Id);
+            // 045 AC1: duplicate source event ids are ignored idempotently — unique backstop
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SourceEventId }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<DowntimeEvent>(e =>
+        {
+            e.ToTable("downtime_events");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.WorkCenterId });
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<WipTransfer>(e =>
+        {
+            e.ToTable("wip_transfers");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<CorrectionRecord>(e =>
+        {
+            e.ToTable("correction_records");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.TargetType, x.TargetId });
+        });
+
+        // ---- MF6: subcontract ----
+        mb.Entity<SubcontractCustody>(e =>
+        {
+            e.ToTable("subcontract_custodies");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.InventoryMovementId }); // accepted-movement lookups
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<SubcontractReceipt>(e =>
+        {
+            e.ToTable("subcontract_receipts");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ---- MF7: maintenance ----
+        mb.Entity<MaintenanceAvailabilityEvent>(e =>
+        {
+            e.ToTable("maintenance_availability_events");
+            e.HasKey(x => x.Id);
+            // 053 AC1: idempotent ingestion keyed on the source event id
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SourceEventId }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ResourceCode });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+        });
+
+        mb.Entity<MaintenanceImpact>(e =>
+        {
+            e.ToTable("maintenance_impacts");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OutageEventId });
+            e.HasOne<MaintenanceAvailabilityEvent>().WithMany().HasForeignKey(x => x.OutageEventId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ---- MF8: quality plans / inspections ----
+        mb.Entity<QualityPlan>(e =>
+        {
+            e.ToTable("quality_plans");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ItemSku, x.Revision }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+        });
+
+        mb.Entity<QualityCharacteristic>(e =>
+        {
+            e.ToTable("quality_characteristics");
+            e.HasKey(x => x.Id); // natural key {planId}:{code}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.PlanId);
+            e.HasIndex(x => new { x.PlanId, x.Code }).IsUnique();
+            e.HasOne<QualityPlan>().WithMany().HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<SamplingPlan>(e =>
+        {
+            e.ToTable("sampling_plans");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.QualityPlanId);
+            e.HasOne<QualityPlan>().WithMany().HasForeignKey(x => x.QualityPlanId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<Inspection>(e =>
+        {
+            e.ToTable("inspections");
+            e.HasKey(x => x.Id);
+            // 058 AC2: finalized inspections are immutable — the flip is token-guarded
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.QualityPlanId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+        });
+
+        mb.Entity<InspectionResult>(e =>
+        {
+            e.ToTable("inspection_results");
+            e.HasKey(x => x.Id); // natural key {inspectionId}:{characteristicCode}:a{amendmentNo}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.InspectionId);
+            e.HasIndex(x => new { x.InspectionId, x.CharacteristicCode, x.AmendmentNo }).IsUnique();
+            e.HasOne<Inspection>().WithMany().HasForeignKey(x => x.InspectionId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ---- MF9: holds / NCR / CAPA ----
+        mb.Entity<QualityHold>(e =>
+        {
+            e.ToTable("quality_holds");
+            e.HasKey(x => x.Id);
+            // 059 AC2: the disposition flip is token-guarded; availability scans filter open holds
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.ItemSku, x.Status }); // availability subtraction
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+        });
+
+        mb.Entity<Nonconformance>(e =>
+        {
+            e.ToTable("nonconformances");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+        });
+
+        mb.Entity<NcObject>(e =>
+        {
+            e.ToTable("nc_objects");
+            e.HasKey(x => x.Id); // natural key {nonconformanceId}:{objectRef}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.NonconformanceId);
+            e.HasOne<Nonconformance>().WithMany().HasForeignKey(x => x.NonconformanceId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ContainmentAction>(e =>
+        {
+            e.ToTable("containment_actions");
+            e.HasKey(x => x.Id);
+            // 061 AC2: a stale second containment release writes nothing
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.NonconformanceId);
+            e.HasOne<Nonconformance>().WithMany().HasForeignKey(x => x.NonconformanceId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<CapaCase>(e =>
+        {
+            e.ToTable("capa_cases");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+        });
+
+        mb.Entity<CapaAction>(e =>
+        {
+            e.ToTable("capa_actions");
+            e.HasKey(x => x.Id); // natural key {capaCaseId}:a{n}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.CapaCaseId);
+            e.HasOne<CapaCase>().WithMany().HasForeignKey(x => x.CapaCaseId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<CapaVerification>(e =>
+        {
+            e.ToTable("capa_verifications");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.CapaCaseId);
+            e.HasOne<CapaCase>().WithMany().HasForeignKey(x => x.CapaCaseId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        // ---- MF10: genealogy / rework / variance ledger ----
+        mb.Entity<TransformationEvent>(e =>
+        {
+            e.ToTable("transformation_events");
+            e.HasKey(x => x.Id);
+            // 064: immutable — one event per completion, emitted forward-only (Q-MF4)
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.CompletionId }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OutputSku, x.LotSerial }); // genealogy scans
+            e.HasOne<ProductionOrder>().WithMany().HasForeignKey(x => x.OrderId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ReworkOrder>(e =>
+        {
+            e.ToTable("rework_orders");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SourceOrderId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+        });
+
+        mb.Entity<VarianceLedger>(e =>
+        {
+            e.ToTable("variance_ledger");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrderId, x.Disposition }); // close-gate scans
+        });
+    }
+
 
     // PEOPLE deep (workers/time/payroll, rulings R-PEO1..11) — tenant+entity scope on every
     // table from day one (R14 gate), every FK indexed, ids from the shared doc_ sequences.
@@ -1561,6 +2000,14 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                      "ev", "lot", "qa", "bid", "awd", "ctr", "amd", "obl",
                      // MFG deep prefixes (BOM/MFO/ISS/CPL/SCR) — ship with AddManufacturingDeepSeed
                      "bom", "mfo", "iss", "cpl", "scr",
+                     // MFG deferred screens (MF1-MF10) — routings/work-centers (rot, wkc),
+                     // scheduling (srn runs, scn scenarios, cfl conflicts), MRP (mrp), shop-floor
+                     // (lbt labor, cme counters, dwn downtime, wtr transfers, mcr corrections),
+                     // subcontract (sub), maintenance (mav), quality (qpl plans, qin inspections,
+                     // qhd holds, ncr nonconformances, capa cases), genealogy (txp events, rwk
+                     // rework, vln variances). doc_sch went to PEOPLE schedules — MFG uses srn.
+                     "rot", "wkc", "srn", "scn", "cfl", "mrp", "lbt", "cme", "dwn", "wtr", "mcr",
+                     "sub", "mav", "qpl", "qin", "qhd", "ncr", "cpa", "txp", "rwk", "vln",
                      // PEOPLE deep prefixes (AddPeopleDeepSeed). doc_per is reserved: R-PEO3 collapsed
                      // the person entity into the worker register, so nothing consumes it today — the
                      // sequence stays so a later person split keeps its id-space
@@ -1627,9 +2074,14 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             // task-6: independent evaluators (031 AC1) — read + score only, no buyer permissions
             new { Id = "R-EVAL", Name = "evaluator", Permissions = new[] { "sourcing:read", "sourcing:evaluate" }, TenantId = t, LegalEntityId = le },
             // MFG deep (R-MFG9): every MFG gate sits on R-MFG — approver ≠ actor on boms:approve,
-            // mfg:release and mfg:close; journals post service-side with the period guard only
+            // mfg:release and mfg:close; journals post service-side with the period guard only.
+            // MFG deferred screens extend the row with the FULL surviving superset (merge lesson:
+            // UpdateData replaces the whole permissions column): scheduling (mfg:schedule), MRP
+            // (mfg:mrp), shop floor (mfg:shopfloor), rework approval (mfg:rework) and quality plan
+            // authoring (quality:plan — 055 SoD triple; inspect/dispose stay on R-QC, seeded by
+            // PROCUREMENT, never here).
             new { Id = "R-MFG", Name = "manufacturing_officer",
-                Permissions = new[] { "boms:read", "boms:write", "boms:approve", "mfg:read", "mfg:write", "mfg:release", "mfg:override", "mfg:close", "mfg:reopen" },
+                Permissions = new[] { "boms:read", "boms:write", "boms:approve", "mfg:read", "mfg:write", "mfg:release", "mfg:override", "mfg:close", "mfg:reopen", "mfg:schedule", "mfg:mrp", "mfg:shopfloor", "mfg:rework", "quality:plan" },
                 TenantId = t, LegalEntityId = le },
             // PEOPLE deep (R-PEO9): R-HR is the maker — register/time/payroll:calculate plus the
             // correction-checker permission (time:approve, approver ≠ requester, 027). payroll:approve
@@ -1643,7 +2095,11 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             // deferred PROCUREMENT wave (Q-S1/Q-P7): full-union copies — R-PROC2 mirrors R-PROC so
             // maker-checker has two procurement officers; R-QC is the quality authority (MFG consumes)
             new { Id = "R-PROC2", Name = "procurement_officer_2", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer", "sourcing:read", "sourcing:write", "contracts:read", "contracts:write", "suppliers:read", "requisitions:write", "requisitions:read", "catalog:write", "receipts:inspect", "analytics:read" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-QC", Name = "quality_officer", Permissions = new[] { "receipts:read", "receipts:inspect", "receipts:dispose", "suppliers:review", "analytics:read" }, TenantId = t, LegalEntityId = le });
+            new { Id = "R-QC", Name = "quality_officer", Permissions = new[] { "receipts:read", "receipts:inspect", "receipts:dispose", "suppliers:review", "analytics:read",
+                    // union-merge (MFG deferred wave): MF8 quality endpoints gate quality:inspect /
+                    // quality:dispose and their GET routes gate mfg:read — MFG's wave fixture carried
+                    // these on R-QC; folded into the seed so the PROC-seeded officer can inspect
+                    "quality:inspect", "quality:dispose", "mfg:read" }, TenantId = t, LegalEntityId = le });
 
         mb.Entity<User>().HasData(
             new { Id = "U-001", Email = "admin@teamzlab.dev", DisplayName = "Tenant Admin", Active = true, TenantId = t, LegalEntityId = le },
@@ -1661,7 +2117,13 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             // union-merge renumber: PROC's branch seeded the quality officer as U-010, but the
             // landed PEOPLE wave already took U-010 for the HR checker — the QC user ships as
             // U-011 (ProcurementDeferredTests.Qc matches)
-            new { Id = "U-011", Email = "quality@teamzlab.dev", DisplayName = "Quality Officer", Active = true, TenantId = t, LegalEntityId = le });
+            new { Id = "U-011", Email = "quality@teamzlab.dev", DisplayName = "Quality Officer", Active = true, TenantId = t, LegalEntityId = le },
+            // union-merge renumber: MFG's branch seeded the planner as U-011, but the PROC merge
+            // took U-011 for the quality officer — the planner ships as U-012
+            // (ManufacturingDeferredTests.Planner matches). Q-PM5: a second MFG user so
+            // maker-checker is exercisable INSIDE R-MFG (schedule publish override, rework
+            // approval ≠ completion actor, labor approval ≠ reporter)
+            new { Id = "U-012", Email = "mfg.planner@teamzlab.dev", DisplayName = "Manufacturing Planner", Active = true, TenantId = t, LegalEntityId = le });
 
         mb.Entity<Membership>().HasData(
             new Membership("U-001", t, le, "R-ADMIN"),
@@ -1674,7 +2136,8 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new Membership("U-007", t, le, "R-HR"),
             new Membership("U-010", t, le, "R-HR"),
             new Membership("U-009", t, le, "R-PROC2"),
-            new Membership("U-011", t, le, "R-QC"));
+            new Membership("U-011", t, le, "R-QC"),
+            new Membership("U-012", t, le, "R-MFG"));
 
         mb.Entity<AuditEvent>().HasData(new
         {
@@ -1719,5 +2182,10 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                 new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
         mb.Entity<FinanceSetting>().HasData(
             new FinanceSetting("FS-budget-mode", t, le, "budget.check_mode", "Pass"));
+
+        // MF5 (046 AC1): the effective downtime reason profile is tenant data — the shop-floor
+        // downtime validator fails closed when the row is missing
+        mb.Entity<FinanceSetting>().HasData(
+            new FinanceSetting("FS-mfg-downtime", t, le, "mfg.downtime_reasons", "SETUP,MACHINE_DOWN,TOOL_CHANGE,NO_OPERATOR,MATERIAL_SHORT,QUALITY_STOP"));
     }
 }
