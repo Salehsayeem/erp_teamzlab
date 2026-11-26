@@ -35,6 +35,7 @@ import {
 } from "@/components/uikit";
 import type { Column } from "@/components/uikit";
 import { fmtDay, hasPermission, mfgActionError, mfgStatusLabel, mfgTone, useMfgMe } from "../../_lib/helpers";
+import { DeferredOrderBlocks } from "../../_lib/deferred-blocks";
 
 type SessionIssue = { id: string; componentSku: string; qty: number; value: number; journalId: string | null };
 
@@ -582,6 +583,8 @@ export default function ProductionOrderDetailPage() {
           </div>
         ) : null}
       </section>
+
+      {token ? <DeferredOrderBlocks token={token} orderId={order.id} t={t} locale={locale} /> : null}
 
       {sessionIssues.length > 0 || sessionCompletions.length > 0 || sessionScraps.length > 0 ? (
         <section className="card">
