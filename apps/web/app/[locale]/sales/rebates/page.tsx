@@ -76,9 +76,8 @@ export default function RebatesPage() {
   const [claimError, setClaimError] = useState<string | null>(null);
 
   const [settleId, setSettleId] = useState("");
-  const [settleIdError, setSettleIdError] = useState<string | null>(null);
-  const [settleFor, setSettleFor] = useState<{ id: string; mode: "approve" | "reject" } | null>(null);
-  const [settleReason, setSettleReason] = useState("");
+  const [settleApproveId, setSettleApproveId] = useState<string | null>(null);
+  const [settleNote, setSettleNote] = useState("");
   const [settleBusy, setSettleBusy] = useState(false);
   const [settleModalError, setSettleModalError] = useState<string | null>(null);
 
@@ -187,31 +186,28 @@ export default function RebatesPage() {
   }
 
 
+  // Settlement is approve-only: the API has no claim-reject semantics yet
+  // (ApproveClaim unconditionally approves; claims-reject is ledgered with
+  // the claims-GET read gap for the next slice).
   async function confirmSettle() {
-    if (!token || settleFor === null) return;
-    const rejecting = settleFor.mode === "reject";
-    if (rejecting && !settleReason.trim()) return;
+    if (!token || settleApproveId === null) return;
     setSettleBusy(true);
     setSettleModalError(null);
-    const res = await approveRebateClaim(token, settleFor.id, settleReason.trim() || null);
+    const res = await approveRebateClaim(token, settleApproveId, settleNote.trim() || null);
     setSettleBusy(false);
     if (!res.ok) {
       setSettleModalError(salesActionError(t, res.code, res.message));
       return;
     }
-    setSettleFor(null);
-    setSettleReason("");
-    pushToast(rejecting ? "info" : "success", rejecting ? tc.claimRejected : tc.claimApproved);
+    setSettleApproveId(null);
+    setSettleNote("");
+    pushToast("success", tc.claimApproved);
   }
 
-  function openSettle(mode: "approve" | "reject") {
-    if (!settleId.trim()) {
-      setSettleIdError(tc.claimIdRequired);
-      return;
-    }
-    setSettleIdError(null);
-    setSettleFor({ id: settleId.trim(), mode });
-    setSettleReason("");
+  function openSettle() {
+    if (!settleId.trim()) return;
+    setSettleApproveId(settleId.trim());
+    setSettleNote("");
     setSettleModalError(null);
   }
 
@@ -317,12 +313,11 @@ export default function RebatesPage() {
         <h2 className="t-title">{tc.settleTitle}</h2>
         <p className="t-caption">{tc.settleHint}</p>
         <div className="form-grid">
-          <Input id="rb-settle-id" label={tc.claimId} value={settleId} onChange={(e) => setSettleId(e.target.value)} error={settleIdError ?? undefined} />
+          <Input id="rb-settle-id" label={tc.claimId} value={settleId} onChange={(e) => setSettleId(e.target.value)} />
         </div>
         {settleGate === false ? <p className="t-caption" role="status">{tc.forbidden}</p> : null}
         <div className="row-actions" style={{ justifyContent: "flex-start" }}>
-          <Button disabled={!meReady || settleGate === false || !settleId.trim()} onClick={() => openSettle("approve")}>{tc.approveClaim}</Button>
-          <Button variant="danger" disabled={!meReady || settleGate === false || !settleId.trim()} onClick={() => openSettle("reject")}>{tc.rejectClaim}</Button>
+          <Button disabled={!meReady || settleGate === false || !settleId.trim()} onClick={() => openSettle()}>{tc.approveClaim}</Button>
         </div>
       </section>
 
@@ -343,18 +338,14 @@ export default function RebatesPage() {
         </form>
       </Modal>
 
-      <Modal open={settleFor !== null} onClose={() => setSettleFor(null)} title={tc.approveConfirmTitle} closeLabel={t.common.cancel}>
+      <Modal open={settleApproveId !== null} onClose={() => setSettleApproveId(null)} title={tc.approveConfirmTitle} closeLabel={t.common.cancel}>
         <p>{tc.approveConfirm}</p>
-        <p className="t-caption">{tc.claimColumns.id}: <span className="mono">{settleFor?.id}</span></p>
-        {settleFor?.mode === "reject" ? (
-          <Input id="rb-settle-reason" label={tc.rejectReason} value={settleReason} onChange={(e) => setSettleReason(e.target.value)} />
-        ) : null}
+        <p className="t-caption">{tc.claimColumns.id}: <span className="mono">{settleApproveId}</span></p>
+        <Input id="rb-settle-note" label={tc.settleNote} value={settleNote} onChange={(e) => setSettleNote(e.target.value)} />
         {settleModalError ? <p className="banner" role="alert">{settleModalError}</p> : null}
         <div className="modal__actions">
-          <Button variant="secondary" onClick={() => setSettleFor(null)}>{t.common.cancel}</Button>
-          <Button variant={settleFor?.mode === "reject" ? "danger" : "primary"} loading={settleBusy} onClick={() => void confirmSettle()}>
-            {settleFor?.mode === "reject" ? tc.rejectClaim : tc.approveClaim}
-          </Button>
+          <Button variant="secondary" onClick={() => setSettleApproveId(null)}>{t.common.cancel}</Button>
+          <Button loading={settleBusy} onClick={() => void confirmSettle()}>{tc.approveClaim}</Button>
         </div>
       </Modal>
     </div>
