@@ -5,8 +5,8 @@ import { useParams } from "next/navigation";
 import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
 import {
   assignPosition, createOrgUnit, createPosition, createWorkLocation,
-  decideAssignmentException, fetchOrgUnits, fetchPositionAssignments, fetchPositions,
-  type OrgUnitRow, type PositionAssignmentRow, type PositionRow,
+  decideAssignmentException, fetchOrgUnits, fetchPositionAssignments, fetchPositions, fetchWorkLocations,
+  type OrgUnitRow, type PositionAssignmentRow, type PositionRow, type WorkLocationRow,
 } from "@/lib/services/people";
 import { useAuth } from "@/hooks/useAuth";
 import { fmtNumber } from "@/lib/format";
@@ -28,6 +28,7 @@ export default function OrgPage() {
   const canDecide = hasPermission(permissions, "payroll:approve");
 
   const [units, setUnits] = useState<OrgUnitRow[] | null>(null);
+  const [locations, setLocations] = useState<WorkLocationRow[] | null>(null);
   const [positions, setPositions] = useState<PositionRow[] | null>(null);
   const [assignments, setAssignments] = useState<PositionAssignmentRow[] | null>(null);
   const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
@@ -35,6 +36,7 @@ export default function OrgPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [unit, setUnit] = useState({ code: "", name: "", parentOrgUnitId: "", effectiveFrom: "" });
+  const [location, setLocation] = useState({ code: "", name: "", timezone: "Asia/Dhaka" });
   const [position, setPosition] = useState({ code: "", title: "", gradeCode: "", budgetedFte: "1", budgetedHeadcount: "1" });
   const [assign, setAssign] = useState<{ position: PositionRow; employmentId: string; fte: string; costCenter: string; effectiveFrom: string; exceptionReason: string } | null>(null);
   const [pending, setPending] = useState<PositionAssignmentRow | null>(null);
@@ -45,11 +47,12 @@ export default function OrgPage() {
   const load = useCallback(async () => {
     if (!token) return;
     setPhase("loading");
-    const [u, p, a] = await Promise.all([fetchOrgUnits(token), fetchPositions(token), fetchPositionAssignments(token)]);
-    if (u.ok && p.ok && a.ok) {
+    const [u, p, a, l] = await Promise.all([fetchOrgUnits(token), fetchPositions(token), fetchPositionAssignments(token), fetchWorkLocations(token)]);
+    if (u.ok && p.ok && a.ok && l.ok) {
       setUnits(u.data);
       setPositions(p.data);
       setAssignments(a.data);
+      setLocations(l.data);
       setPhase("success");
     } else {
       setUnits(null);
@@ -67,6 +70,18 @@ export default function OrgPage() {
     if (!res.ok) { setFormError(peopleActionError(t, res.code, res.message)); return; }
     push("success", res.data.code);
     setUnit({ code: "", name: "", parentOrgUnitId: "", effectiveFrom: "" });
+    void load();
+  }
+
+  async function submitLocation(e: FormEvent) {
+    e.preventDefault();
+    if (!token || !location.code.trim() || !location.name.trim()) return;
+    setBusy(true); setFormError(null);
+    const res = await createWorkLocation(token, { code: location.code.trim(), name: location.name.trim(), timezone: location.timezone.trim() });
+    setBusy(false);
+    if (!res.ok) { setFormError(peopleActionError(t, res.code, res.message)); return; }
+    push("success", res.data.code);
+    setLocation({ code: "", name: "", timezone: location.timezone });
     void load();
   }
 
@@ -114,6 +129,13 @@ export default function OrgPage() {
     void load();
   }
 
+  const locationColumns: Column<WorkLocationRow>[] = useMemo(() => [
+    { key: "code", label: tc.columns.code, mono: true, render: (l) => l.code },
+    { key: "name", label: tc.columns.name, render: (l) => l.name },
+    { key: "tz", label: tc.timezone, mono: true, render: (l) => l.timezone },
+    { key: "active", label: tc.columns.status, mono: true, render: (l) => (l.active ? "✓" : "—") },
+  ], [tc]);
+
   const unitColumns: Column<OrgUnitRow>[] = useMemo(() => [
     { key: "code", label: tc.columns.code, mono: true, render: (u) => u.code },
     { key: "name", label: tc.columns.name, render: (u) => u.name },
@@ -148,7 +170,6 @@ export default function OrgPage() {
   ], [tc, t, locale, canWrite]);
 
   if (!ready || phase === "loading") return <LoadingSkeleton rows={6} />;
-  void submitDecision;
   if (phase === "error") return <ErrorState message={tc.loadFailed} retryLabel={t.common.retry} onRetry={() => void load()} />;
 
   return (
@@ -195,6 +216,19 @@ export default function OrgPage() {
         {(units ?? []).length === 0 ? <EmptyState title={tc.empty} /> : <Table columns={unitColumns} rows={units ?? []} caption={tc.title} />}
       </section>
 
+      <section className="card">
+        <h2 className="t-title">{tc.locationFormTitle}</h2>
+        {canWrite === true ? (
+          <form onSubmit={(e) => void submitLocation(e)} className="inline-flex" style={{ gap: "0.5rem", alignItems: "end" }}>
+            <Input id="loc-code" label={tc.code} value={location.code} onChange={(e) => setLocation({ ...location, code: e.target.value })} />
+            <Input id="loc-name" label={tc.name} value={location.name} onChange={(e) => setLocation({ ...location, name: e.target.value })} />
+            <Input id="loc-tz" label={tc.timezone} value={location.timezone} onChange={(e) => setLocation({ ...location, timezone: e.target.value })} />
+            <Button type="submit" loading={busy} disabled={!meReady}>{tc.createLocation}</Button>
+          </form>
+        ) : <p className="t-caption">{t.people.errors.forbidden}</p>}
+        {(locations ?? []).length === 0 ? <EmptyState title={tc.empty} /> : <Table columns={locationColumns} rows={locations ?? []} caption={tc.locationFormTitle} />}
+      </section>
+
       {(pendingRows.length > 0 && canDecide === true) ? (
         <section className="card">
           <h2 className="t-title">{tc.exceptionReason}</h2>
@@ -228,7 +262,10 @@ export default function OrgPage() {
           <form onSubmit={(e) => { e.preventDefault(); void submitDecision(true); }}>
             <p className="t-caption" aria-live="polite">{pending.employmentId} · {pending.exceptionReason ?? ""}</p>
             <Input id="exc-reason" label={tc.exceptionReason} value={decisionReason} onChange={(e) => setDecisionReason(e.target.value)} />
-            <p><Button type="submit" loading={busy}>{t.people.leave.approve}</Button></p>
+            <p className="inline-flex" style={{ gap: "0.5rem" }}>
+              <Button type="submit" loading={busy}>{t.people.leave.approve}</Button>
+              <Button type="button" variant="secondary" onClick={() => void submitDecision(false)}>{t.people.leave.reject}</Button>
+            </p>
           </form>
         ) : null}
       </Modal>

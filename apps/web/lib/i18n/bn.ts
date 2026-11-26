@@ -1179,7 +1179,7 @@ export const bn: Dict = {
       assignTitle: "কর্মী নিয়োগ",
       exceptionHint: "বাজেটের বাইরে, চাকরির বাইরে বা ক্রেডেনশিয়াল-ব্লকড নিয়োগ Pending exception-এ যায় — ফিন্যান্স ব্যতিক্রম সিদ্ধান্ত দরকার।",
       code: "কোড", name: "নাম", parentUnit: "প্যারেন্ট ইউনিট (কোড)", location: "লোকেশন আইডি",
-      timezone: "টাইমজোন", address: "ঠিকানা (ঐচ্ছিক)", effectiveFrom: "কার্যকর থেকে",
+      timezone: "টাইমজোন", effectiveFrom: "কার্যকর থেকে",
       effectiveTo: "কার্যকর পর্যন্ত (ঐচ্ছিক)", positionTitle: "পদবি", grade: "গ্রেড (ঐচ্ছিক)",
       requiredCredential: "প্রয়োজনীয় ক্রেডেনশিয়াল (ঐচ্ছিক)", budgetFte: "বাজেটেড FTE",
       budgetHeadcount: "বাজেটেড শিরোসংখ্যান", startTime: "শুরুর সময় (HH:mm)",

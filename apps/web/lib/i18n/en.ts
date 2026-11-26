@@ -1177,7 +1177,7 @@ export const en = {
       assignTitle: "Assign a worker",
       exceptionHint: "Over budget, out-of-employment or credential-blocked assignments land as Pending exception and need a finance exception decision.",
       code: "Code", name: "Name", parentUnit: "Parent unit (code)", location: "Location id",
-      timezone: "Timezone", address: "Address (optional)", effectiveFrom: "Effective from",
+      timezone: "Timezone", effectiveFrom: "Effective from",
       effectiveTo: "Effective to (optional)", positionTitle: "Title", grade: "Grade (optional)",
       requiredCredential: "Required credential (optional)", budgetFte: "Budgeted FTE",
       budgetHeadcount: "Budgeted headcount", startTime: "Start time (HH:mm)",

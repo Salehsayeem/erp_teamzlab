@@ -20,7 +20,7 @@ export default function LeavePage() {
   const t = getDictionary(locale);
   const tc = t.people.leave;
   const { token, ready } = useAuth(locale);
-  const { permissions, meReady } = usePeopleMe(token);
+  const { meId, permissions, meReady } = usePeopleMe(token);
   const canApprove = hasPermission(permissions, "leave:approve");
   const canAdjust = hasPermission(permissions, "leave:adjust");
 
@@ -44,6 +44,8 @@ export default function LeavePage() {
   const [dispositionForm, setDispositionForm] = useState({ disposition: "Excused", reason: "" });
   const [deciding, setDeciding] = useState<{ row: LeaveRequestRow; approve: boolean } | null>(null);
   const [applying, setApplying] = useState<{ row: LeaveAdjustmentRow; approve: boolean } | null>(null);
+  const [withdrawing, setWithdrawing] = useState<LeaveRequestRow | null>(null);
+  const [withdrawReason, setWithdrawReason] = useState("");
 
   const push = (tone: ToastItem["tone"], message: string) => setToasts((p) => [...p, { id: crypto.randomUUID(), tone, message }]);
 
@@ -88,7 +90,7 @@ export default function LeavePage() {
     if (!token) return;
     const ok = await guard(() => runAccrual(token, accrual.leaveTypeId.trim(), { period: accrual.period.trim(), asOf: new Date().toISOString().slice(0, 10) }), accrual.period);
     setBusy(false);
-    if (ok) push("success", accrual.period);
+    if (ok) setAccrual({ ...accrual, period: "" });
   }
 
   async function submitRequest(e: FormEvent) {
@@ -116,6 +118,14 @@ export default function LeavePage() {
     if (!deciding) return;
     await guard(() => decideLeaveRequest(token!, deciding.row.id, approve), deciding.row.id);
     setDeciding(null);
+    setBusy(false);
+  }
+
+  async function confirmWithdraw() {
+    if (!withdrawing || !withdrawReason.trim()) return;
+    await guard(() => withdrawLeaveRequest(token!, withdrawing.id, withdrawReason.trim()), withdrawing.id);
+    setWithdrawing(null);
+    setWithdrawReason("");
     setBusy(false);
   }
 
@@ -170,9 +180,10 @@ export default function LeavePage() {
         <span className="inline-flex" style={{ gap: "0.25rem" }}>
           {canApprove === true ? <Button variant="secondary" onClick={() => setDeciding({ row: x, approve: true })}>{tc.approve}</Button> : null}
           {canApprove === true ? <Button variant="secondary" onClick={() => setDeciding({ row: x, approve: false })}>{tc.reject}</Button> : null}
+          {meId !== null && x.requestedBy === meId ? <Button variant="secondary" onClick={() => setWithdrawing(x)}>{tc.withdraw}</Button> : null}
         </span>
       ) : null },
-  ], [tc, t, canApprove, token]);
+  ], [tc, t, canApprove, token, meId]);
 
   const adjustmentColumns: Column<LeaveAdjustmentRow>[] = useMemo(() => [
     { key: "worker", label: tc.columns.worker, mono: true, render: (x) => x.employmentId },
@@ -234,6 +245,12 @@ export default function LeavePage() {
             <p><Button type="submit" loading={busy} disabled={!meReady}>{tc.createType}</Button></p>
           </form>
           {(types ?? []).length === 0 ? <EmptyState title={tc.empty} /> : <Table columns={typeColumns} rows={types ?? []} caption={tc.title} />}
+          <h3 className="t-title" style={{ marginTop: "1rem" }}>{tc.accrualTitle}</h3>
+          <form onSubmit={(e) => void submitAccrual(e)} className="inline-flex" style={{ gap: "0.5rem", alignItems: "end" }}>
+            <Input id="lv-acc-type" label={tc.leaveTypeId} value={accrual.leaveTypeId} onChange={(e) => setAccrual({ ...accrual, leaveTypeId: e.target.value })} />
+            <Input id="lv-acc-period" label={tc.period} value={accrual.period} onChange={(e) => setAccrual({ ...accrual, period: e.target.value })} />
+            <Button type="submit" loading={busy}>{tc.runAccrual}</Button>
+          </form>
         </section>
       ) : null}
 
@@ -309,6 +326,11 @@ export default function LeavePage() {
           {(attendance ?? []).length === 0 ? <EmptyState title={tc.empty} /> : <Table columns={attColumns} rows={attendance ?? []} caption={tc.tabAttendance} />}
         </section>
       ) : null}
+
+      <Modal open={withdrawing !== null} onClose={() => { setWithdrawing(null); setWithdrawReason(""); }} title={tc.withdraw + " — " + (withdrawing?.id ?? "")} closeLabel={t.common.cancel} busy={busy}>
+        <Input id="lv-withdraw-reason" label={tc.decisionReason} value={withdrawReason} onChange={(e) => setWithdrawReason(e.target.value)} />
+        <p><Button onClick={() => void confirmWithdraw()} loading={busy}>{tc.withdraw}</Button></p>
+      </Modal>
 
       <Modal open={deciding !== null} onClose={() => setDeciding(null)} title={(deciding?.approve ? tc.approve : tc.reject) + " — " + (deciding?.row.id ?? "")} closeLabel={t.common.cancel} busy={busy}>
         <p className="t-caption">{tc.decisionHint}</p>

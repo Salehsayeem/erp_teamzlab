@@ -8,7 +8,7 @@ import {
   type ScheduleDay, type ScheduleRow,
 } from "@/lib/services/people";
 import { useAuth } from "@/hooks/useAuth";
-import { Badge, Button, EmptyState, ErrorState, Input, LoadingSkeleton, Table, ToastRegion, type ToastItem } from "@/components/uikit";
+import { Button, EmptyState, ErrorState, Input, LoadingSkeleton, Table, ToastRegion, type ToastItem } from "@/components/uikit";
 import type { Column } from "@/components/uikit";
 import { hasPermission, peopleActionError, usePeopleMe } from "../_lib/helpers";
 
@@ -86,11 +86,10 @@ export default function SchedulesPage() {
   }
 
   const columns: Column<ScheduleRow>[] = useMemo(() => [
-    { key: "code", label: tc.columns.date, mono: true, render: (s) => s.code },
-    { key: "name", label: tc.columns.date, render: (s) => s.name },
-    { key: "tz", label: tc.columns.date, mono: true, render: (s) => s.timezone + " · " + s.startTimeLocal },
-    { key: "versions", label: tc.columns.date, render: (s) => s.versions.map((v) => `v${v.version}: ${v.weeklyPlannedHours}h @ ${v.effectiveFrom}`).join(" · ") || "—" },
-    { key: "status", label: tc.columns.date, render: (s) => <Badge tone="success">{tc.columns.workday}</Badge> },
+    { key: "code", label: tc.code, mono: true, render: (s) => s.code },
+    { key: "name", label: tc.name, render: (s) => s.name },
+    { key: "tz", label: tc.timezone, mono: true, render: (s) => s.timezone + " · " + s.startTimeLocal },
+    { key: "versions", label: tc.weeklyHours, render: (s) => s.versions.map((v) => `v${v.version}: ${v.weeklyPlannedHours}h @ ${v.effectiveFrom}`).join(" · ") || "—" },
   ], [tc]);
 
   if (!ready || phase === "loading") return <LoadingSkeleton rows={5} />;
