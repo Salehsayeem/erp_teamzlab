@@ -760,7 +760,7 @@ function ReconTab({ t, locale, token }: { t: ReturnType<typeof getDictionary>; l
   const load = useCallback(async (asOfDate: string) => {
     if (!token) return;
     setPhase("loading");
-    const res = await getArReconciliation(token);
+    const res = await getArReconciliation(token, asOfDate.trim() || undefined);
     if (res.ok) {
       setReport(res.data);
       setPhase("success");
@@ -768,7 +768,6 @@ function ReconTab({ t, locale, token }: { t: ReturnType<typeof getDictionary>; l
       setReport(null);
       setPhase("error");
     }
-    void asOfDate;
   }, [token]);
 
   const readGate = hasPermission(permissions, "invoices:read");
@@ -794,6 +793,7 @@ function ReconTab({ t, locale, token }: { t: ReturnType<typeof getDictionary>; l
       {phase === "error" ? <ErrorState message={tc.loadFailed} retryLabel={t.common.retry} onRetry={() => void load(asOf)} /> : null}
       {phase === "success" && report ? (
         <>
+          <p className="t-caption" role="status">{tc.asOfShown}: <span className="mono">{fmtDay(report.asOf, locale)}</span></p>
           <div className="tiles">
             <div className="kpi">
               <p className="kpi__label">{tc.tiles.totalOpen}</p>

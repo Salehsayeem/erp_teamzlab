@@ -75,6 +75,13 @@ export default function RebatesPage() {
   const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState<string | null>(null);
 
+  const [settleId, setSettleId] = useState("");
+  const [settleIdError, setSettleIdError] = useState<string | null>(null);
+  const [settleFor, setSettleFor] = useState<{ id: string; mode: "approve" | "reject" } | null>(null);
+  const [settleReason, setSettleReason] = useState("");
+  const [settleBusy, setSettleBusy] = useState(false);
+  const [settleModalError, setSettleModalError] = useState<string | null>(null);
+
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   function pushToast(tone: ToastItem["tone"], message: string) {
     setToasts((prev) => [...prev, { id: crypto.randomUUID(), tone, message }]);
@@ -180,7 +187,36 @@ export default function RebatesPage() {
   }
 
 
+  async function confirmSettle() {
+    if (!token || settleFor === null) return;
+    const rejecting = settleFor.mode === "reject";
+    if (rejecting && !settleReason.trim()) return;
+    setSettleBusy(true);
+    setSettleModalError(null);
+    const res = await approveRebateClaim(token, settleFor.id, settleReason.trim() || null);
+    setSettleBusy(false);
+    if (!res.ok) {
+      setSettleModalError(salesActionError(t, res.code, res.message));
+      return;
+    }
+    setSettleFor(null);
+    setSettleReason("");
+    pushToast(rejecting ? "info" : "success", rejecting ? tc.claimRejected : tc.claimApproved);
+  }
+
+  function openSettle(mode: "approve" | "reject") {
+    if (!settleId.trim()) {
+      setSettleIdError(tc.claimIdRequired);
+      return;
+    }
+    setSettleIdError(null);
+    setSettleFor({ id: settleId.trim(), mode });
+    setSettleReason("");
+    setSettleModalError(null);
+  }
+
   const writeGate = hasPermission(permissions, "rebates:write");
+  const settleGate = hasPermission(permissions, "rebates:settle");
 
   if (!ready || (phase === "loading" && agreements === null)) return <LoadingSkeleton rows={7} />;
   if (phase === "error") return <ErrorState message={tc.loadFailed ?? ""} retryLabel={t.common.retry} onRetry={() => void load()} />;
@@ -277,6 +313,19 @@ export default function RebatesPage() {
         </form>
       </section>
 
+      <section className="card">
+        <h2 className="t-title">{tc.settleTitle}</h2>
+        <p className="t-caption">{tc.settleHint}</p>
+        <div className="form-grid">
+          <Input id="rb-settle-id" label={tc.claimId} value={settleId} onChange={(e) => setSettleId(e.target.value)} error={settleIdError ?? undefined} />
+        </div>
+        {settleGate === false ? <p className="t-caption" role="status">{tc.forbidden}</p> : null}
+        <div className="row-actions" style={{ justifyContent: "flex-start" }}>
+          <Button disabled={!meReady || settleGate === false || !settleId.trim()} onClick={() => openSettle("approve")}>{tc.approveClaim}</Button>
+          <Button variant="danger" disabled={!meReady || settleGate === false || !settleId.trim()} onClick={() => openSettle("reject")}>{tc.rejectClaim}</Button>
+        </div>
+      </section>
+
       <Modal open={claimOpen} onClose={() => setClaimOpen(false)} title={tc.createClaim} closeLabel={t.common.cancel}>
         <p className="t-caption">{tc.eligibleTxns}</p>
         <form onSubmit={(e) => void submitClaim(e)}>
@@ -294,7 +343,20 @@ export default function RebatesPage() {
         </form>
       </Modal>
 
-
+      <Modal open={settleFor !== null} onClose={() => setSettleFor(null)} title={tc.approveConfirmTitle} closeLabel={t.common.cancel}>
+        <p>{tc.approveConfirm}</p>
+        <p className="t-caption">{tc.claimColumns.id}: <span className="mono">{settleFor?.id}</span></p>
+        {settleFor?.mode === "reject" ? (
+          <Input id="rb-settle-reason" label={tc.rejectReason} value={settleReason} onChange={(e) => setSettleReason(e.target.value)} />
+        ) : null}
+        {settleModalError ? <p className="banner" role="alert">{settleModalError}</p> : null}
+        <div className="modal__actions">
+          <Button variant="secondary" onClick={() => setSettleFor(null)}>{t.common.cancel}</Button>
+          <Button variant={settleFor?.mode === "reject" ? "danger" : "primary"} loading={settleBusy} onClick={() => void confirmSettle()}>
+            {settleFor?.mode === "reject" ? tc.rejectClaim : tc.approveClaim}
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 }

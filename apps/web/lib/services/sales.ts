@@ -816,8 +816,8 @@ export function createReceiptCandidate(token: string, body: { customerId?: strin
 export function linkPayer(token: string, id: string, customerId: string) {
   return apiFetch<ReceiptCandidateRow>(`/api/v1/receipt-candidates/${id}/payer-links`, { method: "POST", body: { customerId }, token });
 }
-export function getArReconciliation(token: string) {
-  return apiFetch<ArReconciliation>("/api/v1/ar-reconciliation", { token });
+export function getArReconciliation(token: string, asOf?: string) {
+  return apiFetch<ArReconciliation>(withQuery("/api/v1/ar-reconciliation", { asOf }), { token });
 }
 
 // --- Rebates (ERP-SALES-066/067/068) — services only; screen wiring lands later -------

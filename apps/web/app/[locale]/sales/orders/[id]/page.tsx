@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
 import {
@@ -72,6 +72,7 @@ export default function OrderLifecyclePage() {
   const [amendErrors, setAmendErrors] = useState<{ lines?: string; rationale?: string }>({});
   const [decideFor, setDecideFor] = useState<{ id: string; mode: "approve" | "reject" } | null>(null);
   const [decideReason, setDecideReason] = useState("");
+  const [expandedAmendId, setExpandedAmendId] = useState<string | null>(null);
 
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelScope, setCancelScope] = useState("Remaining");
@@ -337,25 +338,60 @@ export default function OrderLifecyclePage() {
                 {order.amendments.map((am) => {
                   const maker = meId !== null && am.createdBy === meId;
                   return (
-                    <tr key={am.id}>
-                      <td data-label={tc.amendmentColumns.id} className="mono">{am.id}</td>
-                      <td data-label={tc.amendmentColumns.revision} className="mono">{am.revision}</td>
-                      <td data-label={tc.amendmentColumns.status}><Badge tone={localTone(TONE_MAP, am.status)}>{localStatus(t, tc.statusLabels, am.status)}</Badge></td>
-                      <td data-label={tc.amendmentColumns.rationale}>{am.rationale}</td>
-                      <td data-label={tc.amendmentColumns.createdBy} className="mono">{am.createdBy}</td>
-                      <td data-label={t.journals.actions}>
-                        {am.status === "Pending" ? (
-                          maker ? (
-                            <p className="t-caption" role="status">{t.sales.makerChecker}</p>
-                          ) : (
-                            <div className="row-actions">
-                              <Button small disabled={!meReady || approveGate === null || busy} onClick={() => { setDecideFor({ id: am.id, mode: "approve" }); setDecideReason(""); setModalError(null); }}>{tc.approveAmendment}</Button>
-                              <Button small variant="danger" disabled={!meReady || approveGate === null || busy} onClick={() => { setDecideFor({ id: am.id, mode: "reject" }); setDecideReason(""); setModalError(null); }}>{tc.rejectAmendment}</Button>
+                    <Fragment key={am.id}>
+                      <tr>
+                        <td data-label={tc.amendmentColumns.id} className="mono">{am.id}</td>
+                        <td data-label={tc.amendmentColumns.revision} className="mono">{am.revision}</td>
+                        <td data-label={tc.amendmentColumns.status}><Badge tone={localTone(TONE_MAP, am.status)}>{localStatus(t, tc.statusLabels, am.status)}</Badge></td>
+                        <td data-label={tc.amendmentColumns.rationale}>{am.rationale}</td>
+                        <td data-label={tc.amendmentColumns.createdBy} className="mono">{am.createdBy}</td>
+                        <td data-label={t.journals.actions}>
+                          <div className="row-actions">
+                            <Button small variant="secondary" aria-expanded={expandedAmendId === am.id} onClick={() => setExpandedAmendId(expandedAmendId === am.id ? null : am.id)}>
+                              {expandedAmendId === am.id ? t.sales.orders.hideLines : t.sales.orders.showLines}
+                            </Button>
+                            {am.status === "Pending" ? (
+                              maker ? (
+                                <p className="t-caption" role="status">{t.sales.makerChecker}</p>
+                              ) : (
+                                <>
+                                  <Button small disabled={!meReady || approveGate === null || busy} onClick={() => { setDecideFor({ id: am.id, mode: "approve" }); setDecideReason(""); setModalError(null); }}>{tc.approveAmendment}</Button>
+                                  <Button small variant="danger" disabled={!meReady || approveGate === null || busy} onClick={() => { setDecideFor({ id: am.id, mode: "reject" }); setDecideReason(""); setModalError(null); }}>{tc.rejectAmendment}</Button>
+                                </>
+                              )
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                      {expandedAmendId === am.id ? (
+                        <tr className="sub-row">
+                          <td colSpan={6}>
+                            <div className="table-scroll">
+                              <table className="table table--lines">
+                                <thead>
+                                  <tr>
+                                    <th scope="col">{tc.amendLine.sku}</th>
+                                    <th scope="col">{tc.amendLine.description}</th>
+                                    <th scope="col">{tc.amendLine.qty}</th>
+                                    <th scope="col">{tc.amendLine.unitPrice}</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {am.lines.map((ln, i) => (
+                                    <tr key={am.id + "-" + ln.itemSku + "-" + i}>
+                                      <td data-label={tc.amendLine.sku} className="mono">{ln.itemSku}</td>
+                                      <td data-label={tc.amendLine.description}>{ln.description}</td>
+                                      <td data-label={tc.amendLine.qty} className="mono">{fmtNumber(ln.qty, locale)}</td>
+                                      <td data-label={tc.amendLine.unitPrice} className="mono">{fmtMoney(ln.unitPrice, locale, "BDT")}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
                             </div>
-                          )
-                        ) : null}
-                      </td>
-                    </tr>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
                   );
                 })}
               </tbody>
