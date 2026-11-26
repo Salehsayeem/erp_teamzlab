@@ -584,7 +584,8 @@ export type Requisition = {
   exceptionCode: string | null; exceptionNarrative: string | null; exceptionEvidenceRef: string | null;
   exceptionFlaggedAt: string | null;
   stepVersion?: number | null; // pending step's decision token — list rows carry it (decide validates the step, not the record)
-  lines: RequisitionLine[]; total: number;
+  lines?: RequisitionLine[]; // list rows omit it; only detail carries lines
+  total: number;
 };
 export type RequisitionStep = {
   id: string; stepNo: number; approverRole: string; decision: string | null; version: number;
