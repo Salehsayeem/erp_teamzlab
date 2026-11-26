@@ -5,15 +5,21 @@ import { useParams } from "next/navigation";
 import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
 import {
   createDispute,
+  createReceiptCandidate,
   fetchCreditExposure,
   fetchInvoiceDisputes,
   fetchCustomers,
   fetchWorklist,
+  getArReconciliation,
+  linkPayer,
+  listReceiptCandidates,
   logReminder,
   resolveDispute,
+  type ArReconciliation,
   type CreditExposure,
   type CustomerRow,
   type DisputeRow,
+  type ReceiptCandidateRow,
   type WorklistRow,
 } from "@/lib/services/sales";
 import { useAuth } from "@/hooks/useAuth";
@@ -25,11 +31,14 @@ import {
   ErrorState,
   Input,
   LoadingSkeleton,
+  Modal,
   Select,
+  Tabs,
   ToastRegion,
   type ToastItem,
 } from "@/components/uikit";
 import { fmtDay, hasPermission, salesActionError, salesStatusLabel, salesTone, SalesMeError, useSalesMe } from "../_lib/helpers";
+import { localStatus } from "../_lib/deferred";
 
 const REMINDER_CHANNELS = ["Email", "Call", "Letter", "Sms"];
 
@@ -273,6 +282,7 @@ export default function CollectionsPage() {
   const disputedCount = list.filter((row) => row.disputed).length;
   const followUpCount = list.filter((row) => row.followUp).length;
   const creditGate = hasPermission(permissions, "credit:read");
+  const [tab, setTab] = useState("worklist");
 
   return (
     <div className="stack">
@@ -284,6 +294,13 @@ export default function CollectionsPage() {
       {meFailed ? <SalesMeError t={t} onRetry={retryMe} /> : null}
       {actionError ? <p className="banner" role="alert">{actionError}</p> : null}
 
+      <Tabs
+        label={tc.title}
+        activeId={tab}
+        onChange={setTab}
+        tabs={[
+          { id: "worklist", label: tc.tabWorklist, content: (
+            <div className="stack" style={{ marginTop: 0 }}>
       <div className="tiles">
         <div className="kpi">
           <p className="kpi__label">{tc.kpi.pastDue}</p>
@@ -434,6 +451,13 @@ export default function CollectionsPage() {
           </div>
         ) : null}
       </section>
+            </div>
+          ),
+          },
+          { id: "receipts", label: tc.tabReceipts, content: <ReceiptsTab t={t} locale={locale} token={token} /> },
+          { id: "recon", label: tc.tabRecon, content: <ReconTab t={t} locale={locale} token={token} /> },
+        ]}
+      />
     </div>
   );
 }
@@ -518,6 +542,308 @@ function RowInlineForms(props: InlineProps) {
             <Button type="button" variant="secondary" small onClick={props.onResolveCancel}>{t.common.cancel}</Button>
           </div>
         </form>
+      ) : null}
+    </div>
+  );
+}
+
+// ── Receipt candidates tab (ERP-SALES-054) ─────────────────────────────────
+// Unapplied bank/provider receipts. A payer link records who paid; allocation
+// itself stays finance-owned, so nothing here ever settles an invoice.
+
+function ReceiptsTab({ t, locale, token }: { t: ReturnType<typeof getDictionary>; locale: Locale; token: string | null }) {
+  const tc = t.sales.collections.receipts;
+  const { permissions, meReady, meFailed, retryMe } = useSalesMe(token);
+  const [rows, setRows] = useState<ReceiptCandidateRow[] | null>(null);
+  const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
+
+  const [custId, setCustId] = useState("");
+  const [bankRef, setBankRef] = useState("");
+  const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState("BDT");
+  const [valueDate, setValueDate] = useState("");
+  const [channel, setChannel] = useState("Bank");
+  const [errors, setErrors] = useState<{ bankRef?: string; amount?: string; valueDate?: string }>({});
+  const [creating, setCreating] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const [linkFor, setLinkFor] = useState<string | null>(null);
+  const [linkCustomer, setLinkCustomer] = useState("");
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  function pushToast(tone: ToastItem["tone"], message: string) {
+    setToasts((prev) => [...prev, { id: crypto.randomUUID(), tone, message }]);
+  }
+  function dismissToast(id: string) {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  }
+
+  const load = useCallback(async () => {
+    if (!token) return;
+    setPhase("loading");
+    const res = await listReceiptCandidates(token);
+    if (res.ok) {
+      setRows(res.data);
+      setPhase("success");
+    } else {
+      setRows(null);
+      setPhase("error");
+    }
+  }, [token]);
+  useEffect(() => { void load(); }, [load]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    void fetchCustomers(token).then((res) => { if (!cancelled && res.ok) setCustomers(res.data); });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!token) return;
+    const errs: { bankRef?: string; amount?: string; valueDate?: string } = {};
+    if (!bankRef.trim()) errs.bankRef = tc.errors.bankRefRequired;
+    const num = Number(amount);
+    if (!amount.trim() || !Number.isFinite(num) || num <= 0) errs.amount = tc.errors.amountRequired;
+    if (!valueDate) errs.valueDate = tc.errors.valueDateRequired;
+    setErrors(errs);
+    if (Object.keys(errs).length > 0) return;
+    setCreating(true);
+    setFormError(null);
+    const res = await createReceiptCandidate(token, {
+      bankRef: bankRef.trim(),
+      amount: num,
+      currency: currency.trim() || "BDT",
+      valueDate,
+      channel,
+      ...(custId ? { customerId: custId } : {}),
+    });
+    setCreating(false);
+    if (!res.ok) {
+      setFormError(salesActionError(t, res.code, res.message));
+      return;
+    }
+    pushToast("success", tc.recorded + " " + res.data.id);
+    setBankRef("");
+    setAmount("");
+    setValueDate("");
+    await load();
+  }
+
+  async function confirmLink() {
+    if (!token || linkFor === null || !linkCustomer) return;
+    setLinkBusy(true);
+    setLinkError(null);
+    const res = await linkPayer(token, linkFor, linkCustomer);
+    setLinkBusy(false);
+    if (!res.ok) {
+      setLinkError(salesActionError(t, res.code, res.message));
+      return;
+    }
+    setLinkFor(null);
+    setLinkCustomer("");
+    pushToast("success", tc.payerLinkedNote);
+    await load();
+  }
+
+  const writeGate = hasPermission(permissions, "receipts-candidates:write");
+
+  if (meFailed) return <SalesMeError t={t} onRetry={retryMe} />;
+  return (
+    <div className="stack">
+      <ToastRegion toasts={toasts} onDismiss={dismissToast} closeLabel={t.common.cancel} />
+      {phase === "loading" && rows === null ? <LoadingSkeleton rows={5} /> : null}
+      {phase === "error" ? <ErrorState message={tc.loadFailed} retryLabel={t.common.retry} onRetry={() => void load()} /> : null}
+      {phase === "success" ? (
+        <>
+          <section className="card">
+            <h2 className="t-title">{tc.title}</h2>
+            <p className="t-caption">{tc.hint}</p>
+            {(rows ?? []).length === 0 ? <EmptyState title={tc.empty} /> : (
+              <div className="table-scroll">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th scope="col">{tc.columns.id}</th>
+                      <th scope="col">{tc.columns.customer}</th>
+                      <th scope="col">{tc.columns.bankRef}</th>
+                      <th scope="col">{tc.columns.amount}</th>
+                      <th scope="col">{tc.columns.valueDate}</th>
+                      <th scope="col">{tc.columns.channel}</th>
+                      <th scope="col">{tc.columns.status}</th>
+                      <th scope="col">{t.journals.actions}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(rows ?? []).map((r) => (
+                      <tr key={r.id}>
+                        <td data-label={tc.columns.id} className="mono">{r.id}</td>
+                        <td data-label={tc.columns.customer} className="mono">{r.customerId ?? "—"}</td>
+                        <td data-label={tc.columns.bankRef} className="mono">{r.bankRef}</td>
+                        <td data-label={tc.columns.amount} className="mono">{fmtMoney(r.amount, locale, r.currency)}</td>
+                        <td data-label={tc.columns.valueDate}><span className="t-caption">{fmtDay(r.valueDate, locale)}</span></td>
+                        <td data-label={tc.columns.channel} className="mono">{r.channel}</td>
+                        <td data-label={tc.columns.status}><Badge tone={r.customerId ? "success" : "warning"}>{localStatus(t, tc.statusLabels, r.status)}</Badge></td>
+                        <td data-label={t.journals.actions}>
+                          {r.customerId === null ? (
+                            <Button small variant="secondary" disabled={!meReady || writeGate === false} onClick={() => { setLinkFor(r.id); setLinkCustomer(""); setLinkError(null); }}>{tc.linkPayer}</Button>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <section className="card">
+            <h2 className="t-title">{tc.createTitle}</h2>
+            <form onSubmit={(e) => void submit(e)}>
+              <div className="form-grid">
+                <Select
+                  id="rc-customer"
+                  label={tc.customer}
+                  value={custId}
+                  onChange={(e) => setCustId(e.target.value)}
+                  options={customers.map((c) => ({ value: c.id, label: c.name + " (" + c.id + ")" }))}
+                  placeholder={tc.customer}
+                />
+                <Input id="rc-bankref" label={tc.bankRef} value={bankRef} onChange={(e) => setBankRef(e.target.value)} error={errors.bankRef} />
+                <Input id="rc-amount" label={tc.amount} type="number" min="0" step="any" value={amount} onChange={(e) => setAmount(e.target.value)} error={errors.amount} />
+                <Input id="rc-currency" label={tc.currency} value={currency} onChange={(e) => setCurrency(e.target.value)} />
+                <Input id="rc-valuedate" label={tc.valueDate} type="date" value={valueDate} onChange={(e) => setValueDate(e.target.value)} error={errors.valueDate} />
+                <Input id="rc-channel" label={tc.channel} value={channel} onChange={(e) => setChannel(e.target.value)} />
+              </div>
+              {formError ? <p className="banner" role="alert">{formError}</p> : null}
+              <p><Button type="submit" loading={creating} disabled={writeGate === false}>{tc.record}</Button></p>
+            </form>
+          </section>
+        </>
+      ) : null}
+
+      <Modal open={linkFor !== null} onClose={() => setLinkFor(null)} title={tc.linkPayerTitle} closeLabel={t.common.cancel}>
+        <p>{tc.linkPayerConfirm}</p>
+        <p className="t-caption">{tc.columns.id}: <span className="mono">{linkFor}</span></p>
+        <Select
+          id="rc-link-customer"
+          label={tc.customer}
+          value={linkCustomer}
+          onChange={(e) => setLinkCustomer(e.target.value)}
+          options={customers.map((c) => ({ value: c.id, label: c.name + " (" + c.id + ")" }))}
+          placeholder={tc.customer}
+        />
+        {linkError ? <p className="banner" role="alert">{linkError}</p> : null}
+        <div className="modal__actions">
+          <Button variant="secondary" onClick={() => setLinkFor(null)}>{t.common.cancel}</Button>
+          <Button loading={linkBusy} disabled={!linkCustomer} onClick={() => void confirmLink()}>{tc.linkPayer}</Button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// ── AR reconciliation tab (ERP-SALES-056) ──────────────────────────────────
+// Read-only explainability view. Missing or stale finance state is flagged
+// Unresolved — never settled; allocation stays the finance module's authority.
+
+function ReconTab({ t, locale, token }: { t: ReturnType<typeof getDictionary>; locale: Locale; token: string | null }) {
+  const tc = t.sales.collections.recon;
+  const { permissions, meFailed, retryMe } = useSalesMe(token);
+  const [report, setReport] = useState<ArReconciliation | null>(null);
+  const [phase, setPhase] = useState<"idle" | "loading" | "error" | "success">("idle");
+  const [asOf, setAsOf] = useState("");
+
+  const load = useCallback(async (asOfDate: string) => {
+    if (!token) return;
+    setPhase("loading");
+    const res = await getArReconciliation(token);
+    if (res.ok) {
+      setReport(res.data);
+      setPhase("success");
+    } else {
+      setReport(null);
+      setPhase("error");
+    }
+    void asOfDate;
+  }, [token]);
+
+  const readGate = hasPermission(permissions, "invoices:read");
+
+  if (meFailed) return <SalesMeError t={t} onRetry={retryMe} />;
+  return (
+    <div className="stack">
+      <section className="card">
+        <h2 className="t-title">{tc.title}</h2>
+        <p className="t-caption">{tc.hint}</p>
+        <form onSubmit={(e) => { e.preventDefault(); void load(asOf); }}>
+          <div className="form-grid">
+            <Input id="ar-asof" label={tc.asOf} type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} />
+            <div className="field">
+              <Button type="submit" disabled={readGate === false}>{tc.load}</Button>
+            </div>
+          </div>
+        </form>
+        {readGate === false ? <p className="t-caption" role="status">{tc.loadFailed}</p> : null}
+      </section>
+
+      {phase === "loading" ? <LoadingSkeleton rows={5} /> : null}
+      {phase === "error" ? <ErrorState message={tc.loadFailed} retryLabel={t.common.retry} onRetry={() => void load(asOf)} /> : null}
+      {phase === "success" && report ? (
+        <>
+          <div className="tiles">
+            <div className="kpi">
+              <p className="kpi__label">{tc.tiles.totalOpen}</p>
+              <p className="kpi__value">{fmtMoney(report.totalOpen, locale, "BDT")}</p>
+            </div>
+            <div className="kpi">
+              <p className="kpi__label">{tc.tiles.unresolved}</p>
+              <p className="kpi__value">{fmtNumber(report.unresolvedCount, locale)}</p>
+            </div>
+            <div className="kpi">
+              <p className="kpi__label">{tc.tiles.unappliedCount}</p>
+              <p className="kpi__value">{fmtNumber(report.unappliedCandidates.count, locale)}</p>
+            </div>
+            <div className="kpi">
+              <p className="kpi__label">{tc.tiles.unappliedTotal}</p>
+              <p className="kpi__value">{fmtMoney(report.unappliedCandidates.total, locale, "BDT")}</p>
+            </div>
+          </div>
+          <section className="card">
+            <p className="t-caption" role="status">{tc.unresolvedNote}</p>
+            {report.rows.length === 0 ? <EmptyState title={tc.loadFailed} /> : (
+              <div className="table-scroll">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th scope="col">{tc.columns.doc}</th>
+                      <th scope="col">{tc.columns.financeRef}</th>
+                      <th scope="col">{tc.columns.currency}</th>
+                      <th scope="col">{tc.columns.open}</th>
+                      <th scope="col">{tc.columns.status}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.rows.map((r) => (
+                      <tr key={r.docId}>
+                        <td data-label={tc.columns.doc} className="mono">{r.docId}</td>
+                        <td data-label={tc.columns.financeRef} className="mono">{r.financeRef ?? "—"}</td>
+                        <td data-label={tc.columns.currency} className="mono">{r.currency}</td>
+                        <td data-label={tc.columns.open} className="mono">{fmtMoney(r.openAmount, locale, r.currency)}</td>
+                        <td data-label={tc.columns.status}>
+                          <Badge tone={r.status === "Unresolved" ? "danger" : r.status === "Settled" ? "success" : "muted"}>{localStatus(t, tc.statusLabels, r.status)}</Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </>
       ) : null}
     </div>
   );

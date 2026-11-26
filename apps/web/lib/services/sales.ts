@@ -204,6 +204,8 @@ export type SalesOrderRow = {
   approvedAt: string | null;
   rejectionReason: string | null;
   total: number;
+  activeHolds: number;
+  pendingAmendment: boolean;
 };
 
 export type ShipmentResult = {

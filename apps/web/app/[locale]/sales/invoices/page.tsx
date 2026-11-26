@@ -6,8 +6,14 @@ import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
 import {
   approveAdjustment,
   createAdjustment,
+  addDeliveryAttempt,
+  bounceDelivery,
   discardInvoice,
   draftInvoiceFromOrder,
+  listDeliveries,
+  submitEinvoice,
+  type EinvoiceSubmissionRow,
+  type InvoiceDeliveryRow,
   fetchAdjustments,
   fetchCustomers,
   fetchInvoices,
@@ -31,8 +37,10 @@ import {
   Select,
   ToastRegion,
   type ToastItem,
+  type BadgeTone,
 } from "@/components/uikit";
 import { fmtDay, hasPermission, salesActionError, salesStatusLabel, salesTone, SalesMeError, useSalesMe } from "../_lib/helpers";
+import { localStatus } from "../_lib/deferred";
 
 const INVOICE_STATUSES = ["Draft", "Posted", "Discarded"];
 
@@ -548,6 +556,7 @@ function InvoiceDetail(props: DetailProps) {
       {invoice.status === "Posted" ? (
         <AdjustmentList {...props} adjustments={adjustments} historyUnavailable={historyUnavailable} />
       ) : null}
+      {invoice.status === "Posted" ? <DeliveryBlock invoice={invoice} locale={locale} /> : null}
     </div>
   );
 }
@@ -680,5 +689,185 @@ function AdjustmentForm(props: AdjustFormProps) {
         <Button type="button" variant="secondary" small onClick={props.onCancel}>{t.common.cancel}</Button>
       </div>
     </form>
+  );
+}
+
+// ── E-invoice + delivery block (ERP-SALES-050/051) ─────────────────────────
+// Shown on posted invoices. A bounce marks the delivery attempt only — it
+// never mutates the invoice or its payment state (051 AC2).
+
+function DeliveryBlock({ invoice, locale }: { invoice: Invoice; locale: Locale }) {
+  const t = getDictionary(locale);
+  const tc = t.sales.einvoice;
+  const { token } = useAuth(locale);
+  const { permissions, meReady, meFailed, retryMe } = useSalesMe(token);
+  const [rows, setRows] = useState<InvoiceDeliveryRow[] | null>(null);
+  const [phase, setPhase] = useState<"loading" | "error" | "success">("loading");
+  const [submission, setSubmission] = useState<EinvoiceSubmissionRow | null>(null);
+
+  const [channel, setChannel] = useState("Email");
+  const [recipient, setRecipient] = useState("");
+  const [recipientError, setRecipientError] = useState<string | null>(null);
+  const [attemptBusy, setAttemptBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const [bounceFor, setBounceFor] = useState<string | null>(null);
+  const [bounceReason, setBounceReason] = useState("");
+  const [bounceBusy, setBounceBusy] = useState(false);
+  const [bounceError, setBounceError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  function pushToast(tone: ToastItem["tone"], message: string) {
+    setToasts((prev) => [...prev, { id: crypto.randomUUID(), tone, message }]);
+  }
+  function dismissToast(id: string) {
+    setToasts((prev) => prev.filter((toast) => toast.id !== id));
+  }
+
+  const load = useCallback(async () => {
+    if (!token) return;
+    setPhase("loading");
+    const res = await listDeliveries(token, invoice.id);
+    if (res.ok) {
+      setRows(res.data);
+      setPhase("success");
+    } else {
+      setRows(null);
+      setPhase("error");
+    }
+  }, [token, invoice.id]);
+  useEffect(() => { void load(); }, [load]);
+
+  async function submitEinvoiceNow() {
+    if (!token) return;
+    setBusy(true);
+    const res = await submitEinvoice(token, invoice.id);
+    setBusy(false);
+    if (!res.ok) {
+      pushToast("error", salesActionError(t, res.code, res.message));
+      return;
+    }
+    setSubmission(res.data);
+    pushToast("success", tc.submitted + " " + res.data.correlationId);
+  }
+
+  async function addAttempt(e: FormEvent) {
+    e.preventDefault();
+    if (!token) return;
+    if (!recipient.trim()) {
+      setRecipientError(tc.recipientRequired);
+      return;
+    }
+    setAttemptBusy(true);
+    setFormError(null);
+    const res = await addDeliveryAttempt(token, invoice.id, { channel, recipient: recipient.trim() });
+    setAttemptBusy(false);
+    if (!res.ok) {
+      setFormError(salesActionError(t, res.code, res.message));
+      return;
+    }
+    setRecipient("");
+    setRecipientError(null);
+    pushToast("success", tc.attemptAdded);
+    await load();
+  }
+
+  async function confirmBounce() {
+    if (!token || bounceFor === null || !bounceReason.trim()) return;
+    setBounceBusy(true);
+    setBounceError(null);
+    const res = await bounceDelivery(token, invoice.id, bounceFor, bounceReason.trim());
+    setBounceBusy(false);
+    if (!res.ok) {
+      setBounceError(salesActionError(t, res.code, res.message));
+      return;
+    }
+    setBounceFor(null);
+    setBounceReason("");
+    pushToast("info", tc.bouncedNote);
+    await load();
+  }
+
+  const writeGate = hasPermission(permissions, "invoices:write");
+  const TONE_MAP: Record<string, BadgeTone> = { Sent: "success", Delivered: "success", Bounced: "danger", Pending: "warning" };
+
+  if (meFailed) return <SalesMeError t={t} onRetry={retryMe} />;
+  return (
+    <section className="card" style={{ marginTop: 12 }}>
+      <h3 className="t-body-strong">{tc.title}</h3>
+      <div className="row-actions" style={{ justifyContent: "flex-start" }}>
+        <Button small disabled={!meReady || writeGate === false || busy} loading={busy} onClick={() => void submitEinvoiceNow()}>
+          {tc.submitEinvoice}
+        </Button>
+        {submission ? (
+          <span className="t-caption" role="status">
+            {tc.submitted} <span className="mono">{submission.correlationId}</span> · <Badge tone="muted">{submission.status}</Badge>
+          </span>
+        ) : null}
+      </div>
+
+      <h4 className="t-body-strong">{tc.deliveriesTitle}</h4>
+      {phase === "loading" ? <LoadingSkeleton rows={2} /> : null}
+      {phase === "error" ? <ErrorState message={tc.noDeliveries} retryLabel={t.common.retry} onRetry={() => void load()} /> : null}
+      {phase === "success" && (rows ?? []).length === 0 ? <p className="t-caption">{tc.noDeliveries}</p> : null}
+      {phase === "success" && (rows ?? []).length > 0 ? (
+        <div className="table-scroll">
+          <table className="table table--lines">
+            <thead>
+              <tr>
+                <th scope="col">{tc.deliveryColumns.id}</th>
+                <th scope="col">{tc.deliveryColumns.channel}</th>
+                <th scope="col">{tc.deliveryColumns.recipient}</th>
+                <th scope="col">{tc.deliveryColumns.status}</th>
+                <th scope="col">{tc.deliveryColumns.attempt}</th>
+                <th scope="col">{tc.deliveryColumns.sentAt}</th>
+                <th scope="col">{t.journals.actions}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(rows ?? []).map((d) => (
+                <tr key={d.id}>
+                  <td data-label={tc.deliveryColumns.id} className="mono">{d.id}</td>
+                  <td data-label={tc.deliveryColumns.channel} className="mono">{d.channel}</td>
+                  <td data-label={tc.deliveryColumns.recipient} className="mono">{d.recipient}</td>
+                  <td data-label={tc.deliveryColumns.status}>
+                    <Badge tone={TONE_MAP[d.status] ?? "muted"}>{localStatus(t, tc.statusLabels, d.status)}</Badge>
+                    {d.reason ? <p className="t-caption">{d.reason}</p> : null}
+                  </td>
+                  <td data-label={tc.deliveryColumns.attempt} className="mono">{d.attempt}</td>
+                  <td data-label={tc.deliveryColumns.sentAt}><span className="t-caption">{fmtDay(d.sentAt, locale)}</span></td>
+                  <td data-label={t.journals.actions}>
+                    {d.status !== "Bounced" ? (
+                      <Button small variant="danger" disabled={!meReady || writeGate === false} onClick={() => { setBounceFor(d.id); setBounceReason(""); setBounceError(null); }}>
+                        {tc.bounce}
+                      </Button>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+
+      <form onSubmit={(e) => void addAttempt(e)}>
+        <div className="form-grid">
+          <Input id={`dl-channel-${invoice.id}`} label={tc.channel} value={channel} onChange={(e) => setChannel(e.target.value)} />
+          <Input id={`dl-recipient-${invoice.id}`} label={tc.recipient} value={recipient} onChange={(e) => setRecipient(e.target.value)} error={recipientError ?? undefined} />
+        </div>
+        {formError ? <p className="banner" role="alert">{formError}</p> : null}
+        <p><Button type="submit" small loading={attemptBusy} disabled={!meReady || writeGate === false}>{tc.addAttempt}</Button></p>
+      </form>
+
+      <Modal open={bounceFor !== null} onClose={() => setBounceFor(null)} title={tc.bounce} closeLabel={t.common.cancel}>
+        <p className="t-caption">{tc.bounceReason}</p>
+        <Input id={`dl-bounce-reason-${bounceFor}`} label={tc.bounceReason} value={bounceReason} onChange={(e) => setBounceReason(e.target.value)} />
+        {bounceError ? <p className="banner" role="alert">{bounceError}</p> : null}
+        <div className="modal__actions">
+          <Button variant="secondary" onClick={() => setBounceFor(null)}>{t.common.cancel}</Button>
+          <Button variant="danger" loading={bounceBusy} disabled={!bounceReason.trim()} onClick={() => void confirmBounce()}>{tc.bounce}</Button>
+        </div>
+      </Modal>
+    </section>
   );
 }

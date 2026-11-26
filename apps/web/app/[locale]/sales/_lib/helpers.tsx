@@ -123,8 +123,21 @@ const ERROR_KEYS: Record<string, keyof Dict["sales"]["errors"]> = {
   REBATE_EXCEEDS_ACCRUAL: "rebateExceedsAccrual",
   REBATE_STATE_ERROR: "rebateState",
   DELIVERY_STATE_ERROR: "deliveryState",
+  DELIVERY_NOT_FOUND: "deliveryNotFound",
   EINVOICE_NOT_ENABLED: "einvoiceNotEnabled",
+  EINVOICE_STATE_ERROR: "einvoiceState",
   FORECAST_SNAPSHOT_INCOMPLETE: "forecastSnapshotIncomplete",
+  AMENDMENT_NOT_FOUND: "amendmentNotFound",
+  HOLD_NOT_FOUND: "holdNotFound",
+  MERGE_NOT_FOUND: "mergeNotFound",
+  ONBOARDING_CHECK_NOT_FOUND: "onboardingCheckNotFound",
+  REBATE_NOT_FOUND: "rebateNotFound",
+  RECEIPT_CANDIDATE_NOT_FOUND: "receiptCandidateNotFound",
+  REFUND_NOT_FOUND: "refundNotFound",
+  RETURN_NOT_FOUND: "returnNotFound",
+  SCHEDULE_NOT_FOUND: "scheduleNotFound",
+  CUSTOMER_NOT_FOUND: "duplicateCustomer",
+  CUSTOMER_MERGE_FORBIDDEN: "forbidden",
 };
 
 export function salesActionError(t: Dict, code: string, message: string): string {

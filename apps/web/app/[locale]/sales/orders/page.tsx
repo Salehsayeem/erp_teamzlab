@@ -249,7 +249,7 @@ export default function SalesOrdersPage() {
                   return (
                     <Fragment key={so.id}>
                       <tr>
-                        <td data-label={tc.columns.order} className="mono">{so.id}</td>
+                        <td data-label={tc.columns.order} className="mono"><Link href={"/" + locale + "/sales/orders/" + so.id}>{so.id}</Link>{so.pendingAmendment ? <> <Badge tone="warning">{tc.badgeAmendment}</Badge></> : null}{so.activeHolds > 0 ? <> <Badge tone="danger">{tc.badgeHolds}: {so.activeHolds}</Badge></> : null}</td>
                         <td data-label={tc.columns.customer} className="mono">{so.customerId}</td>
                         <td data-label={tc.columns.status}><Badge tone={salesTone(so.status)}>{salesStatusLabel(t, so.status)}</Badge></td>
                         <td data-label={tc.columns.total} className="mono">{fmtMoney(so.total, locale, "BDT")}</td>
