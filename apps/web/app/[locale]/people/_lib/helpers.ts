@@ -85,7 +85,10 @@ export function peopleActionError(t: Dict, code: string, message: string): strin
   if (code === "NETWORK") return t.common.networkError;
   const key = ERROR_KEYS[code];
   const label = key ? t.people.errors[key] : null;
-  return label ? `${label}: ${message}` : `${t.people.actionFailed}: ${message}`;
+  // deferred-screens codes resolve straight from the errors.<CODE> catalog
+  const catalog = (t.errors as unknown as Record<string, string>)[code];
+  const resolved = label ?? catalog;
+  return resolved ? `${resolved}: ${message}` : `${t.people.actionFailed}: ${message}`;
 }
 
 /** Module-local status labels first, then the shared common.status entries. */
