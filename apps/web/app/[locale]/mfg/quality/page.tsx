@@ -22,7 +22,7 @@ import {
 import { hasPermission, deferredActionError, mfgStatusLabel, useMfgMe } from "../_lib/helpers";
 import { PageShell, useToasts } from "../_lib/screen";
 
-const CHAR_TYPES = ["Attribute", "Variable"];
+const CHAR_TYPES = ["Numeric", "Text", "Boolean"];
 const DISPOSITIONS = ["ReleaseToStock", "Scrap", "Rework", "Return"];
 
 export default function QualityPage() {

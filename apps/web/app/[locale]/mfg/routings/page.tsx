@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
 import {
   fetchRoutings, createRouting, approveRouting, addRoutingOperation,
-  fetchWorkCenters, createWorkCenter, fetchCalendar, addCalendarWindow,
+  fetchWorkCenters, createWorkCenter, fetchCalendar, addCalendarWindow, addSubcontractOperation,
   type RoutingRow, type WorkCenterRow, type CalendarRow,
 } from "@/lib/services/mfg-deferred";
 import { useAuth } from "@/hooks/useAuth";
@@ -49,8 +49,8 @@ export default function RoutingsPage() {
 
   // operation form (attached to the expanded routing)
   const [openId, setOpenId] = useState<string | null>(null);
-  const [opForm, setOpForm] = useState({ operationCode: "", workCenterId: "", requiredCapabilities: "", timeUnit: "MIN", setupMin: "10", perUnitMin: "2", seq: "10", isZeroDuration: false });
-  const [opErrors, setOpErrors] = useState<{ code?: string; wc?: string; caps?: string; seq?: string }>({});
+  const [opForm, setOpForm] = useState({ operationCode: "", workCenterId: "", requiredCapabilities: "", timeUnit: "MIN", setupMin: "10", perUnitMin: "2", seq: "10", isZeroDuration: false, isSubcontract: false, supplierId: "", serviceDescription: "" });
+  const [opErrors, setOpErrors] = useState<{ code?: string; wc?: string; caps?: string; seq?: string; supplier?: string; service?: string }>({});
   const [opBusy, setOpBusy] = useState(false);
 
   // work centers tab
@@ -115,25 +115,34 @@ export default function RoutingsPage() {
     e.preventDefault();
     if (!openId || !token) return;
     const seq = Number(opForm.seq);
-    const errs: { code?: string; wc?: string; caps?: string; seq?: string } = {};
+    const errs: { code?: string; wc?: string; caps?: string; seq?: string; supplier?: string; service?: string } = {};
     if (!opForm.operationCode.trim()) errs.code = tc.errors.codeRequired;
     if (!opForm.workCenterId) errs.wc = tc.errors.wcRequired;
-    if (!opForm.requiredCapabilities.trim()) errs.caps = tc.errors.capsRequired;
     if (!opForm.seq.trim() || !Number.isInteger(seq) || seq < 1) errs.seq = tc.errors.seqInvalid;
+    if (opForm.isSubcontract) {
+      if (!opForm.supplierId.trim()) errs.supplier = tc.errors.supplierRequired;
+      if (!opForm.serviceDescription.trim()) errs.service = tc.errors.serviceRequired;
+    } else if (!opForm.requiredCapabilities.trim()) errs.caps = tc.errors.capsRequired;
     setOpErrors(errs);
     if (Object.keys(errs).length > 0) return;
     setOpBusy(true);
     setBanner(null);
-    const res = await addRoutingOperation(token, openId, {
-      operationCode: opForm.operationCode.trim(), workCenterId: opForm.workCenterId,
-      requiredCapabilities: opForm.requiredCapabilities.trim(), timeUnit: opForm.timeUnit,
-      setupMin: Number(opForm.setupMin) || 0, perUnitMin: Number(opForm.perUnitMin) || 0,
-      seq, isZeroDuration: opForm.isZeroDuration,
-    });
+    const res = opForm.isSubcontract
+      ? await addSubcontractOperation(token, openId, {
+        operationCode: opForm.operationCode.trim(), workCenterId: opForm.workCenterId,
+        supplierId: opForm.supplierId.trim(), serviceDescription: opForm.serviceDescription.trim(),
+        setupMin: Number(opForm.setupMin) || 0, perUnitMin: Number(opForm.perUnitMin) || 0, seq,
+      })
+      : await addRoutingOperation(token, openId, {
+        operationCode: opForm.operationCode.trim(), workCenterId: opForm.workCenterId,
+        requiredCapabilities: opForm.requiredCapabilities.trim(), timeUnit: opForm.timeUnit,
+        setupMin: Number(opForm.setupMin) || 0, perUnitMin: Number(opForm.perUnitMin) || 0,
+        seq, isZeroDuration: opForm.isZeroDuration,
+      });
     setOpBusy(false);
     if (!res.ok) { setBanner(deferredActionError(t, res.code, res.message)); return; }
     push("success", tc.opAdded);
-    setOpForm({ operationCode: "", workCenterId: opForm.workCenterId, requiredCapabilities: "", timeUnit: opForm.timeUnit, setupMin: "10", perUnitMin: "2", seq: String(seq + 10), isZeroDuration: false });
+    setOpForm({ operationCode: "", workCenterId: opForm.workCenterId, requiredCapabilities: "", timeUnit: opForm.timeUnit, setupMin: "10", perUnitMin: "2", seq: String(seq + 10), isZeroDuration: false, isSubcontract: opForm.isSubcontract, supplierId: opForm.supplierId, serviceDescription: "" });
     await load();
   }
 
@@ -254,15 +263,29 @@ export default function RoutingsPage() {
                       <div className="form-grid">
                         <Input id="rt-op-code" label={tc.operationCode} value={opForm.operationCode} onChange={(e) => setOpForm({ ...opForm, operationCode: e.target.value })} error={opErrors.code} />
                         <Select id="rt-op-wc" label={tc.workCenter} value={opForm.workCenterId} onChange={(e) => setOpForm({ ...opForm, workCenterId: e.target.value })} options={wcOptions} placeholder={tc.workCenter} error={opErrors.wc} />
-                        <Input id="rt-op-caps" label={tc.capabilities} value={opForm.requiredCapabilities} onChange={(e) => setOpForm({ ...opForm, requiredCapabilities: e.target.value })} error={opErrors.caps} />
-                        <Select id="rt-op-unit" label={tc.timeUnit} value={opForm.timeUnit} onChange={(e) => setOpForm({ ...opForm, timeUnit: e.target.value })} options={TIME_UNITS.map((u) => ({ value: u, label: u }))} />
+                        {opForm.isSubcontract ? (
+                          <>
+                            <Input id="rt-op-supplier" label={tc.supplierId} value={opForm.supplierId} onChange={(e) => setOpForm({ ...opForm, supplierId: e.target.value })} error={opErrors.supplier} />
+                            <Input id="rt-op-service" label={tc.serviceDesc} value={opForm.serviceDescription} onChange={(e) => setOpForm({ ...opForm, serviceDescription: e.target.value })} error={opErrors.service} />
+                          </>
+                        ) : (
+                          <>
+                            <Input id="rt-op-caps" label={tc.capabilities} value={opForm.requiredCapabilities} onChange={(e) => setOpForm({ ...opForm, requiredCapabilities: e.target.value })} error={opErrors.caps} />
+                            <Select id="rt-op-unit" label={tc.timeUnit} value={opForm.timeUnit} onChange={(e) => setOpForm({ ...opForm, timeUnit: e.target.value })} options={TIME_UNITS.map((u) => ({ value: u, label: u }))} />
+                          </>
+                        )}
                         <Input id="rt-op-setup" label={tc.setupMin} type="number" min="0" step="any" value={opForm.setupMin} onChange={(e) => setOpForm({ ...opForm, setupMin: e.target.value })} />
                         <Input id="rt-op-perunit" label={tc.perUnitMin} type="number" min="0" step="any" value={opForm.perUnitMin} onChange={(e) => setOpForm({ ...opForm, perUnitMin: e.target.value })} />
                         <Input id="rt-op-seq" label={tc.seq} type="number" min="1" step="1" value={opForm.seq} onChange={(e) => setOpForm({ ...opForm, seq: e.target.value })} error={opErrors.seq} />
                       </div>
                       <p className="t-caption">
-                        <label htmlFor="rt-op-zero"><input id="rt-op-zero" type="checkbox" checked={opForm.isZeroDuration} onChange={(e) => setOpForm({ ...opForm, isZeroDuration: e.target.checked })} /> {tc.zeroDuration}</label>
+                        <label htmlFor="rt-op-sub"><input id="rt-op-sub" type="checkbox" checked={opForm.isSubcontract} onChange={(e) => setOpForm({ ...opForm, isSubcontract: e.target.checked })} /> {tc.subToggle}</label>
                       </p>
+                      {!opForm.isSubcontract ? (
+                        <p className="t-caption">
+                          <label htmlFor="rt-op-zero"><input id="rt-op-zero" type="checkbox" checked={opForm.isZeroDuration} onChange={(e) => setOpForm({ ...opForm, isZeroDuration: e.target.checked })} /> {tc.zeroDuration}</label>
+                        </p>
+                      ) : null}
                       <p><Button type="submit" small loading={opBusy} disabled={!meReady || canWrite === false}>{tc.addOp}</Button></p>
                     </form>
                   </div>

@@ -1823,6 +1823,9 @@ export const bn: Dict = {
       timeUnit: "সময় একক",
       seq: "ক্রম",
       zeroDuration: "শূন্য-সময়কাল অপারেশন",
+      subToggle: "সাবকন্ট্রাক্ট অপারেশন",
+      supplierId: "সরবরাহকারী আইডি",
+      serviceDesc: "সেবার বিবরণ",
       opAdded: "অপারেশন যোগ হয়েছে।",
       workCentersTitle: "ওয়ার্ক সেন্টার",
       wcCode: "কোড",
@@ -1851,6 +1854,8 @@ export const bn: Dict = {
         seqInvalid: "ক্রম ১ বা বেশি হতে হবে।",
         windowInvalid: "উইন্ডো শেষ শুরুর পরে হতে হবে।",
         wcCodeRequired: "কোড দরকার।",
+        supplierRequired: "সরবরাহকারী আইডি দরকার।",
+        serviceRequired: "সেবার বিবরণ দরকার।",
       },
     },
     sched: {

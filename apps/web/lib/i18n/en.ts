@@ -1822,6 +1822,9 @@ export const en = {
       timeUnit: "Time unit",
       seq: "Seq",
       zeroDuration: "Zero-duration operation",
+      subToggle: "Subcontract operation",
+      supplierId: "Supplier id",
+      serviceDesc: "Service description",
       opAdded: "Operation added.",
       workCentersTitle: "Work centers",
       wcCode: "Code",
@@ -1850,6 +1853,8 @@ export const en = {
         seqInvalid: "Seq must be 1 or greater.",
         windowInvalid: "Window end must be after start.",
         wcCodeRequired: "Code is required.",
+        supplierRequired: "Supplier id is required.",
+        serviceRequired: "Service description is required.",
       },
     },
     sched: {
