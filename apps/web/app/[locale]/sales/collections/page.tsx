@@ -255,6 +255,8 @@ export default function CollectionsPage() {
     await load();
   }
 
+  const [tab, setTab] = useState("worklist");
+
   if (!ready || (phase === "loading" && rows === null)) return <LoadingSkeleton rows={6} />;
   if (phase === "error") {
     // 403 on the worklist is an expected outcome for roles without
@@ -282,7 +284,6 @@ export default function CollectionsPage() {
   const disputedCount = list.filter((row) => row.disputed).length;
   const followUpCount = list.filter((row) => row.followUp).length;
   const creditGate = hasPermission(permissions, "credit:read");
-  const [tab, setTab] = useState("worklist");
 
   return (
     <div className="stack">
