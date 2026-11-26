@@ -12,7 +12,7 @@ import { fmtDate } from "@/lib/format";
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, Button, EmptyState, ErrorState, Input, LoadingSkeleton, Modal, statusTone } from "@/components/uikit";
 
-type Phase = "loading" | "error" | "success";
+type SectionKey = "qual" | "evidences" | "risk" | "screenings" | "scorecards";
 
 export default function QualificationSection({ supplierId }: { supplierId: string }) {
   const params = useParams<{ locale: string }>();
@@ -35,6 +35,9 @@ export default function QualificationSection({ supplierId }: { supplierId: strin
   const [genTo, setGenTo] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [fail, setFail] = useState<Record<SectionKey, boolean>>({
+    qual: false, evidences: false, risk: false, screenings: false, scorecards: false,
+  });
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -42,7 +45,13 @@ export default function QualificationSection({ supplierId }: { supplierId: strin
       fetchQualification(token, supplierId), fetchEvidences(token, supplierId),
       fetchRiskProfile(token, supplierId), fetchScreeningsBySupplier(token, supplierId), fetchScorecards(token, supplierId),
     ]);
-    if (q.ok && e.ok && r.ok && s.ok && sc.ok) { setQual(q.data); setEvidences(e.data); setRisk(r.data); setScreenings(s.data); setScorecards(sc.data); }
+    // per-fetch: one failed fetch flags its own section — never blanks the whole block silently
+    setQual(q.ok ? q.data : null);
+    setEvidences(e.ok ? e.data : null);
+    setRisk(r.ok ? r.data : null);
+    setScreenings(s.ok ? s.data : null);
+    setScorecards(sc.ok ? sc.data : null);
+    setFail({ qual: !q.ok, evidences: !e.ok, risk: !r.ok, screenings: !s.ok, scorecards: !sc.ok });
   }, [token, supplierId]);
   useEffect(() => { void load(); }, [load]);
 
@@ -98,7 +107,7 @@ export default function QualificationSection({ supplierId }: { supplierId: strin
       <h2 className="t-title">{t.procurement.qual.title}</h2>
       <p className="t-caption">{t.procurement.qual.subtitle}</p>
       {err ? <p className="banner" role="alert">{err}</p> : null}
-      {qual ? (
+      {fail.qual ? <ErrorState message={t.procurement.qual.sectionLoadFailed} retryLabel={t.common.retry} onRetry={() => void load()} /> : qual ? (
         <p>
           <Badge tone={qual.eligible ? "success" : "danger"}>{qual.eligible ? t.procurement.qual.eligible : t.procurement.qual.notEligible}</Badge>
           {qual.expiredEvidences.length > 0 ? (
@@ -106,13 +115,13 @@ export default function QualificationSection({ supplierId }: { supplierId: strin
           ) : null}
         </p>
       ) : null}
-      {risk ? (
+      {fail.risk ? <ErrorState message={t.procurement.qual.sectionLoadFailed} retryLabel={t.common.retry} onRetry={() => void load()} /> : risk ? (
         <p className="t-caption mono">
           {t.procurement.qual.riskProfile}: {risk.score} / {risk.band} / {risk.disposition} · v{risk.ruleVersion}
         </p>
       ) : null}
       <h3 className="t-title">{t.procurement.qual.evidences}</h3>
-      {evidenceList.length === 0 ? <EmptyState title={t.procurement.qual.evidencesEmpty} /> : (
+      {fail.evidences ? <ErrorState message={t.procurement.qual.sectionLoadFailed} retryLabel={t.common.retry} onRetry={() => void load()} /> : evidenceList.length === 0 ? <EmptyState title={t.procurement.qual.evidencesEmpty} /> : (
         <ul className="stack">
           {evidenceList.map((e) => (
             <li key={e.id}>
@@ -134,7 +143,7 @@ export default function QualificationSection({ supplierId }: { supplierId: strin
         </div>
       </form>
       <h3 className="t-title">{t.procurement.qual.screening}</h3>
-      {screeningList.length === 0 ? <EmptyState title={t.procurement.qual.screeningEmpty} /> : (
+      {fail.screenings ? <ErrorState message={t.procurement.qual.sectionLoadFailed} retryLabel={t.common.retry} onRetry={() => void load()} /> : screeningList.length === 0 ? <EmptyState title={t.procurement.qual.screeningEmpty} /> : (
         <ul className="stack">
           {screeningList.map((s) => (
             <li key={s.id}>
@@ -160,7 +169,7 @@ export default function QualificationSection({ supplierId }: { supplierId: strin
         </div>
       </form>
       <h3 className="t-title">{t.procurement.qual.scorecards}</h3>
-      {scorecardList.length === 0 ? <EmptyState title={t.procurement.qual.scorecardsEmpty} /> : (
+      {fail.scorecards ? <ErrorState message={t.procurement.qual.sectionLoadFailed} retryLabel={t.common.retry} onRetry={() => void load()} /> : scorecardList.length === 0 ? <EmptyState title={t.procurement.qual.scorecardsEmpty} /> : (
         <ul className="stack">
           {scorecardList.map((sc) => (
             <li key={sc.id}>

@@ -992,6 +992,7 @@ export const en = {
     qual: {
       title: "Supplier qualification",
       subtitle: "Evidence gates, risk, screening, observations and scorecards.",
+      sectionLoadFailed: "This part could not be loaded.",
       eligible: "Eligible",
       notEligible: "Not eligible",
       expiredEvidence: "Expired evidence",

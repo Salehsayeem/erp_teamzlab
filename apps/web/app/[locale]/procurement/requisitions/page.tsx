@@ -36,6 +36,7 @@ export default function RequisitionsPage() {
   const [decision, setDecision] = useState<DecisionForm | null>(null);
   const [dKind, setDKind] = useState("Approve");
   const [dReason, setDReason] = useState("");
+  const [submitFor, setSubmitFor] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -81,7 +82,8 @@ export default function RequisitionsPage() {
   }
 
   async function onSubmit(id: string) {
-    await run(id, () => submitRequisition(token ?? "", id, null));
+    const ok = await run(id, () => submitRequisition(token ?? "", id, null));
+    if (ok) setSubmitFor(null); // confirmed submit — close the dialog once the row flips
   }
 
   async function onDecide(e: React.FormEvent) {
@@ -124,12 +126,12 @@ export default function RequisitionsPage() {
               <td>
                 <div className="row-actions">
                   {r.status === "Draft" ? (
-                    <Button small loading={busyId === r.id} disabled={busyId !== null} onClick={() => void onSubmit(r.id)}>
+                    <Button small disabled={busyId !== null} onClick={() => setSubmitFor(r.id)}>
                       {t.procurement.reqs.submit}
                     </Button>
                   ) : null}
                   {r.status === "Submitted" ? (
-                    <Button small onClick={() => { setDecision({ id: r.id, version: r.version }); setDKind("Approve"); setDReason(""); }}>
+                    <Button small onClick={() => { setDecision({ id: r.id, version: r.stepVersion ?? r.version }); setDKind("Approve"); setDReason(""); }}>
                       {t.procurement.reqs.decision}
                     </Button>
                   ) : null}
@@ -193,6 +195,17 @@ export default function RequisitionsPage() {
         <h2 className="t-title">{t.procurement.reqs.newTitle}</h2>
         {intakeForm}
       </section>
+      <Modal open={submitFor !== null} onClose={() => setSubmitFor(null)} title={t.procurement.reqs.submit} closeLabel={t.common.cancel}>
+        <div className="stack">
+          <p className="t-caption">{t.procurement.reqs.submitConfirm}</p>
+          <p className="t-caption mono">{submitFor}</p>
+          <div className="row-actions" style={{ justifyContent: "flex-start" }}>
+            <Button small loading={busyId === submitFor} disabled={busyId !== null} onClick={() => void onSubmit(submitFor!)}>
+              {t.procurement.reqs.submit}
+            </Button>
+          </div>
+        </div>
+      </Modal>
       <Modal open={decision !== null} onClose={() => setDecision(null)} title={t.procurement.reqs.decision} closeLabel={t.common.cancel}>
         <form onSubmit={(e) => void onDecide(e)} className="stack">
           <div className="field">

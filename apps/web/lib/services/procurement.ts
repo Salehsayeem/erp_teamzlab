@@ -583,6 +583,7 @@ export type Requisition = {
   ruleId: string | null; ruleVersion: number | null; approverRole: string | null;
   exceptionCode: string | null; exceptionNarrative: string | null; exceptionEvidenceRef: string | null;
   exceptionFlaggedAt: string | null;
+  stepVersion?: number | null; // pending step's decision token — list rows carry it (decide validates the step, not the record)
   lines: RequisitionLine[]; total: number;
 };
 export type RequisitionStep = {

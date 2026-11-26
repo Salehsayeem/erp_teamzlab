@@ -993,6 +993,7 @@ export const bn: Dict = {
     qual: {
       title: "সাপ্লায়ার যোগ্যতা",
       subtitle: "প্রমাণ-গেট, রিস্ক, স্ক্রিনিং, পর্যবেক্ষণ ও স্কোরকার্ড।",
+      sectionLoadFailed: "এই অংশটি লোড করা যায়নি।",
       eligible: "যোগ্য",
       notEligible: "অযোগ্য",
       expiredEvidence: "মেয়াদ-শেষ প্রমাণ",
