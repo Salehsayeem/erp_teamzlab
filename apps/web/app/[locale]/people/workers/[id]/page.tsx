@@ -32,6 +32,7 @@ import {
 } from "@/components/uikit";
 import type { Column } from "@/components/uikit";
 import { fmtDay, peopleActionError, peopleStatusLabel, peopleTone } from "../../_lib/helpers";
+import { WorkerDeferredBlocks } from "./_blocks";
 
 // WorkerService's legal map mirrored client-side so only legal moves render;
 // the server re-checks and answers WORKER_TRANSITION_ERROR otherwise.
@@ -336,6 +337,8 @@ export default function WorkerDetailPage() {
         ) : null}
         {historyPhase === "success" && history && history.length === 0 ? <p className="t-caption">{tc.noHistory}</p> : null}
       </section>
+
+      {token ? <WorkerDeferredBlocks workerId={worker.id} token={token} locale={locale} /> : null}
     </div>
   );
 }

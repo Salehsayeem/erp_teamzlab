@@ -68,6 +68,37 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     public DbSet<WorkerPayGroup> WorkerPayGroups => Set<WorkerPayGroup>();
     public DbSet<EarningDeductionCode> EarningDeductionCodes => Set<EarningDeductionCode>();
     public DbSet<PayRun> PayRuns => Set<PayRun>();
+    // deferred screens wave (PM1–PM10)
+    public DbSet<OrgUnit> OrgUnits => Set<OrgUnit>();
+    public DbSet<WorkLocation> WorkLocations => Set<WorkLocation>();
+    public DbSet<Position> Positions => Set<Position>();
+    public DbSet<PositionAssignment> PositionAssignments => Set<PositionAssignment>();
+    public DbSet<OnboardingTemplate> OnboardingTemplates => Set<OnboardingTemplate>();
+    public DbSet<OnboardingTask> OnboardingTasks => Set<OnboardingTask>();
+    public DbSet<JobProfile> JobProfiles => Set<JobProfile>();
+    public DbSet<JobProfileVersion> JobProfileVersions => Set<JobProfileVersion>();
+    public DbSet<Competency> Competencies => Set<Competency>();
+    public DbSet<GradeRange> GradeRanges => Set<GradeRange>();
+    public DbSet<WorkSchedule> WorkSchedules => Set<WorkSchedule>();
+    public DbSet<ScheduleVersion> ScheduleVersions => Set<ScheduleVersion>();
+    public DbSet<HolidayCalendar> HolidayCalendars => Set<HolidayCalendar>();
+    public DbSet<LeaveType> LeaveTypes => Set<LeaveType>();
+    public DbSet<LeaveLedgerEntry> LeaveLedgerEntries => Set<LeaveLedgerEntry>();
+    public DbSet<LeaveRequest> LeaveRequests => Set<LeaveRequest>();
+    public DbSet<LeaveAdjustment> LeaveAdjustments => Set<LeaveAdjustment>();
+    public DbSet<AttendanceException> AttendanceExceptions => Set<AttendanceException>();
+    public DbSet<TaxElection> TaxElections => Set<TaxElection>();
+    public DbSet<ContributionRule> ContributionRules => Set<ContributionRule>();
+    public DbSet<GarnishmentOrder> GarnishmentOrders => Set<GarnishmentOrder>();
+    public DbSet<BenefitPlan> BenefitPlans => Set<BenefitPlan>();
+    public DbSet<BenefitEnrollment> BenefitEnrollments => Set<BenefitEnrollment>();
+    public DbSet<DeductionInstruction> DeductionInstructions => Set<DeductionInstruction>();
+    public DbSet<PaymentFile> PaymentFiles => Set<PaymentFile>();
+    public DbSet<PayrollAccountMapping> PayrollAccountMappings => Set<PayrollAccountMapping>();
+    public DbSet<PayrollPeriodClose> PayrollPeriodCloses => Set<PayrollPeriodClose>();
+    public DbSet<Credential> Credentials => Set<Credential>();
+    public DbSet<WorkforcePlan> WorkforcePlans => Set<WorkforcePlan>();
+    public DbSet<AllocationSet> AllocationSets => Set<AllocationSet>();
     public DbSet<FiscalPeriod> FiscalPeriods => Set<FiscalPeriod>();
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<TaxCode> TaxCodes => Set<TaxCode>();
@@ -86,6 +117,7 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         ConfigureInventory(mb);
         ConfigureManufacturing(mb);
         ConfigurePeople(mb);
+        ConfigurePeopleDeferred(mb);
         ConfigureFinance(mb);
         ConfigureAssets(mb);
         ConfigureIdentity(mb);
@@ -740,6 +772,351 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         });
     }
 
+    // deferred screens (PM1–PM10) — tenant+entity scope on every table from day one, every FK and
+    // frequent query column indexed. Unique indexes are the concurrency/idempotency backstops the
+    // services rely on (onboarding generation, accrual replay, attendance dedupe, one file per run).
+    private static void ConfigurePeopleDeferred(ModelBuilder mb)
+    {
+        mb.Entity<OrgUnit>(e =>
+        {
+            e.ToTable("org_units");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }); // as-of hierarchy scans
+            e.HasIndex(x => x.ParentOrgUnitId);
+        });
+
+        mb.Entity<WorkLocation>(e =>
+        {
+            e.ToTable("work_locations");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+        });
+
+        mb.Entity<Position>(e =>
+        {
+            e.ToTable("positions");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.OrgUnitId }); // hierarchy listings
+            e.HasIndex(x => x.OrgUnitId);
+        });
+
+        mb.Entity<PositionAssignment>(e =>
+        {
+            e.ToTable("position_assignments");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PositionId, x.Status }); // headcount scans
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId }); // worker's assignments
+            e.HasIndex(x => x.PositionId);
+            e.HasIndex(x => x.EmploymentId);
+            e.HasOne<Position>().WithMany().HasForeignKey(x => x.PositionId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+            // a stale second exception decision updates zero rows (review-1a mechanism)
+            e.Property(x => x.Status).IsConcurrencyToken();
+        });
+
+        mb.Entity<OnboardingTemplate>(e =>
+        {
+            e.ToTable("onboarding_templates");
+            e.HasKey(x => x.Id); // natural key {categoryCode}:{taskKey}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.CategoryCode, x.TaskKey }).IsUnique();
+        });
+
+        mb.Entity<OnboardingTask>(e =>
+        {
+            e.ToTable("onboarding_tasks");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId, x.TaskKey }).IsUnique(); // generation idempotency
+            e.HasIndex(x => x.EmploymentId);
+            e.HasIndex(x => x.TemplateId);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<OnboardingTemplate>().WithMany().HasForeignKey(x => x.TemplateId).OnDelete(DeleteBehavior.Restrict);
+            e.Property(x => x.Status).IsConcurrencyToken();
+        });
+
+        mb.Entity<JobProfile>(e =>
+        {
+            e.ToTable("job_profiles");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+        });
+
+        mb.Entity<JobProfileVersion>(e =>
+        {
+            e.ToTable("job_profile_versions");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.ProfileId, x.Version }).IsUnique(); // 022: historic refs keep their version
+            e.HasIndex(x => x.ProfileId);
+            e.HasOne<JobProfile>().WithMany().HasForeignKey(x => x.ProfileId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<Competency>(e =>
+        {
+            e.ToTable("competencies");
+            e.HasKey(x => x.Id); // natural key {profileVersionId}:{name}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => x.ProfileVersionId);
+            e.HasOne<JobProfileVersion>().WithMany().HasForeignKey(x => x.ProfileVersionId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<GradeRange>(e =>
+        {
+            e.ToTable("grade_ranges");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.GradeCode, x.EffectiveFrom }); // as-of policy lookups (023)
+        });
+
+        mb.Entity<WorkSchedule>(e =>
+        {
+            e.ToTable("work_schedules");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+        });
+
+        mb.Entity<ScheduleVersion>(e =>
+        {
+            e.ToTable("schedule_versions");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.ScheduleId, x.EffectiveFrom }); // as-of version resolution (025)
+            e.HasIndex(x => x.ScheduleId);
+            e.HasOne<WorkSchedule>().WithMany().HasForeignKey(x => x.ScheduleId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<HolidayCalendar>(e =>
+        {
+            e.ToTable("holiday_calendars");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+            e.OwnsMany(x => x.Dates, d =>
+            {
+                d.ToTable("holiday_dates");
+                d.WithOwner().HasForeignKey("CalendarId");
+                d.HasKey("CalendarId", "Date");
+                d.Property<string>("TenantId");
+                d.Property<string>("LegalEntityId");
+                d.HasIndex("CalendarId");
+                d.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<LeaveType>(e =>
+        {
+            e.ToTable("leave_types");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+        });
+
+        mb.Entity<LeaveLedgerEntry>(e =>
+        {
+            e.ToTable("leave_ledger_entries");
+            e.HasKey(x => x.Id);
+            // 030 AC1: (tenant, entity, employment, type, period, sourceKey) unique IS the accrual
+            // replay idempotency backstop — a re-run of the same period+source cannot double-post
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId, x.LeaveTypeId, x.Period, x.SourceKey }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId, x.LeaveTypeId, x.EntryDate }); // as-of balances
+            e.HasIndex(x => x.EmploymentId);
+            e.HasIndex(x => x.LeaveTypeId);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<LeaveType>().WithMany().HasForeignKey(x => x.LeaveTypeId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<LeaveRequest>(e =>
+        {
+            e.ToTable("leave_requests");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId, x.Status }); // queue scans
+            e.HasIndex(x => x.EmploymentId);
+            e.HasIndex(x => x.LeaveTypeId);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<LeaveType>().WithMany().HasForeignKey(x => x.LeaveTypeId).OnDelete(DeleteBehavior.Restrict);
+            // a stale second decision/withdrawal updates zero rows
+            e.Property(x => x.Status).IsConcurrencyToken();
+        });
+
+        mb.Entity<LeaveAdjustment>(e =>
+        {
+            e.ToTable("leave_adjustments");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId });
+            e.HasIndex(x => x.EmploymentId);
+            e.HasIndex(x => x.LeaveTypeId);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<LeaveType>().WithMany().HasForeignKey(x => x.LeaveTypeId).OnDelete(DeleteBehavior.Restrict);
+            e.Property(x => x.Status).IsConcurrencyToken();
+        });
+
+        mb.Entity<AttendanceException>(e =>
+        {
+            e.ToTable("attendance_exceptions");
+            e.HasKey(x => x.Id); // natural key {employmentId}:{workDate}:{kind} — IS the dedupe (033)
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.WorkDate });
+            e.HasIndex(x => x.EmploymentId);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<TaxElection>(e =>
+        {
+            e.ToTable("tax_elections");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId, x.EffectiveFrom }); // as-of selection (041)
+            e.HasIndex(x => x.EmploymentId);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<ContributionRule>(e =>
+        {
+            e.ToTable("contribution_rules");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }); // versions share Code
+            e.HasIndex(x => x.PayCodeId);
+        });
+
+        mb.Entity<GarnishmentOrder>(e =>
+        {
+            e.ToTable("garnishment_orders");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId, x.Status }); // conflict + release scans
+            e.HasIndex(x => x.EmploymentId);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+            e.Property(x => x.Status).IsConcurrencyToken();
+        });
+
+        mb.Entity<BenefitPlan>(e =>
+        {
+            e.ToTable("benefit_plans");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+            e.HasIndex(x => x.PayCodeId);
+        });
+
+        mb.Entity<BenefitEnrollment>(e =>
+        {
+            e.ToTable("benefit_enrollments");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId, x.Status });
+            e.HasIndex(x => x.EmploymentId);
+            e.HasIndex(x => x.PlanId);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+            e.HasOne<BenefitPlan>().WithMany().HasForeignKey(x => x.PlanId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<DeductionInstruction>(e =>
+        {
+            e.ToTable("deduction_instructions");
+            e.HasKey(x => x.Id); // natural key {enrollmentId}:{period}:v{version}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EnrollmentId, x.Period }); // reconciliation scans (044)
+            e.HasIndex(x => x.EnrollmentId);
+            e.HasOne<BenefitEnrollment>().WithMany().HasForeignKey(x => x.EnrollmentId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<PaymentFile>(e =>
+        {
+            e.ToTable("payment_files");
+            e.HasKey(x => x.Id);
+            // one live payment file per run — the idempotent-create backstop (050)
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.RunId }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status });
+            e.HasIndex(x => x.RunId);
+            e.HasOne<PayRun>().WithMany().HasForeignKey(x => x.RunId).OnDelete(DeleteBehavior.Restrict);
+            e.Property(x => x.Status).IsConcurrencyToken();
+            e.OwnsMany(x => x.Items, i =>
+            {
+                i.ToTable("payment_file_items");
+                i.WithOwner().HasForeignKey("PaymentFileId");
+                i.HasKey("PaymentFileId", "EmploymentId"); // one instruction per worker per file
+                i.Property<string>("TenantId");
+                i.Property<string>("LegalEntityId");
+                i.HasIndex("PaymentFileId");
+                i.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<PayrollAccountMapping>(e =>
+        {
+            e.ToTable("payroll_account_mappings");
+            e.HasKey(x => x.Id); // natural key map:{element}:{effectiveFrom:yyyyMMdd}
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Element, x.EffectiveFrom }); // as-of posting resolution (053 AC2)
+        });
+
+        mb.Entity<PayrollPeriodClose>(e =>
+        {
+            e.ToTable("payroll_period_closes");
+            e.HasKey(x => x.Id); // Id IS the periodId — resumable without duplicate execution (054)
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasOne<FiscalPeriod>().WithMany().HasForeignKey(x => x.PeriodId).OnDelete(DeleteBehavior.Restrict);
+            e.Property(x => x.Status).IsConcurrencyToken();
+        });
+
+        mb.Entity<Credential>(e =>
+        {
+            e.ToTable("credentials");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.EmploymentId, x.Code }); // assignment gate lookups (058)
+            e.HasIndex(x => x.EmploymentId);
+            e.HasOne<Employment>().WithMany().HasForeignKey(x => x.EmploymentId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        mb.Entity<WorkforcePlan>(e =>
+        {
+            e.ToTable("workforce_plans");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("workforce_plan_lines");
+                l.WithOwner().HasForeignKey("WorkforcePlanId");
+                l.HasKey("WorkforcePlanId", "PositionCode");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("WorkforcePlanId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<AllocationSet>(e =>
+        {
+            e.ToTable("allocation_sets");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+            e.OwnsMany(x => x.Lines, l =>
+            {
+                l.ToTable("allocation_lines");
+                l.WithOwner().HasForeignKey("AllocationSetId");
+                l.HasKey("AllocationSetId", "CostCenter");
+                l.Property<string>("TenantId");
+                l.Property<string>("LegalEntityId");
+                l.HasIndex("AllocationSetId");
+                l.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+    }
+
     private static void ConfigureFinance(ModelBuilder mb)
     {
         mb.Entity<Journal>(e =>
@@ -948,7 +1325,11 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                      // PEOPLE deep prefixes (AddPeopleDeepSeed). doc_per is reserved: R-PEO3 collapsed
                      // the person entity into the worker register, so nothing consumes it today — the
                      // sequence stays so a later person split keeps its id-space
-                     "per", "wkr", "cmp", "tme", "tmc", "prn" })
+                     "per", "wkr", "cmp", "tme", "tmc", "prn",
+                     // deferred-screens PEOPLE prefixes (brief §5 partition table) — ship with
+                     // AddPeopleDeferredScreens, since NumberSeries.Next throws on a missing sequence
+                     "org", "pos", "obt", "job", "grd", "sch", "lty", "lag", "lrq", "lle", "atx",
+                     "txe", "cgr", "gro", "bpl", "enr", "pay", "ppc", "cre", "wfp", "als" })
             mb.HasSequence<long>($"doc_{prefix}");
         mb.HasSequence<long>("doc_a", s => s.StartsAt(2));
     }
@@ -979,7 +1360,14 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             // replaces the whole permissions column, so AddPeopleDeepSeed must ship the union of
             // AddFinanceSeed + AddSalesDeepSeed + AddProcurementDeepSeed + payroll, never a delta)
             new { Id = "R-PROC", Name = "procurement_officer", Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer", "sourcing:read", "sourcing:write", "contracts:read", "contracts:write", "suppliers:read" }, TenantId = t, LegalEntityId = le },
-            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write" }, TenantId = t, LegalEntityId = le },
+            new { Id = "R-FIN", Name = "finance_officer", Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write",
+                    // deferred-screens additions (brief §3): leave:adjust (032 elevated manual ledger),
+                    // payroll:release (payment-file/garnishment release ≠ calculation approval, 050),
+                    // payroll:close (period close + waivers, 054), people:analytics:read (061 — R-HR
+                    // and R-FIN both read, suppression enforced server-side) — the row is the FULL
+                    // surviving union (AddPeopleDeepSeed merge lesson: UpdateData replaces the whole
+                    // column, never a delta)
+                    "leave:adjust", "payroll:release", "payroll:close", "people:analytics:read" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write",
                     "so:approve",
                     "leads:read", "leads:write", "crm:read", "crm:write", "opps:read", "opps:write",
@@ -995,7 +1383,12 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             // PEOPLE deep (R-PEO9): R-HR is the maker — register/time/payroll:calculate plus the
             // correction-checker permission (time:approve, approver ≠ requester, 027). payroll:approve
             // stays with R-FIN, so the run's calculator and approver are different people by role.
-            new { Id = "R-HR", Name = "hr_officer", Permissions = new[] { "workers:read", "workers:write", "time:read", "time:write", "time:approve", "payroll:read", "payroll:calculate" }, TenantId = t, LegalEntityId = le });
+            new { Id = "R-HR", Name = "hr_officer", Permissions = new[] { "workers:read", "workers:write", "time:read", "time:write", "time:approve", "payroll:read", "payroll:calculate",
+                    // deferred-screens additions (brief §3): HR maker + checker domains — org/positions,
+                    // onboarding, job catalog, schedules, leave (write + approve ≠ requester),
+                    // credentials, pay inputs, workforce plans + analytics (server-side suppression)
+                    "org:write", "onboarding:write", "compmaster:write", "schedules:write", "leave:write",
+                    "leave:approve", "credentials:write", "payinputs:write", "workforce:write", "people:analytics:read" }, TenantId = t, LegalEntityId = le });
 
         mb.Entity<User>().HasData(
             new { Id = "U-001", Email = "admin@teamzlab.dev", DisplayName = "Tenant Admin", Active = true, TenantId = t, LegalEntityId = le },
@@ -1005,7 +1398,10 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new { Id = "U-005", Email = "assets@teamzlab.dev", DisplayName = "Assets Officer", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-006", Email = "evaluator@teamzlab.dev", DisplayName = "Independent Evaluator", Active = true, TenantId = t, LegalEntityId = le },
             new { Id = "U-008", Email = "mfg@teamzlab.dev", DisplayName = "Manufacturing Officer", Active = true, TenantId = t, LegalEntityId = le },
-            new { Id = "U-007", Email = "hr@teamzlab.dev", DisplayName = "HR Officer", Active = true, TenantId = t, LegalEntityId = le });
+            new { Id = "U-007", Email = "hr@teamzlab.dev", DisplayName = "HR Officer", Active = true, TenantId = t, LegalEntityId = le },
+            // Q-PM5: the second HR user — maker-checker on HR approval paths (onboarding waivers,
+            // leave approvals ≠ requester, credential waivers) is untestable with one user per role
+            new { Id = "U-010", Email = "hr-checker@teamzlab.dev", DisplayName = "HR Checker", Active = true, TenantId = t, LegalEntityId = le });
 
         mb.Entity<Membership>().HasData(
             new Membership("U-001", t, le, "R-ADMIN"),
@@ -1015,7 +1411,8 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new Membership("U-005", t, le, "R-ASSETS"),
             new Membership("U-006", t, le, "R-EVAL"),
             new Membership("U-008", t, le, "R-MFG"),
-            new Membership("U-007", t, le, "R-HR"));
+            new Membership("U-007", t, le, "R-HR"),
+            new Membership("U-010", t, le, "R-HR"));
 
         mb.Entity<AuditEvent>().HasData(new
         {

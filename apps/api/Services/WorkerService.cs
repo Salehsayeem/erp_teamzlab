@@ -10,7 +10,7 @@ namespace Erp.Api.Services;
 // per-worker (035 AC2). Terminations close future terms but never delete history.
 public sealed class WorkerService(
     IPeopleRepository people, IAccountRepository accounts, IIdentityRepository identities,
-    INumberSeries numbers, IAuditRepository audit, EntityContext ec) : IWorkerService
+    INumberSeries numbers, IAuditRepository audit, EntityContext ec, ErpDbContext db) : IWorkerService
 {
     // legal lifecycle map (007 AC1); Terminated is terminal — rescission would be a new event
     // (deferred, R-PEO10 spirit) and is not modeled in the pilot
@@ -119,6 +119,12 @@ public sealed class WorkerService(
         if (request.Currency != currency)
             return (null, "VALIDATION_ERROR", $"Compensation currency must be {currency} in this pilot (R-PEO7 single-currency).");
 
+        // PM3 (023 AC2): a graded position's range gates the change — out-of-policy needs the
+        // named R-FIN exception approver; a graded position with NO range is an explicit config
+        // error, never substituted. Ungated workers (no graded assignment) are untouched.
+        var (policyCode, policyMessage, policyReason) = CompPolicyGate(workerId, request);
+        if (policyCode is not null) return (null, policyCode, policyMessage);
+
         var scheduled = people.CompensationsFor(workerId)
             .FirstOrDefault(c => c.EffectiveFrom > request.EffectiveFrom && c.EffectiveTo == null);
         if (scheduled is not null)
@@ -132,11 +138,11 @@ public sealed class WorkerService(
 
         var evt = new CompensationEvent(numbers.Next("CMP"), ec.TenantId, ec.EntityId, workerId,
             request.Amount, request.Currency, request.PayBasis, request.EffectiveFrom, null,
-            request.Reason, user.Id, user.Id, DateTimeOffset.UtcNow);
+            policyReason, user.Id, user.Id, DateTimeOffset.UtcNow);
         people.AddCompensation(evt);
         audit.Log(user, "compensation", "worker", workerId,
             $"Compensation {evt.Id} for {workerId}: {request.Amount:0.00} {request.Currency} {request.PayBasis} " +
-            $"from {request.EffectiveFrom:yyyy-MM-dd} — {request.Reason}");
+            $"from {request.EffectiveFrom:yyyy-MM-dd} — {policyReason}");
         people.Save();
         return (evt, null, null);
     }
@@ -240,6 +246,52 @@ public sealed class WorkerService(
     // 004 edge: identity matching normalizes NationalId/email to Trim + lowercase
     private static string? Normalize(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToLowerInvariant();
+
+    // PM3 (023 AC2) grade-policy gate over the worker's Active assignment covering the change
+    // date; returns the (possibly exception-annotated) reason the event must carry
+    private (string? code, string? message, string reason) CompPolicyGate(string workerId, Dtos.AddCompensationRequest request)
+    {
+        var assignment = db.PositionAssignments
+            .Where(a => a.TenantId == ec.TenantId && a.LegalEntityId == ec.EntityId
+                && a.EmploymentId == workerId && a.Status == AssignmentStatus.Active
+                && a.EffectiveFrom <= request.EffectiveFrom
+                && (a.EffectiveTo == null || a.EffectiveTo >= request.EffectiveFrom))
+            .OrderByDescending(a => a.EffectiveFrom).FirstOrDefault();
+        var position = assignment is null
+            ? null
+            : db.Positions.FirstOrDefault(p => p.Id == assignment.PositionId
+                && p.TenantId == ec.TenantId && p.LegalEntityId == ec.EntityId);
+        if (position is null || position.GradeCode is null) return (null, null, request.Reason);
+
+        var range = db.GradeRanges
+            .Where(r => r.TenantId == ec.TenantId && r.LegalEntityId == ec.EntityId
+                && r.GradeCode == position.GradeCode && r.Active
+                && r.EffectiveFrom <= request.EffectiveFrom
+                && (r.EffectiveTo == null || r.EffectiveTo >= request.EffectiveFrom))
+            .OrderByDescending(r => r.EffectiveFrom).FirstOrDefault();
+        if (range is null)
+            return ("COMP_POLICY_CONFIG_MISSING",
+                $"Grade {position.GradeCode} has no active range covering {request.EffectiveFrom:yyyy-MM-dd} — missing config for the scope is an explicit error, never substituted (023 AC2).",
+                request.Reason);
+        if (request.Amount >= range.MinAmount && request.Amount <= range.MaxAmount)
+            return (null, null, request.Reason);
+
+        // out-of-policy: the exception approver must be an ACTIVE user holding payroll:approve
+        if (request.ExceptionApprovedBy is not { Length: > 0 } approverId
+            || !HoldsPayrollApprove(approverId))
+            return ("COMP_OUT_OF_POLICY",
+                $"Amount {request.Amount:0.00} is outside grade {position.GradeCode} policy ({range.MinAmount:0.00}..{range.MaxAmount:0.00}); an authorized exception approval (R-FIN payroll:approve, 023 AC2) is required.",
+                request.Reason);
+        return (null, null, $"{request.Reason} [comp-policy exception approved by {approverId}]");
+    }
+
+    private bool HoldsPayrollApprove(string userId)
+    {
+        var user = identities.FindActiveUserById(userId);
+        var membership = user is null ? null : identities.MembershipFor(user.Id, ec.TenantId, ec.EntityId);
+        var role = membership is null ? null : identities.RoleById(membership.RoleId);
+        return role is not null && (role.Permissions.Contains("*") || role.Permissions.Contains("payroll:approve"));
+    }
 
     private static object Project(Employment w) => new
     {

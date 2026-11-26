@@ -324,6 +324,23 @@ public sealed class PayrollService(
                 ownerRole = "time:approve" });
         }
 
+        // PM6 (041 AC2): when a mandatory election is configured, payroll selects the VERIFIED
+        // election effective at the pay date — a missing one is a blocking REVIEW item, never a
+        // silent default. Config rides finance_settings (data, not constants).
+        if (db.FinanceSettings.FirstOrDefault(s => s.Id == "FS-payroll.mandatory_election")?.Value == "true")
+        {
+            var kind = db.FinanceSettings.FirstOrDefault(s => s.Id == "FS-payroll.election_kind")?.Value;
+            var missing = population.Where(w => !db.TaxElections.Any(e => e.TenantId == ec.TenantId
+                && e.LegalEntityId == ec.EntityId && e.EmploymentId == w.Id && e.Status == ElectionStatus.Verified
+                && (kind == null || e.Kind == kind)
+                && e.EffectiveFrom <= run.PayDate
+                && (e.EffectiveTo == null || e.EffectiveTo >= run.PayDate))).ToList();
+            if (missing.Count > 0)
+                blocking.Add(new { code = "ELECTION_MISSING", workerCount = missing.Count,
+                    message = $"Missing verified election '{kind ?? "(any kind)"}' effective at the pay date for worker(s) {string.Join(", ", missing.Select(w => w.Id))} — routes to review, never a silent default (041 AC2).",
+                    ownerRole = "payinputs:write" });
+        }
+
         var missingComp = population.Where(w => people.ApplicableCompensation(w.Id, WindowEnd(w, period)) is null).ToList();
         if (missingComp.Count > 0)
             blocking.Add(new { code = "WORKER_NO_COMPENSATION", workerCount = missingComp.Count,
@@ -528,17 +545,24 @@ public sealed class PayrollService(
             return (new { run = ProjectRun(people.FindPayRun(runId)!), journal = (object?)null }, null, null);
         }
 
-        // 053 AC1: ONE balanced journal — Dr 6100 gross / Cr 2310 deductions / Cr 2300 net,
+        // PM8 (053 AC2): effective-dated account mappings resolve the posting legs — an INACTIVE
+        // mapping covering the pay date BLOCKS and names the element; no mapping → landed constants
+        var (mappedAccounts, resolvedMappingError) = PayrollCloseService.ResolveAccounts(db, ec, run.PayDate);
+        if (resolvedMappingError is not null) return (null, resolvedMappingError.Value.code, resolvedMappingError.Value.message);
+        var (salaryAccount, deductionsAccount, netAccount) = mappedAccounts!.Value;
+
+        // 053 AC1: ONE balanced journal — Dr salary gross / Cr deductions payable / Cr net payable,
         // zero-value legs omitted when a total is empty
         var journal = new Journal(numbers.Next("J"), ec.TenantId, ec.EntityId, JournalStatus.Posted,
-            $"Payroll run {run.Id} for period {run.PeriodId}", PayrollJournal(run.GrossTotal, run.DeductionTotal, run.NetTotal),
+            $"Payroll run {run.Id} for period {run.PeriodId}",
+            PayrollJournal(salaryAccount, deductionsAccount, netAccount, run.GrossTotal, run.DeductionTotal, run.NetTotal),
             DateTimeOffset.UtcNow, approver.Id, reversalOfId: null, accountingDate: run.PayDate);
         journals.Add(journal);
 
         people.MarkPosted(run, journal.Id, approver.Id, DateTimeOffset.UtcNow);
         audit.Log(approver, "post", "pay_run", run.Id,
-            $"Pay run {run.Id} posted: journal {journal.Id} Dr {SalaryExpenseAccount} {run.GrossTotal:0.00} / " +
-            $"Cr {DeductionsPayableAccount} {run.DeductionTotal:0.00} + Cr {SalariesPayableAccount} {run.NetTotal:0.00}");
+            $"Pay run {run.Id} posted: journal {journal.Id} Dr {salaryAccount} {run.GrossTotal:0.00} / " +
+            $"Cr {deductionsAccount} {run.DeductionTotal:0.00} + Cr {netAccount} {run.NetTotal:0.00}");
         // 053: the FINANCE handoff payload rides the outbox event
         audit.Emit(approver, "people.payrun.posted", new
         {
@@ -582,11 +606,12 @@ public sealed class PayrollService(
             : (("PAYROLL_MAPPING_MISSING", $"Inactive or missing account mapping blocks posting: {string.Join("; ", problems)}."));
     }
 
-    private static JournalLine[] PayrollJournal(decimal gross, decimal deductions, decimal net) =>
+    private static JournalLine[] PayrollJournal(string salaryAccount, string deductionsAccount, string netAccount,
+        decimal gross, decimal deductions, decimal net) =>
     [
-        new JournalLine(SalaryExpenseAccount, "Salaries and Wages Expense", gross, 0),
-        .. deductions != 0 ? new[] { new JournalLine(DeductionsPayableAccount, "Payroll Deductions Payable", 0, deductions) } : [],
-        .. net != 0 ? new[] { new JournalLine(SalariesPayableAccount, "Salaries Payable", 0, net) } : [],
+        new JournalLine(salaryAccount, "Salaries and Wages Expense", gross, 0),
+        .. deductions != 0 ? new[] { new JournalLine(deductionsAccount, "Payroll Deductions Payable", 0, deductions) } : [],
+        .. net != 0 ? new[] { new JournalLine(netAccount, "Salaries Payable", 0, net) } : [],
     ];
 
     // ---- payslips (051) -------------------------------------------------------------------
@@ -642,6 +667,11 @@ public sealed class PayrollService(
         var (guardCode, guardMsg) = FinanceGuards.EnsurePeriodOpen(db, ec, payDate); // R-PEO11 on every posting path
         if (guardCode is not null) return (null, guardCode, guardMsg);
 
+        // PM8: the reversal's legs resolve through the same mapping gate as the original posting
+        var (mappedAccounts, mappingError) = PayrollCloseService.ResolveAccounts(db, ec, payDate);
+        if (mappingError is not null) return (null, mappingError.Value.code, mappingError.Value.message);
+        var (salaryAccount, deductionsAccount, netAccount) = mappedAccounts!.Value;
+
         var reversal = new PayRun(numbers.Next("PRN"), ec.TenantId, ec.EntityId, run.PayGroupId, run.PeriodId,
             PayRunStatus.Reversed, run.Currency, payDate, run.GrossTotal, run.DeductionTotal, run.NetTotal,
             CalculatedBy: approver.Id, CalculatedAt: DateTimeOffset.UtcNow, ApprovedBy: null, ApprovedAt: null,
@@ -656,7 +686,8 @@ public sealed class PayrollService(
         people.AddPayRun(reversal);
 
         var journal = new Journal(numbers.Next("J"), ec.TenantId, ec.EntityId, JournalStatus.Posted,
-            $"Reversal of pay run {run.Id}", ReversalJournal(run.GrossTotal, run.DeductionTotal, run.NetTotal),
+            $"Reversal of pay run {run.Id}",
+            ReversalJournal(salaryAccount, deductionsAccount, netAccount, run.GrossTotal, run.DeductionTotal, run.NetTotal),
             DateTimeOffset.UtcNow, approver.Id, reversalOfId: run.JournalId, accountingDate: payDate);
         journals.Add(journal);
 
@@ -681,12 +712,13 @@ public sealed class PayrollService(
         return (new { run = ProjectRun(people.FindPayRun(reversal.Id)!), journal }, null, null);
     }
 
-    // the compensating entry: Dr 2300 net / Dr 2310 deductions / Cr 6100 gross (055 AC1)
-    private static JournalLine[] ReversalJournal(decimal gross, decimal deductions, decimal net) =>
+    // the compensating entry: Dr net payable / Dr deductions payable / Cr salary expense (055 AC1)
+    private static JournalLine[] ReversalJournal(string salaryAccount, string deductionsAccount, string netAccount,
+        decimal gross, decimal deductions, decimal net) =>
     [
-        .. net != 0 ? new[] { new JournalLine(SalariesPayableAccount, "Salaries Payable", net, 0) } : [],
-        .. deductions != 0 ? new[] { new JournalLine(DeductionsPayableAccount, "Payroll Deductions Payable", deductions, 0) } : [],
-        new JournalLine(SalaryExpenseAccount, "Salaries and Wages Expense", 0, gross),
+        .. net != 0 ? new[] { new JournalLine(netAccount, "Salaries Payable", net, 0) } : [],
+        .. deductions != 0 ? new[] { new JournalLine(deductionsAccount, "Payroll Deductions Payable", deductions, 0) } : [],
+        new JournalLine(salaryAccount, "Salaries and Wages Expense", 0, gross),
     ];
 
     private static object ProjectRun(PayRun r) => new
