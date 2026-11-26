@@ -159,7 +159,15 @@ req POST /api/v1/requisitions "$PROC" "{\"purpose\":\"Smoke req $RUN\",\"currenc
 expect_status 201 "POST /requisitions (draft saves incomplete)"
 REQ=$(printf '%s' "$BODY" | jget 'j.data.id')
 req POST "/api/v1/requisitions/$REQ/decisions" "$PROC" '{"decision":"Approve","version":1}'
-expect_status 409 "creator cannot decide own requisition (maker-checker, 016)"
+expect_status 403 "creator without requisitions:approve is 403 FORBIDDEN (permission-first)"
+req POST /api/v1/requisitions "$ADMIN" "{\"purpose\":\"Smoke req admin $RUN\",\"currency\":\"BDT\",\"lines\":[{\"categoryId\":\"$CAT\",\"description\":\"smoke line\",\"qty\":2,\"unitPrice\":50,\"unit\":\"$UNIT\",\"needBy\":\"2030-01-01\"}]}"
+expect_status 201 "POST /requisitions as admin (approver-creator)"
+REQA=$(printf '%s' "$BODY" | jget 'j.data.id')
+req POST "/api/v1/requisitions/$REQA/submission" "$ADMIN" '{}'
+expect_status 200 "submit admin requisition"
+req POST "/api/v1/requisitions/$REQA/decisions" "$ADMIN" '{"decision":"Approve","version":1}'
+expect_status 409 "approver-creator cannot decide own requisition (maker-checker, 016)"
+expect_json 'j.error.code' "REQUISITION_APPROVAL_ERROR" "creator-block emits REQUISITION_APPROVAL_ERROR"
 req POST "/api/v1/requisitions/$REQ/submission" "$PROC" '{}'
 expect_status 200 "submit (budget Pass + route resolves)"
 req GET "/api/v1/requisitions/$REQ" "$FIN"
