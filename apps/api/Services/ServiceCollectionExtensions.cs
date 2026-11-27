@@ -133,6 +133,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICurrencyService, CurrencyService>();
         services.AddScoped<IFxRateResolver, CurrencyService>();
         services.AddScoped<IDimensionService, DimensionService>();
+        // FINANCE-deep P1 — fiscal calendars (004) + close checklists/gate (062/063)
+        services.AddScoped<IFiscalCalendarService, FiscalCalendarService>();
+        services.AddScoped<ICloseService, CloseService>();
         return services;
     }
 }

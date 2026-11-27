@@ -157,14 +157,15 @@ public class FinanceDeepP1Tests : IClassFixture<TestApiFactory>
         Assert.Equal(13, periods.Count); // 12 accounting periods + ADJ
 
         // quarter boundary: P03 is the 5-week period — it ends on start + 90 days (day 91),
-        // and P04 starts the very next day; ADJ starts after 12 periods (336 days)
+        // and P04 starts the very next day; 12 periods of 4-4-5 cover 364 days, so ADJ (with
+        // the 53rd-week edge / year remainder) starts on day 365
         var p1 = periods[0]; var p3 = periods[2]; var p4 = periods[3]; var adj = periods[12];
         Assert.Equal(new DateOnly(2029, 1, 1), DateOnly.Parse(p1.GetProperty("startDate").GetString()!));
         var p3End = DateOnly.Parse(p3.GetProperty("endDate").GetString()!);
         Assert.Equal(new DateOnly(2029, 1, 1).AddDays(90), p3End);
         Assert.Equal(p3End.AddDays(1), DateOnly.Parse(p4.GetProperty("startDate").GetString()!));
         Assert.False(p3.GetProperty("isAdjustment").GetBoolean());
-        Assert.Equal(new DateOnly(2029, 1, 1).AddDays(336), DateOnly.Parse(adj.GetProperty("startDate").GetString()!));
+        Assert.Equal(new DateOnly(2029, 1, 1).AddDays(364), DateOnly.Parse(adj.GetProperty("startDate").GetString()!));
         Assert.Equal(new DateOnly(2029, 12, 31), DateOnly.Parse(adj.GetProperty("endDate").GetString()!));
         Assert.True(adj.GetProperty("isAdjustment").GetBoolean());
 
@@ -314,7 +315,10 @@ public class FinanceDeepP1Tests : IClassFixture<TestApiFactory>
         var p01 = rows.First(p => p.GetProperty("name").GetString() == "2033-P01");
         var adj = rows.First(p => p.GetProperty("name").GetString() == "2033-ADJ");
         var p01Date = DateOnly.Parse(p01.GetProperty("startDate").GetString()!).AddDays(10);
-        var adjDate = DateOnly.Parse(adj.GetProperty("startDate").GetString()!).AddDays(3);
+        // dated INSIDE the adjustment period (2029+ 4-4-5 years leave ADJ just 1-2 days wide)
+        var adjStart = DateOnly.Parse(adj.GetProperty("startDate").GetString()!);
+        var adjEnd = DateOnly.Parse(adj.GetProperty("endDate").GetString()!);
+        var adjDate = adjStart <= adjEnd ? adjStart : adjEnd;
 
         Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/fiscal-periods/{p01.GetProperty("id").GetString()}/close", new { reason = "period lock probe" }, Admin)).StatusCode);
 

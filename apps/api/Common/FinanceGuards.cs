@@ -23,7 +23,22 @@ public static class FinanceGuards
         if (period.Status is PeriodStatus.SoftClosed or PeriodStatus.Closed)
             return ("PERIOD_LOCKED",
                 $"Fiscal period {period.Name} is {period.Status}; posting is locked" +
-                (period.ClosedAt is { } at ? $" (closed by {period.ClosedBy ?? "system"} at {at:u})" : "."));
+                (period.ClosedAt is { } at ? $" (closed by {period.ClosedBy ?? "system"} at {at:u})" : ".")
+                // 063 edge: name the designated adjustment period so a late source event routes to
+                // the adjustment workflow (dated in the open ADJ period) instead of backdating
+                + AdjustmentRoute(db, ec));
         return (null, null);
+    }
+
+    // the entity's latest OPEN adjustment period, if a calendar has materialized one
+    private static string AdjustmentRoute(ErpDbContext db, EntityContext ec)
+    {
+        var adj = db.FiscalPeriods
+            .Where(p => p.TenantId == ec.TenantId && p.LegalEntityId == ec.EntityId
+                && p.IsAdjustment && p.Status == PeriodStatus.Open)
+            .OrderByDescending(p => p.StartDate)
+            .FirstOrDefault();
+        return adj is null ? "" :
+            $"; late events for this period must route to the designated adjustment period {adj.Name} ({adj.StartDate:yyyy-MM-dd}..{adj.EndDate:yyyy-MM-dd}) via the adjustment workflow — no backdated postings.";
     }
 }

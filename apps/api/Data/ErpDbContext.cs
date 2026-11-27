@@ -201,6 +201,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     public DbSet<DimensionSet> DimensionSets => Set<DimensionSet>();
     public DbSet<DimensionValue> DimensionValues => Set<DimensionValue>();
     public DbSet<NumberSeriesVoid> NumberSeriesVoids => Set<NumberSeriesVoid>();
+    // FINANCE-deep P1 (004/062/063): entity fiscal calendars + close-checklist tasks
+    public DbSet<FiscalCalendar> FiscalCalendars => Set<FiscalCalendar>();
+    public DbSet<CloseTask> CloseTasks => Set<CloseTask>();
     public DbSet<User> Users => Set<User>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<Membership> Memberships => Set<Membership>();
@@ -2248,6 +2251,37 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Prefix, x.Number }).IsUnique();
         });
+
+        // -------- FINANCE-deep P1 (004 calendars / 062 close checklists) --------
+        mb.Entity<FiscalCalendar>(e =>
+        {
+            e.ToTable("fiscal_calendars");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            // one layout per (entity, year, pattern) — CALENDAR_EXISTS pre-check backstop
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Year, x.Pattern }).IsUnique();
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.StartDate }); // coverage-chain scans
+            e.OwnsMany(x => x.Periods, p =>
+            {
+                p.ToTable("fiscal_calendar_periods");
+                p.WithOwner().HasForeignKey("CalendarId");
+                p.Property<int>("LineNo").ValueGeneratedOnAdd();
+                p.HasKey("CalendarId", "LineNo");
+                p.Property<string>("TenantId");
+                p.Property<string>("LegalEntityId");
+                p.HasIndex("CalendarId");
+                p.HasIndex("TenantId", "LegalEntityId");
+            });
+        });
+
+        mb.Entity<CloseTask>(e =>
+        {
+            e.ToTable("close_tasks");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PeriodId }); // gate scans (063)
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status }); // dashboard buckets (062)
+        });
     }
 
     private static void ConfigureAssets(ModelBuilder mb)
@@ -2417,10 +2451,17 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                      "qte", "pbl", "rcs", "dlv", "rma", "rcp", "rbt",
                      // FINANCE-deep P5 (AddFinanceDeepP5): FX rates. StartsAt 3 because FXR-0001/
                      // FXR-0002 are seeded rows — the same A-0001 convention.
-                     "fxr" })
+                     "fxr",
+                     // FINANCE-deep P1 (AddFinanceDeepP1): fiscal calendars + close tasks. Both
+                     // start at 2 because FCAL-0001 (draft FY2027 4-4-5 demo) and CTK-0001
+                     // (mandatory reconciliation task on the demo next-month period) are seeded
+                     // rows — the same A-0001 convention.
+                     "fcal", "ctk" })
             mb.HasSequence<long>($"doc_{prefix}");
         mb.HasSequence<long>("doc_a", s => s.StartsAt(2));
         mb.HasSequence<long>("doc_fxr", s => s.StartsAt(3));
+        mb.HasSequence<long>("doc_fcal", s => s.StartsAt(2));
+        mb.HasSequence<long>("doc_ctk", s => s.StartsAt(2));
     }
 
     private static void SnakeCaseAllColumns(ModelBuilder mb)

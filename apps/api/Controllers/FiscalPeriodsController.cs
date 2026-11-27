@@ -40,7 +40,13 @@ public sealed class FiscalPeriodsController(IFiscalPeriodService periods) : Cont
     {
         var u = CurrentUser.From(HttpContext);
         if (!u.Has("periods:write")) return Envelope.Fail("FORBIDDEN", "periods:write permission required.", 403);
-        var (period, code, error) = periods.Close(u, id, request?.Reason);
+        var waive = request?.WaiveBlockers == true;
+        // 063 AC2: the waiver variant is an authorized override — close:approve (distinct from periods:write)
+        if (waive && !u.Has("close:approve")) return Envelope.Fail("FORBIDDEN", "close:approve permission required to waive close-gate blockers.", 403);
+        // the waiver reason IS the close evidence — a reasonless waiver is refused before the service runs
+        if (waive && string.IsNullOrWhiteSpace(request?.Reason))
+            return Envelope.Fail("VALIDATION_ERROR", "A waiver close requires a reason (recorded on the unresolved tasks it waives).", 400);
+        var (period, code, error) = periods.Close(u, id, request?.Reason, waive);
         return code is not null ? Envelope.Fail(code, error!, ErrorStatus.StatusFor(code)) : Envelope.Ok<object>(period!);
     }
 

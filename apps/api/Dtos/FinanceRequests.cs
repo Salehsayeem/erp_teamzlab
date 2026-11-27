@@ -4,7 +4,9 @@ namespace Erp.Api.Dtos;
 // Trailing optional parameters keep positional construction compatible with the brief shapes.
 
 public record CreatePeriodRequest(string Name, DateOnly StartDate, DateOnly EndDate);
-public record ClosePeriodRequest(string? Reason);
+// WaiveBlockers=true is the 063 AC2 waiver variant: unresolved mandatory close tasks are waived
+// (reason mandatory) and retained in close evidence instead of blocking the close.
+public record ClosePeriodRequest(string? Reason, bool? WaiveBlockers = null);
 public record ReopenPeriodRequest(string Reason);
 
 public record CreateAccountRequest(string Code, string Name, AccountType Type, NormalBalance NormalBalance, bool DirectPostingAllowed);
@@ -42,3 +44,17 @@ public record UpsertFinanceSettingRequest(string Key, string Value, DateOnly? Ef
 
 // 016: void a doc number with a mandatory reason; the sequence never reissues it
 public record VoidNumberRequest(string Number, string Reason);
+
+// --- FINANCE-deep P1 (004 calendars, 062/063 close) ---
+
+public record CreateFiscalCalendarRequest(string Name, int Year, string Pattern, DateOnly StartDate);
+
+public record CloseTaskInput(string Title, bool Mandatory, DateOnly? DueDate = null, string? DependsOnTaskId = null);
+public record CreateCloseChecklistRequest(string PeriodId, IReadOnlyList<CloseTaskInput> Tasks);
+public record AddCloseTaskRequest(string Title, bool Mandatory, DateOnly? DueDate = null, string? DependsOnTaskId = null);
+
+// 062 AC1: completion needs an evidence ref OR an authorized waiver reason — both absent is a 400
+public record CompleteCloseTaskRequest(string? EvidenceRef, string? WaiverReason);
+
+// 062 AC3: N/A carries a reason; the row is retained, never silently removed
+public record NaCloseTaskRequest(string Reason);
