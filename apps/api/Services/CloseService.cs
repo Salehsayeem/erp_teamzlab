@@ -107,7 +107,16 @@ public sealed class CloseService(ErpDbContext db, EntityContext ec, INumberSerie
             audit.Emit(user, "finance.closetask.completed",
                 new { taskId = task.Id, periodId, evidenceRef = resolved.EvidenceRef, completedBy = user.Id });
         }
-        db.SaveChanges();
+        try
+        {
+            db.SaveChanges();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // status is a concurrency token (P1 review 7) — a stale Complete-vs-waive race loses
+            // loudly instead of overwriting terminal close evidence
+            return (null, "CLOSE_TASK_STATE_ERROR", $"Close task {task.Id} was resolved concurrently; reload and re-decide (terminal states are immutable).");
+        }
         return (resolved, null, null);
     }
 
@@ -126,7 +135,14 @@ public sealed class CloseService(ErpDbContext db, EntityContext ec, INumberSerie
             $"Close task {task.Id} on period {periodId} marked N/A by {user.Email}: {resolved.NaReason} (row retained, never removed).");
         audit.Emit(user, "finance.closetask.na",
             new { taskId = task.Id, periodId, reason = resolved.NaReason, decidedBy = user.Id });
-        db.SaveChanges();
+        try
+        {
+            db.SaveChanges();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return (null, "CLOSE_TASK_STATE_ERROR", $"Close task {task.Id} was resolved concurrently; reload and re-decide (terminal states are immutable).");
+        }
         return (resolved, null, null);
     }
 

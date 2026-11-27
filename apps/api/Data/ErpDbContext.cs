@@ -2281,6 +2281,10 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.PeriodId }); // gate scans (063)
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Status }); // dashboard buckets (062)
+            // P1 review 7 (finance.md status+token rule): the pending→terminal flip is a token —
+            // a stale Complete-vs-waive/NA write matches ZERO rows and DbUpdateConcurrencyException
+            // surfaces as 409 CLOSE_TASK_STATE_ERROR, never a silent overwrite of close evidence
+            e.Property(x => x.Status).IsConcurrencyToken();
         });
     }
 

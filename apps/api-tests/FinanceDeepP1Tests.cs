@@ -2,6 +2,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Erp.Api.Data;
+using Erp.Api.Data.Repositories;
+using Erp.Api.Dtos;
+using Erp.Api.Services;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
 
@@ -515,5 +518,44 @@ public class FinanceDeepP1Tests : IClassFixture<TestApiFactory>
             await db.FiscalPeriods.Where(p => p.Name.StartsWith("2034-")).ExecuteDeleteAsync();
             await db.FiscalCalendars.Where(c => c.Id == id).ExecuteDeleteAsync();
         }
+    }
+
+    // 062 (P1 review 7, finance.md status+token rule): a stale Complete-vs-waive race must lose
+    // loudly — status is an EF concurrency token, so the stale waive updates ZERO rows and
+    // surfaces as 409 CLOSE_TASK_STATE_ERROR instead of overwriting the completed evidence.
+    // Stale-snapshot form (JournalRaceHardening convention): scope A holds the tracked task,
+    // scope B commits via HTTP, scope A writes its stale Pending view.
+    [Fact]
+    public async Task Stale_Complete_Vs_Waive_Race_Loses_As_Concurrency_Conflict()
+    {
+        var periodId = await CreatePeriod(6, "p1race");
+        var tasks = await CreateChecklist(periodId, new[] { new { title = "Intercompany recon", mandatory = true } });
+        var taskId = tasks[0].GetProperty("id").GetString()!;
+
+        // scope A: hold the task in the identity map (stale Pending view)
+        var options = new DbContextOptionsBuilder<ErpDbContext>().UseNpgsql(_factory.ConnectionString).Options;
+        using var dbA = new ErpDbContext(options);
+        var ecA = new EntityContext();
+        var staleTask = dbA.CloseTasks.Single(t => t.Id == taskId);
+        Assert.Equal(Erp.Api.CloseTaskStatus.Pending, staleTask.Status);
+
+        // scope B: complete it with evidence over HTTP
+        var done = await PostAsync($"/api/v1/close-checklists/{periodId}/tasks/{taskId}/completions",
+            new { evidenceRef = "race-evidence.pdf" }, Fin);
+        Assert.Equal(HttpStatusCode.OK, done.StatusCode);
+
+        // scope A: waive the SAME task from its stale Pending view — token guard → 409
+        var numbers = new NumberSeries(dbA);
+        var closeA = new CloseService(dbA, ecA, numbers, new AuditRepository(dbA, numbers, ecA));
+        var (task, code, _) = closeA.Complete(
+            new Erp.Api.CurrentUser("U-001", "admin@teamzlab.dev", "Tenant Admin", "R-ADMIN", new[] { "*" }),
+            periodId, taskId, new CompleteCloseTaskRequest(null, "CFO authorized race waiver"));
+        Assert.Equal("CLOSE_TASK_STATE_ERROR", code);
+        Assert.Null(task);
+
+        // the evidence completion survived untouched — the stale waive overwrote nothing
+        var row = (await TasksFor(periodId)).Single(t => t.GetProperty("id").GetString() == taskId);
+        Assert.Equal("Completed", row.GetProperty("status").GetString());
+        Assert.Equal("race-evidence.pdf", row.GetProperty("evidenceRef").GetString());
     }
 }
