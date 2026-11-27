@@ -2664,5 +2664,18 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         // date keep resolving against the previous value (history lives in audit_events)
         mb.Entity<FinanceSetting>().HasData(
             new FinanceSetting("FS-functional-currency", t, le, "finance.functional_currency", "BDT", new DateOnly(2026, 1, 1)));
+
+        // deferred PROCUREMENT follow-up (click-through fu-2): the taxonomy a requisition
+        // submission consumes on a brand-new database — the EA unit the web requisition form
+        // defaults to (base, integer precision) and one active category. Explicit ids outside
+        // the doc_cat/doc_uom sequence spaces (CAT-0001/UOM-0001 style) so API-created rows
+        // can never collide with these.
+        mb.Entity<ProcurementCategory>().HasData(
+            new ProcurementCategory("CAT-SEED-001", t, le, null, "General Office Supplies", CategoryStatus.Active,
+                new DateOnly(2026, 1, 1), null, null, "system", new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+
+        mb.Entity<UnitOfMeasure>().HasData(
+            new UnitOfMeasure("UOM-SEED-EA", t, le, "EA", "Each", UomDimension.Count, 0, true, "system",
+                new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
     }
 }

@@ -7850,6 +7850,19 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.HasIndex("TenantId", "LegalEntityId", "Status");
 
                 b.ToTable("procurement_categories");
+
+                b.HasData(
+                    new
+                    {
+                        Id = "CAT-SEED-001",
+                        CreatedAt = new DateTimeOffset(new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                        CreatedBy = "system",
+                        EffectiveFrom = new DateOnly(2026, 1, 1),
+                        LegalEntityId = "LE-001",
+                        Name = "General Office Supplies",
+                        Status = 0,
+                        TenantId = "T-001"
+                    });
             });
 
         modelBuilder.Entity("Erp.Api.ProductionOrder", b =>
@@ -12310,6 +12323,21 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .IsUnique();
 
                 b.ToTable("unit_of_measures");
+
+                b.HasData(
+                    new
+                    {
+                        Id = "UOM-SEED-EA",
+                        Code = "EA",
+                        CreatedAt = new DateTimeOffset(new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                        CreatedBy = "system",
+                        Dimension = 0,
+                        IsBase = true,
+                        LegalEntityId = "LE-001",
+                        Name = "Each",
+                        Precision = 0,
+                        TenantId = "T-001"
+                    });
             });
 
         modelBuilder.Entity("Erp.Api.UomConversion", b =>

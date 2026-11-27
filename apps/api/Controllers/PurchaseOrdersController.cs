@@ -46,6 +46,14 @@ public sealed class PurchaseOrdersController(IPurchaseOrderService orders, IPurc
         return code is not null ? Envelope.Fail(code, error!, ErrorStatus.StatusFor(code)) : Envelope.Ok<object>(po!);
     }
 
+    // Rejection is its own decision: requires a reason, lands the PO in Rejected.
+    [HttpPost("{id}/rejections")]
+    public IResult Reject(string id, RejectPoRequest request)
+    {
+        var (po, code, error) = orders.Reject(CurrentUser.From(HttpContext), id, request.Reason);
+        return code is not null ? Envelope.Fail(code, error!, ErrorStatus.StatusFor(code)) : Envelope.Ok<object>(po!);
+    }
+
     // -------- deferred PROCUREMENT wave: change control (052) + supplier acks (053) --------
 
     [HttpGet("{id}/changes")]

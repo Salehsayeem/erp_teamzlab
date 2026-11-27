@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "next/navigation";
 import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
-import { fetchPurchaseOrders, submitPo, approvePo, postReceipt, type PurchaseOrder } from "@/lib/services/api";
+import { fetchPurchaseOrders, submitPo, approvePo, rejectPo, postReceipt, type PurchaseOrder } from "@/lib/services/api";
 import { fmtDate, fmtMoney } from "@/lib/format";
 import { useAuth } from "@/hooks/useAuth";
 import { Badge, Button, EmptyState, ErrorState, Input, LoadingSkeleton, statusTone } from "@/components/uikit";
@@ -166,13 +166,13 @@ export default function PurchaseOrdersPage() {
                           <div className="stack">
                             <Input id={`reject-${po.id}`} label={t.po.rejectionReason} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
                             <div className="row-actions" style={{ justifyContent: "flex-start" }}>
-                              {/* A null reason reads as APPROVE server-side — the confirm stays
-                                  disabled until a real reason exists, and we never send null. */}
+                              {/* Rejection is its own endpoint (POST /rejections) and requires a
+                                  reason — the confirm stays disabled until a real reason exists. */}
                               <Button
                                 small
                                 loading={busyId === po.id}
                                 disabled={busyId !== null || !rejectReason.trim()}
-                                onClick={() => void act(po.id, () => approvePo(token ?? "", po.id, rejectReason.trim())).then((ok) => { if (ok) setOpenAction(null); })}
+                                onClick={() => void act(po.id, () => rejectPo(token ?? "", po.id, rejectReason.trim())).then((ok) => { if (ok) setOpenAction(null); })}
                               >
                                 {t.po.confirmReject}
                               </Button>

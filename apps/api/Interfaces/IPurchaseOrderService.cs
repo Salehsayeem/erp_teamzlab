@@ -6,4 +6,5 @@ public interface IPurchaseOrderService
     (PurchaseOrder? order, string? code, string? message) Create(CurrentUser user, string supplierId, IReadOnlyList<PoLine> lines);
     (PurchaseOrder? order, string? code, string? message) Submit(CurrentUser user, string id);
     (PurchaseOrder? order, string? code, string? message) Approve(CurrentUser approver, string id, string? reason);
+    (PurchaseOrder? order, string? code, string? message) Reject(CurrentUser approver, string id, string? reason);
 }
