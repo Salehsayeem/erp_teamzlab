@@ -57,6 +57,15 @@ public class MfgDeferredWaveDQualityTests : IClassFixture<TestApiFactory>
         return doc.RootElement.Clone();
     }
 
+    private async Task<HttpResponseMessage> GetRawAsync(string path, string? token)
+    {
+        var client = _factory.CreateClient();
+        if (token is not null) client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
+        return await client.GetAsync(path);
+    }
+
+    private async Task<HttpStatusCode> GetStatusAsync(string path, string? token) => (await GetRawAsync(path, token)).StatusCode;
+
     private async Task<JsonElement> Body(HttpResponseMessage res)
     {
         var stream = await res.Content.ReadAsStreamAsync();
@@ -319,5 +328,54 @@ public class MfgDeferredWaveDQualityTests : IClassFixture<TestApiFactory>
         await PostAsync($"/api/v1/capa-cases/{capa}/verifications", new { criteriaResult = "clean 30 days", satisfied = true }, Qc);
         var close = await PostAsync($"/api/v1/capa-cases/{capa}/closures", new { }, Qc2);
         Assert.True(close.IsSuccessStatusCode, await close.Content.ReadAsStringAsync());
+    }
+
+    // ---- read-gap: inspections had no index (create + per-id results only) ----
+
+    [Fact]
+    public async Task Inspections_Index_Lists_Created_Inspections()
+    {
+        var item = Tag("FG");
+        var planId = await SeedApprovedPlan(item, [("DIM", true, 9.9m, 10.1m)]);
+        var created = await PostAsync("/api/v1/inspections", new
+        {
+            qualityPlanId = planId, orderId = "MF8-IDX", itemSku = item, lotSerial = (string?)null, populationQty = 3m,
+        }, Qc);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var inspectionId = (await Body(created)).GetProperty("id").GetString()!;
+
+        // R-PROC holds no mfg:read → no read
+        Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync("/api/v1/inspections", "U-002"));
+
+        var list = await GetAsync("/api/v1/inspections", Qc);
+        Assert.Contains(list.GetProperty("data").EnumerateArray(),
+            i => i.GetProperty("id").GetString() == inspectionId);
+    }
+
+    // ---- read-gap: CAPA actions were write-only (add/verify/complete) with no read-back ----
+
+    [Fact]
+    public async Task Capa_Actions_List_Per_Case_And_404_For_Missing_Case()
+    {
+        var capa = (await Body(await PostAsync("/api/v1/capa-cases", new
+        {
+            title = "Read-back probe", nonconformanceId = (string?)null,
+            effectivenessCriteria = "no recurrence",
+        }, Qc))).GetProperty("id").GetString()!;
+        var action = (await Body(await PostAsync($"/api/v1/capa-cases/{capa}/actions", new
+        {
+            description = "recalibrate station", dueBy = (DateTimeOffset?)null,
+        }, Qc))).GetProperty("id").GetString()!;
+
+        Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync($"/api/v1/capa-cases/{capa}/actions", "U-002"));
+
+        var list = await GetAsync($"/api/v1/capa-cases/{capa}/actions", Qc);
+        Assert.Contains(list.GetProperty("data").EnumerateArray(),
+            a => a.GetProperty("id").GetString() == action);
+
+        // 404 family envelope for a missing case
+        var miss = await GetRawAsync("/api/v1/capa-cases/NOPE-MISSING/actions", Qc);
+        Assert.Equal(HttpStatusCode.NotFound, miss.StatusCode);
+        Assert.Equal("CAPA_NOT_FOUND", ErrCode(miss));
     }
 }

@@ -90,6 +90,15 @@ public sealed class InspectionsController(IQualityService quality) : ControllerB
             : (Envelope.OkBody(data!), 201);
     });
 
+    // read-gap: inspections were create + per-id results only — no index existed
+    [HttpGet]
+    public IResult Index()
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("mfg:read")) return Envelope.Fail("FORBIDDEN", "mfg:read permission required.", 403);
+        return Envelope.Ok<object>(quality.Inspections());
+    }
+
     [HttpGet("{id}/results")]
     public IResult Results(string id)
     {
@@ -254,6 +263,16 @@ public sealed class CapaCasesController(IQualityService quality) : ControllerBas
             ? (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code))
             : (Envelope.OkBody(data!), 201);
     });
+
+    // read-gap: CAPA actions were write-only (add/verify/complete) with no read-back
+    [HttpGet("{id}/actions")]
+    public IResult Actions(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("mfg:read")) return Envelope.Fail("FORBIDDEN", "mfg:read permission required.", 403);
+        var (data, code, message) = quality.CapaActions(id);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
 
     [HttpPost("{id}/actions")]
     public IResult AddAction(string id, AddCapaActionRequest request) => Idem.Wrap(HttpContext, request, () =>

@@ -53,6 +53,8 @@ public interface IMfgDeferredRepository
 
     // MF4
     void AddMrpRun(MrpRun run);
+    List<MrpRun> MrpRuns();
+    List<MrpLine> MrpLines(string? runId);
     void SetMrpRunSnapshot(MrpRun run, string snapshotJson);
     MrpRun? FindMrpRun(string runId);
     void SetMrpRunStatus(MrpRun run, MrpRunStatus status, string? failureDetail);
@@ -114,6 +116,7 @@ public interface IMfgDeferredRepository
     void AddSamplingPlan(SamplingPlan plan);
     SamplingPlan? SamplingFor(string qualityPlanId);
     void AddInspection(Inspection inspection);
+    List<Inspection> Inspections();
     Inspection? FindInspection(string inspectionId);
     bool SetInspectionFinalized(Inspection inspection, string finalizedBy, DateTimeOffset at);
     void AddInspectionResult(InspectionResult result);
