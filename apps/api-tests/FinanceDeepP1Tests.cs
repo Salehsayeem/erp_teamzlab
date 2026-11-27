@@ -119,8 +119,14 @@ public class FinanceDeepP1Tests : IClassFixture<TestApiFactory>
     {
         await EnsureCoverage(2030); // gapless 2029..2030 chain in every test order
 
-        // a draft starting inside covered FY2030 is refused at activation, naming the conflict
-        var overlapDraft = await CreateCalendar("FY2030 shifted", 2030, "CalendarMonths", "2030-06-01");
+        // a mid-year draft is refused AT CREATE naming the Jan-1 rule (P1 review 4) — inverted
+        // rows can never be stored, so the overlap probe uses a same-year different-pattern
+        // calendar instead (allowed at create, refused at activation)
+        var shifted = await PostAsync("/api/v1/fiscal-calendars",
+            new { name = "FY2030 months shifted", year = 2030, pattern = "CalendarMonths", startDate = "2030-06-01" }, Fin);
+        Assert.Equal(HttpStatusCode.BadRequest, shifted.StatusCode);
+        Assert.Equal("VALIDATION_ERROR", (await Json(shifted)).GetProperty("error").GetProperty("code").GetString());
+        var overlapDraft = await CreateCalendar("FY2030 months", 2030, "CalendarMonths", "2030-01-01");
         var overlap = await Activate(overlapDraft);
         Assert.Equal(HttpStatusCode.BadRequest, overlap.StatusCode);
         Assert.Equal("CALENDAR_OVERLAP", (await Json(overlap)).GetProperty("error").GetProperty("code").GetString());
@@ -148,7 +154,8 @@ public class FinanceDeepP1Tests : IClassFixture<TestApiFactory>
 
     // 004 AC1 — a 4-4-5 calendar maps boundary accounting dates to the configured year/period/
     // adjustment period: 12 periods walk 4-4-5 weeks from the start, the ADJ period carries the
-    // 53rd-week edge and is flagged on the materialized period rows.
+    // year remainder (52-week engine — see UnnameableLayout) and is flagged on the materialized
+    // period rows.
     [Fact]
     public async Task Four_Five_Calendar_Maps_Boundary_Dates_To_Periods_And_Flags_Adjustment()
     {
@@ -159,8 +166,8 @@ public class FinanceDeepP1Tests : IClassFixture<TestApiFactory>
         Assert.Equal(13, periods.Count); // 12 accounting periods + ADJ
 
         // quarter boundary: P03 is the 5-week period — it ends on start + 90 days (day 91),
-        // and P04 starts the very next day; 12 periods of 4-4-5 cover 364 days, so ADJ (with
-        // the 53rd-week edge / year remainder) starts on day 365
+        // and P04 starts the very next day; 12 periods of 4-4-5 cover 364 days, so ADJ (the
+        // year remainder, 1-2 days on a Gregorian year) starts on day 365
         var p1 = periods[0]; var p3 = periods[2]; var p4 = periods[3]; var adj = periods[12];
         Assert.Equal(new DateOnly(2029, 1, 1), DateOnly.Parse(p1.GetProperty("startDate").GetString()!));
         var p3End = DateOnly.Parse(p3.GetProperty("endDate").GetString()!);
@@ -457,5 +464,20 @@ public class FinanceDeepP1Tests : IClassFixture<TestApiFactory>
             await db.FiscalPeriods.Where(p => p.Name.StartsWith("2045-")).ExecuteDeleteAsync();
             await db.FiscalCalendars.Where(c => c.Id == calId).ExecuteDeleteAsync();
         }
+    }
+
+    // 004 (P1 review 4): a mid-year StartDate walks its period layout past Dec 31 and would
+    // materialize INVERTED rows (StartDate > EndDate) that show up in the gate dropdown. The
+    // create refuses naming the requirement — StartDate must be January 1 of Year; the same
+    // rule is re-checked at activation on stored rows. FY2036 touches no other suite.
+    [Fact]
+    public async Task Mid_Year_StartDate_Is_Refused_At_Create_Naming_The_Jan_1_Rule()
+    {
+        var res = await PostAsync("/api/v1/fiscal-calendars",
+            new { name = "FY2036 shifted", year = 2036, pattern = "FourFourFive", startDate = "2036-06-01" }, Fin);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var body = await Json(res);
+        Assert.Equal("VALIDATION_ERROR", body.GetProperty("error").GetProperty("code").GetString());
+        Assert.Contains("January 1", body.GetProperty("error").GetProperty("message").GetString());
     }
 }

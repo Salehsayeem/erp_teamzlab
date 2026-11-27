@@ -30,11 +30,12 @@ public sealed class FiscalCalendarService(ErpDbContext db, EntityContext ec, INu
             return (null, "VALIDATION_ERROR", "Year must be between 2000 and 2200.");
         if (!Enum.TryParse<CalendarPattern>(request.Pattern, ignoreCase: true, out var pattern))
             return (null, "VALIDATION_ERROR", $"Pattern '{request.Pattern}' is not a calendar pattern (CalendarMonths, FourFourFive).");
-        if (request.StartDate.Year != request.Year)
-            return (null, "VALIDATION_ERROR", "StartDate must fall inside the calendar's Year.");
+        // P1 review 4 — a mid-year StartDate walks the period layout past Dec 31 and materializes
+        // INVERTED rows (StartDate > EndDate); only January 1 of Year lays out cleanly
+        if (request.StartDate != new DateOnly(request.Year, 1, 1))
+            return (null, "VALIDATION_ERROR",
+                $"StartDate must be January 1 of {request.Year}; a mid-year start would materialize inverted period rows.");
         var endDate = new DateOnly(request.Year, 12, 31);
-        if (endDate <= request.StartDate)
-            return (null, "VALIDATION_ERROR", "The calendar year must end after its StartDate.");
         if (Calendars.Any(c => c.Year == request.Year && c.Pattern == pattern))
             return (null, "CALENDAR_EXISTS",
                 $"A {pattern} calendar for {request.Year} already exists for this legal entity.");
@@ -64,6 +65,11 @@ public sealed class FiscalCalendarService(ErpDbContext db, EntityContext ec, INu
         // BEFORE the coverage checks so the message names the row's layout defect, not a downstream gap
         if (UnnameableLayout(calendar.Pattern, BuildPeriods(calendar.Pattern, calendar.StartDate, calendar.EndDate)))
             return (null, "CALENDAR_VALIDATION", LayoutError(calendar.Year, calendar.StartDate, calendar.EndDate));
+        // P1 review 4 — the Jan-1 rule re-checked on stored rows (rows created before the rule,
+        // or via any future write path, cannot activate a mid-year layout either)
+        if (calendar.StartDate != new DateOnly(calendar.Year, 1, 1))
+            return (null, "VALIDATION_ERROR",
+                $"Calendar {calendar.Name} starts mid-year ({calendar.StartDate:yyyy-MM-dd}); StartDate must be January 1 of {calendar.Year} — its period layout would materialize inverted rows.");
 
         var coverage = Calendars.Where(c => c.Activated && c.Id != calendar.Id).OrderBy(c => c.StartDate).ToList();
         // 004 AC2 — overlap: any intersecting coverage is ambiguous bookkeeping
