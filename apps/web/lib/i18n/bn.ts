@@ -949,6 +949,11 @@ export const bn: Dict = {
       releases: "রিলিজের ইতিহাস",
       poRef: "ক্রয়াদেশ রেফ",
       detailLoadFailed: "ব্ল্যাঙ্কেট অর্ডার লোড করা যায়নি।",
+      back: "ব্ল্যাঙ্কেট অর্ডারে ফিরে যান",
+      releasesEmpty: "এখনো কোনো রিলিজ নেই - সিলিং অব্যাহত আছে।",
+      createdBy: "তৈরি করেছেন",
+      releasedBy: "রিলিজ করেছেন",
+      releasedAt: "রিলিজের সময়",
     },
     receipts: {
       title: "রিসিপ্ট",

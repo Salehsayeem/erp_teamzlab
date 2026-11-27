@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment } from "react";
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
@@ -110,9 +111,11 @@ export default function BlanketOrdersPage() {
               </thead>
               <tbody>
                 {list.map((b) => (
-                  <Fragment>
-                    <tr key={b.id}>
-                      <td className="mono">{b.id}</td>
+                  <Fragment key={b.id}>
+                    <tr>
+                      <td className="mono">
+                        <Link href={`/${locale}/procurement/blanket-orders/${encodeURIComponent(b.id)}`}>{b.id}</Link>
+                      </td>
                       <td>{b.supplierId}</td>
                       <td className="mono">{fmtMoney(b.ceilingAmount, locale, b.currency)}</td>
                       <td className="mono">{fmtMoney(b.releasedAmount, locale, b.currency)}</td>
