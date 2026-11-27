@@ -10,6 +10,8 @@ public interface IPurchaseOrderChangeService
     (PurchaseOrderChange? Change, string? Code, string? Message) Decide(CurrentUser actor, string poId, string changeId, bool approve);
     object Changes(string poId);
     (PurchaseOrderAcknowledgement? Ack, string? Code, string? Message) Acknowledge(CurrentUser u, string poId, string? supplierId, int orderVersion, IReadOnlyList<PoAckLineInput>? lines);
+    // click-through fu-5: acks were write-only — read-back for the PO screen (all written fields)
+    (object? Data, string? Code, string? Message) Acks(string poId);
     bool HasPendingChange(string poId);
     object? PoDetail(string poId);
 }

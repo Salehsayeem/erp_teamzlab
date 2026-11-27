@@ -482,4 +482,64 @@ public class ApiReadTests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
         Assert.Equal("INVOICE_NOT_FOUND", ErrorCode(await Json(res)));
     }
+
+    // ==================== 7. GET /api/v1/purchase-orders/{id}/acknowledgements ====================
+    // Click-through fu-5: supplier acks were write-only — the read-back is part of the same family.
+
+    private async Task<(string PoId, string SupplierId)> SeedPoWithAck(string tag)
+    {
+        var supplierId = await SeedSupplier($"{tag}-SUP");
+        var poId = (await PostForData("/api/v1/purchase-orders", new
+        {
+            supplierId,
+            lines = new[] { new { itemSku = $"SKU-{tag}", description = $"Item {tag}", qty = 10m, unitPrice = 5m } },
+        }, Proc)).GetProperty("id").GetString()!;
+        await PostForData($"/api/v1/purchase-orders/{poId}/acknowledgements", new
+        {
+            supplierId,
+            orderVersion = 1,
+            lines = new[] { new { itemSku = $"SKU-{tag}", status = "Accepted" } },
+        }, Proc);
+        return (poId, supplierId);
+    }
+
+    [Fact]
+    public async Task Po_Acks_Read_Back_All_Written_Fields()
+    {
+        var (poId, supplierId) = await SeedPoWithAck("R9");
+
+        var acks = (await GetAsync($"/api/v1/purchase-orders/{poId}/acknowledgements", Proc)).GetProperty("data");
+        Assert.Equal(1, acks.GetArrayLength());
+        var ack = acks[0];
+        Assert.Equal(poId, ack.GetProperty("poId").GetString());
+        Assert.Equal(1, ack.GetProperty("orderVersion").GetInt32());
+        Assert.Equal("Current", ack.GetProperty("status").GetString());
+        Assert.False(ack.GetProperty("late").GetBoolean());
+        Assert.Equal(supplierId, ack.GetProperty("supplierId").GetString());
+        Assert.Equal(Proc, ack.GetProperty("receivedBy").GetString());
+        Assert.NotNull(ack.GetProperty("receivedAt").GetString());
+        Assert.False(ack.GetProperty("hasDiscrepancy").GetBoolean());
+        Assert.Equal(1, ack.GetProperty("lines").GetArrayLength());
+        Assert.Equal($"SKU-R9", ack.GetProperty("lines")[0].GetProperty("itemSku").GetString());
+        Assert.Equal("Accepted", ack.GetProperty("lines")[0].GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task Po_Acks_Unknown_Order_Is_404()
+    {
+        var res = await GetRawAsync("/api/v1/purchase-orders/PO-9999/acknowledgements", Proc);
+        Assert.Equal(HttpStatusCode.NotFound, res.StatusCode);
+        Assert.Equal("PO_NOT_FOUND", ErrorCode(await Json(res)));
+    }
+
+    [Fact]
+    public async Task Po_Acks_Ungated_User_Is_403()
+    {
+        var (poId, _) = await SeedPoWithAck("R10");
+
+        // sales carries neither po:read nor po:write
+        var res = await GetRawAsync($"/api/v1/purchase-orders/{poId}/acknowledgements", Sales);
+        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+        Assert.Equal("FORBIDDEN", ErrorCode(await Json(res)));
+    }
 }

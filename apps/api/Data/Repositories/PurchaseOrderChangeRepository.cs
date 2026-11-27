@@ -27,6 +27,10 @@ public sealed class PurchaseOrderChangeRepository(ErpDbContext db, EntityContext
         db.PurchaseOrderAcknowledgements.FirstOrDefault(a => a.TenantId == ec.TenantId && a.LegalEntityId == ec.EntityId
             && a.PoId == poId && a.SupplierId == supplierId && a.OrderVersion == orderVersion);
 
+    public List<PurchaseOrderAcknowledgement> AcksFor(string poId) =>
+        db.PurchaseOrderAcknowledgements.Where(a => a.TenantId == ec.TenantId && a.LegalEntityId == ec.EntityId
+            && a.PoId == poId).OrderBy(a => a.OrderVersion).ToList();
+
     public void AddAck(PurchaseOrderAcknowledgement ack) => db.PurchaseOrderAcknowledgements.Add(ack);
 
     public bool HasPendingChange(string poId) =>
