@@ -3810,6 +3810,8 @@ export const en = {
     CLOSE_TASK_REASON_REQUIRED: "Marking a task N/A requires a reason.",
     CLOSE_TASK_NOT_FOUND: "The close task was not found.",
     CLOSE_TASK_STATE_ERROR: "The close task is already terminal and cannot change.",
+    CALENDAR_VALIDATION: "That fiscal year cannot be laid out as 4-4-5 periods plus an adjustment remainder.",
+    CALENDAR_PERIOD_CONFLICT: "A fiscal period with that id already exists for another legal entity.",
   },
   // FINANCE-deep P5 admin screens — disjoint subnamespaces; later finance phases add their own
   fin: {

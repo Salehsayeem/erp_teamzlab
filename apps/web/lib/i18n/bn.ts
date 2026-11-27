@@ -3814,6 +3814,8 @@ export const bn: Dict = {
     CLOSE_TASK_REASON_REQUIRED: "টাস্ক প্রযোজ্য নয় চিহ্নিত করতে কারণ দিতে হবে।",
     CLOSE_TASK_NOT_FOUND: "ক্লোজ টাস্ক পাওয়া যায়নি।",
     CLOSE_TASK_STATE_ERROR: "ক্লোজ টাস্কটি ইতিমধ্যে চূড়ান্ত — আর বদলানো যাবে না।",
+    CALENDAR_VALIDATION: "এই অর্থবছরটি ৪-৪-৫ পিরিয়ড ও অ্যাডজাস্টমেন্ট অবশিষ্ট হিসেবে সাজানো যাচ্ছে না।",
+    CALENDAR_PERIOD_CONFLICT: "এই আইডির একটি আর্থিক পিরিয়ড অন্য লিগাল এন্টিটির অধীনে আগেই আছে।",
   },
   // FINANCE-deep P5 admin screens — disjoint subnamespaces; later finance phases add their own
   fin: {

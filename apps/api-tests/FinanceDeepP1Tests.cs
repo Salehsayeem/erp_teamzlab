@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Erp.Api.Data;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 // FINANCE-deep P1 (ERP-FINANCE-004/005/062/063): entity fiscal calendars (4-4-5 + ADJUSTMENT
@@ -408,5 +410,52 @@ public class FinanceDeepP1Tests : IClassFixture<TestApiFactory>
             .FirstOrDefault(p => p.GetProperty("id").GetString() == "FP-P1-DEMO");
         Assert.False(demo.ValueKind == JsonValueKind.Undefined, "seeded demo period FP-P1-DEMO missing");
         Assert.Equal("Open", demo.GetProperty("status").GetString());
+    }
+
+    // 004 edge (P1 review 3): the engine is 52-WEEK 4-4-5 ONLY — a stored calendar whose year
+    // cannot be laid out as 12 × 4-4-5 periods plus a ≤1-week adjustment remainder must refuse
+    // activation loudly (CALENDAR_VALIDATION naming the year), never materialize inverted rows.
+    // The degenerate draft is planted straight into the store (JournalRaceHardening raw-context
+    // convention): the API create path refuses mid-year starts, so only stored data reaches this
+    // guard. FY2045 touches no other suite's coverage or probes; the finally-block removes the
+    // calendar (its owned rows cascade) and any materialized 2045 periods.
+    [Fact]
+    public async Task Unnameable_Calendar_Layout_Is_Refused_At_Activation_With_Calendar_Validation()
+    {
+        const string calId = "FCAL-P1GUARD";
+        var options = new DbContextOptionsBuilder<ErpDbContext>().UseNpgsql(_factory.ConnectionString).Options;
+        using (var db = new ErpDbContext(options))
+        {
+            var degenerate = new Erp.Api.FiscalCalendar(calId, "T-001", "LE-001", "FY2045 shifted (guard probe)",
+                2045, Erp.Api.CalendarPattern.FourFourFive, new DateOnly(2045, 6, 1), new DateOnly(2045, 12, 31), Activated: false);
+            var cursor = new DateOnly(2045, 6, 1);
+            int[] weeks = [4, 4, 5];
+            for (var q = 0; q < 4; q++)
+                for (var i = 0; i < 3; i++)
+                {
+                    var periodEnd = cursor.AddDays(weeks[i] * 7 - 1);
+                    degenerate.Periods.Add(new Erp.Api.CalendarPeriod($"2045-P{degenerate.Periods.Count + 1:00}",
+                        cursor, periodEnd, IsAdjustment: false));
+                    cursor = periodEnd.AddDays(1);
+                }
+            // the 364-day walk overruns the year — the ADJ row is INVERTED (start > end)
+            degenerate.Periods.Add(new Erp.Api.CalendarPeriod("2045-ADJ", cursor, new DateOnly(2045, 12, 31), IsAdjustment: true));
+            db.FiscalCalendars.Add(degenerate);
+            db.SaveChanges();
+        }
+        try
+        {
+            var res = await Activate(calId);
+            Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+            var body = await Json(res);
+            Assert.Equal("CALENDAR_VALIDATION", body.GetProperty("error").GetProperty("code").GetString());
+            Assert.Contains("2045", body.GetProperty("error").GetProperty("message").GetString());
+        }
+        finally
+        {
+            using var db = new ErpDbContext(options);
+            await db.FiscalPeriods.Where(p => p.Name.StartsWith("2045-")).ExecuteDeleteAsync();
+            await db.FiscalCalendars.Where(c => c.Id == calId).ExecuteDeleteAsync();
+        }
     }
 }

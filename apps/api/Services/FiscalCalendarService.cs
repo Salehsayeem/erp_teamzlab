@@ -6,10 +6,12 @@ using Microsoft.EntityFrameworkCore;
 namespace Erp.Api.Services;
 
 // 004 — entity fiscal calendars. A calendar year drafts its period layout (4-4-5 walking weeks
-// + an ADJUSTMENT period carrying the 53rd-week edge, or plain months); ACTIVATION validates the
-// coverage chain (004 AC2: overlap → CALENDAR_OVERLAP, hole → CALENDAR_GAP — posting into a hole
-// would otherwise die later on PERIOD_NOT_CONFIGURED) and materializes FiscalPeriod rows so the
-// FinanceGuards lock and the period status board see the calendar immediately.
+// + an ADJUSTMENT period carrying the year remainder, or plain months); the engine is 52-WEEK
+// 4-4-5 ONLY — a 53-week configuration cannot be named and is refused (CALENDAR_VALIDATION,
+// spec 004 edge). ACTIVATION validates the layout and the coverage chain (004 AC2: overlap →
+// CALENDAR_OVERLAP, hole → CALENDAR_GAP — posting into a hole would otherwise die later on
+// PERIOD_NOT_CONFIGURED) and materializes FiscalPeriod rows so the FinanceGuards lock and the
+// period status board see the calendar immediately.
 public sealed class FiscalCalendarService(ErpDbContext db, EntityContext ec, INumberSeries numbers, IAuditRepository audit) : IFiscalCalendarService
 {
     private IQueryable<FiscalCalendar> Calendars => db.FiscalCalendars
@@ -37,10 +39,13 @@ public sealed class FiscalCalendarService(ErpDbContext db, EntityContext ec, INu
             return (null, "CALENDAR_EXISTS",
                 $"A {pattern} calendar for {request.Year} already exists for this legal entity.");
 
+        var periods = BuildPeriods(pattern, request.StartDate, endDate);
+        if (UnnameableLayout(pattern, periods))
+            return (null, "CALENDAR_VALIDATION", LayoutError(request.Year, request.StartDate, endDate));
         var calendar = new FiscalCalendar(numbers.Next("FCAL"), ec.TenantId, ec.EntityId, name,
             request.Year, pattern, request.StartDate, endDate, Activated: false)
         {
-            Periods = BuildPeriods(pattern, request.StartDate, endDate),
+            Periods = periods,
         };
         db.FiscalCalendars.Add(calendar);
         audit.Log(user, "create", "fiscal_calendar", calendar.Id,
@@ -54,6 +59,11 @@ public sealed class FiscalCalendarService(ErpDbContext db, EntityContext ec, INu
         var calendar = Calendars.FirstOrDefault(c => c.Id == calendarId);
         if (calendar is null) return (null, "CALENDAR_NOT_FOUND", "Fiscal calendar not found.");
         if (calendar.Activated) return (null, "CALENDAR_ALREADY_ACTIVATED", $"Calendar {calendar.Name} is already activated.");
+
+        // P1 review 3 — stored rows are re-validated before materialization: the layout guard runs
+        // BEFORE the coverage checks so the message names the row's layout defect, not a downstream gap
+        if (UnnameableLayout(calendar.Pattern, BuildPeriods(calendar.Pattern, calendar.StartDate, calendar.EndDate)))
+            return (null, "CALENDAR_VALIDATION", LayoutError(calendar.Year, calendar.StartDate, calendar.EndDate));
 
         var coverage = Calendars.Where(c => c.Activated && c.Id != calendar.Id).OrderBy(c => c.StartDate).ToList();
         // 004 AC2 — overlap: any intersecting coverage is ambiguous bookkeeping
@@ -91,8 +101,10 @@ public sealed class FiscalCalendarService(ErpDbContext db, EntityContext ec, INu
         return (activated, null, null);
     }
 
-    // 4-4-5: quarters of 4-4-5 weeks — 12 periods cover 336 days, everything up to year end is
-    // the ADJUSTMENT period (a 53-week year pushes its extra week there, never into a named month)
+    // 4-4-5: quarters of 4-4-5 weeks — 12 periods cover 364 days; the year remainder (1-2 days
+    // on a Gregorian year) is the ADJUSTMENT period. The engine is 52-week 4-4-5 only: a
+    // 53-week configuration cannot be laid out as 12 periods + a ≤1-week remainder and is
+    // refused by UnnameableLayout (spec 004 edge, deferred by ruling).
     private static List<CalendarPeriod> BuildPeriods(CalendarPattern pattern, DateOnly start, DateOnly end)
     {
         var periods = new List<CalendarPeriod>();
@@ -123,4 +135,18 @@ public sealed class FiscalCalendarService(ErpDbContext db, EntityContext ec, INu
         }
         return periods;
     }
+
+    // P1 review 3 — loud layout validation: any inverted row (the period walk overrunning the
+    // year end) or a >1-week adjustment remainder (a 53-week year the engine cannot name) is a
+    // CALENDAR_VALIDATION refusal, never silently materialized.
+    private static bool UnnameableLayout(CalendarPattern pattern, List<CalendarPeriod> periods)
+    {
+        if (periods.Any(p => p.StartDate > p.EndDate)) return true;
+        if (pattern != CalendarPattern.FourFourFive) return false;
+        var adj = periods.LastOrDefault(p => p.IsAdjustment);
+        return adj is not null && adj.EndDate.DayNumber - adj.StartDate.DayNumber + 1 > 7;
+    }
+
+    private static string LayoutError(int year, DateOnly start, DateOnly end) =>
+        $"Fiscal year {year} cannot be laid out as 12 × 4-4-5 periods plus an adjustment remainder of a week or less ({start:yyyy-MM-dd}..{end:yyyy-MM-dd}); the engine is 52-week 4-4-5 only — 53-week configurations are not supported.";
 }
