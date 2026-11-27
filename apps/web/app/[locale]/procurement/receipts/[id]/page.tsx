@@ -142,7 +142,7 @@ export default function ReceiptDetailPage() {
                 {i.defectCode ? ` · ${i.defectCode}` : ""} · {i.dispositionedBy ?? t.procurement.receipts.sodNote}
                 {i.status === "Pending" ? (
                   <span className="row-actions" style={{ justifyContent: "flex-start" }}>
-                    <Button small onClick={() => { setDispFor({ id: i.id }); setDStatus("Partial"); setDAcc(""); setDRej(""); }}>
+                    <Button small onClick={() => { setDispFor({ id: i.id }); setDStatus("Partial"); setDAcc(""); setDRej(""); setErr(null); }}>
                       {t.procurement.receipts.dispose}
                     </Button>
                   </span>
@@ -204,6 +204,8 @@ export default function ReceiptDetailPage() {
       <Modal open={dispFor !== null} onClose={() => setDispFor(null)} title={t.procurement.receipts.dispose} closeLabel={t.common.cancel}>
         <form onSubmit={(e) => void onDispose(e)} className="stack">
           <p className="t-caption">{t.procurement.receipts.sodNote}</p>
+          {/* the page-level banner sits behind the scrim — failures must render in-view (house modal pattern) */}
+          {dispFor !== null && err ? <p className="banner" role="alert">{err}</p> : null}
           <div className="form-grid">
             <div className="field">
               <label htmlFor="d-status">{t.procurement.receipts.dispositionStatus}</label>
@@ -211,8 +213,12 @@ export default function ReceiptDetailPage() {
                 {["Partial", "Accepted", "Rejected"].map((s) => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-            <Input id="d-acc" label={t.procurement.receipts.qtyAccept} type="number" min="0" step="any" value={dAcc} onChange={(e) => setDAcc(e.target.value)} required />
-            <Input id="d-rej" label={t.procurement.receipts.qtyReject} type="number" min="0" step="any" value={dRej} onChange={(e) => setDRej(e.target.value)} required />
+            {/* No native `required` here: these are the only modal inputs in the app
+                using it, and an empty qty means 0 (onDispose reads Number("")). A
+                required-but-empty d-rej made constraint validation swallow the submit
+                with no request and no app-level message (clickthrough FINDING-5). */}
+            <Input id="d-acc" label={t.procurement.receipts.qtyAccept} type="number" min="0" step="any" value={dAcc} onChange={(e) => setDAcc(e.target.value)} />
+            <Input id="d-rej" label={t.procurement.receipts.qtyReject} type="number" min="0" step="any" value={dRej} onChange={(e) => setDRej(e.target.value)} />
             <Input id="d-defect" label={t.procurement.receipts.defectCode} value={dDefect} onChange={(e) => setDDefect(e.target.value)} />
             <Input id="d-evi" label={t.procurement.receipts.evidence} value={dEvidence} onChange={(e) => setDEvidence(e.target.value)} />
           </div>
