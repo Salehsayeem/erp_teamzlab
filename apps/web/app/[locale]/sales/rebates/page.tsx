@@ -153,7 +153,11 @@ export default function RebatesPage() {
     const res = approve ? await approveAccrual(token, agreementId, period) : await calculateAccrual(token, agreementId, period);
     setBusyId(null);
     if (!res.ok) {
-      setAccrualError(salesActionError(t, res.code, res.message));
+      const error = salesActionError(t, res.code, res.message);
+      setAccrualError(error);
+      // the page banner sits above the agreements table — a row-action failure
+      // must also reach the fixed toast region to be visible at the row (clickthrough F9)
+      pushToast("error", error);
       return;
     }
     pushToast("success", approve ? tc.accrualApproved : tc.accrualCalculated);

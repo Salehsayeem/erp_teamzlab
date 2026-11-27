@@ -794,6 +794,9 @@ function DeliveryBlock({ invoice, locale }: { invoice: Invoice; locale: Locale }
   if (meFailed) return <SalesMeError t={t} onRetry={retryMe} />;
   return (
     <section className="card" style={{ marginTop: 12 }}>
+      {/* DeliveryBlock owns its toasts state — without this region the e-invoice
+          409 (and every other pushToast here) renders nowhere (clickthrough F9). */}
+      <ToastRegion toasts={toasts} onDismiss={dismissToast} closeLabel={t.common.cancel} />
       <h3 className="t-body-strong">{tc.title}</h3>
       <div className="row-actions" style={{ justifyContent: "flex-start" }}>
         <Button small disabled={!meReady || writeGate === false || busy} loading={busy} onClick={() => void submitEinvoiceNow()}>

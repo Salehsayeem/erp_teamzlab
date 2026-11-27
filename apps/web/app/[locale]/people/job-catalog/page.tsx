@@ -59,7 +59,14 @@ export default function JobCatalogPage() {
       effectiveFrom: profile.effectiveFrom,
     });
     setBusy(false);
-    if (!res.ok) { setFormError(peopleActionError(t, res.code, res.message)); return; }
+    if (!res.ok) {
+      const error = peopleActionError(t, res.code, res.message);
+      setFormError(error);
+      // the form-error banner sits above the catalog tables — surface the same
+      // envelope error as a fixed toast so a row-level 400 is never silent (clickthrough F9)
+      push("error", error);
+      return;
+    }
     push("success", res.data.code);
     void load();
   }
