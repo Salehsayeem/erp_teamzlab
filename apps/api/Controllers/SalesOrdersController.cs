@@ -51,6 +51,14 @@ public sealed class SalesOrdersController(ISalesOrderService orders) : Controlle
         return code is not null ? Envelope.Fail(code, error!, ErrorStatus.StatusFor(code)) : Envelope.Ok<object>(so!);
     }
 
+    // Rejection is its own decision: requires a reason, lands the SO in Rejected.
+    [HttpPost("{id}/rejections")]
+    public IResult Reject(string id, RejectSoRequest request)
+    {
+        var (so, code, error) = orders.Reject(CurrentUser.From(HttpContext), id, request.Reason);
+        return code is not null ? Envelope.Fail(code, error!, ErrorStatus.StatusFor(code)) : Envelope.Ok<object>(so!);
+    }
+
     [HttpPost("{id}/shipments")]
     public IResult Ship(string id, ShipRequest request)
     {

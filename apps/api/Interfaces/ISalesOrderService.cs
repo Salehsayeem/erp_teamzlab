@@ -9,6 +9,7 @@ public interface ISalesOrderService
     // ride back as `data` and the controller wraps them in FailBodyItems (013 AC2)
     (object? data, string? code, string? message) Submit(CurrentUser user, string id);
     (SalesOrder? order, string? code, string? message) Approve(CurrentUser approver, string id, string? reason);
+    (SalesOrder? order, string? code, string? message) Reject(CurrentUser approver, string id, string? reason);
     (Shipment? shipment, Journal? journal, string? code, string? message) Ship(CurrentUser user, string id, string itemSku, decimal qty, DateOnly? expectedDate = null);
     // R-T7f: the journal-only Invoice shortcut was RETIRED — invoice documents live in IInvoiceService.
     // R-T7i: approval is gated on so:approve; over-limit approvals land CreditHold (057 AC2).

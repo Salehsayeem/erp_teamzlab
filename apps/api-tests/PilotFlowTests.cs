@@ -97,6 +97,68 @@ public class PilotFlowTests : IClassFixture<TestApiFactory>
         Assert.Equal("DECISION_REASON_REQUIRED", body.GetProperty("error").GetProperty("code").GetString());
     }
 
+    private async Task<string> CreatePendingSoAsync(string maker)
+    {
+        var res = await PostAsync("/api/v1/customers", new { name = "Note Co", taxId = "TRX-SO-NOTE-1", email = "ap@note.test" }, maker);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var customerId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+
+        res = await PostAsync("/api/v1/sales-orders", new
+        {
+            customerId,
+            lines = new[] { new { itemSku = "NOTE-SKU", description = "Note probe", qty = 1m, unitPrice = 5m } },
+        }, maker);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var soId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/sales-orders/{soId}/submit", new { }, maker)).StatusCode);
+        return soId;
+    }
+
+    // Mirror of fu-1 for sales orders: a reason on the approvals endpoint is an approval
+    // NOTE, never a silent rejection; rejection is its own POST {id}/rejections action.
+    [Fact]
+    public async Task SO_approve_with_reason_confirms_and_records_note_in_audit()
+    {
+        var soId = await CreatePendingSoAsync("U-004");
+
+        var res = await PostAsync($"/api/v1/sales-orders/{soId}/approvals",
+            new { reason = "Approved per Q4 sales plan" }, "U-001");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("Confirmed", (await Json(res)).GetProperty("data").GetProperty("status").GetString());
+
+        var audit = await GetAsync("/api/v1/audit-events", "U-001");
+        Assert.Contains(audit.GetProperty("data").EnumerateArray(),
+            e => e.GetProperty("action").GetString() == "approve"
+                && e.GetProperty("entityId").GetString() == soId
+                && (e.GetProperty("summary").GetString() ?? "").Contains("Approved per Q4 sales plan"));
+    }
+
+    [Fact]
+    public async Task SO_reject_with_reason_rejects_and_persists_reason()
+    {
+        var soId = await CreatePendingSoAsync("U-004");
+
+        var res = await PostAsync($"/api/v1/sales-orders/{soId}/rejections",
+            new { reason = "Pricing not agreed" }, "U-001");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("Rejected", (await Json(res)).GetProperty("data").GetProperty("status").GetString());
+
+        var detail = await GetAsync($"/api/v1/sales-orders/{soId}", "U-001");
+        Assert.Equal("Pricing not agreed", detail.GetProperty("data").GetProperty("rejectionReason").GetString());
+    }
+
+    [Fact]
+    public async Task SO_reject_without_reason_is_400_envelope_error()
+    {
+        var soId = await CreatePendingSoAsync("U-004");
+
+        var res = await PostAsync($"/api/v1/sales-orders/{soId}/rejections", new { }, "U-001");
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var body = await Json(res);
+        Assert.False(body.GetProperty("success").GetBoolean());
+        Assert.Equal("DECISION_REASON_REQUIRED", body.GetProperty("error").GetProperty("code").GetString());
+    }
+
     [Fact]
     public async Task Procure_to_receive_posts_stock_and_balanced_journal()
     {

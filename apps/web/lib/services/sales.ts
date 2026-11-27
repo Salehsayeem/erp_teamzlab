@@ -348,6 +348,10 @@ export function submitSalesOrder(token: string, id: string) {
 export function approveSalesOrder(token: string, id: string, reason: string | null) {
   return apiFetch<SalesOrderRow>(`/api/v1/sales-orders/${id}/approvals`, { method: "POST", body: { reason }, token });
 }
+// Rejection is its own endpoint and requires a reason (the approvals endpoint only ever approves).
+export function rejectSalesOrder(token: string, id: string, reason: string) {
+  return apiFetch<SalesOrderRow>(`/api/v1/sales-orders/${id}/rejections`, { method: "POST", body: { reason }, token });
+}
 export function shipSalesOrder(token: string, id: string, itemSku: string, qty: number) {
   return apiFetch<ShipmentResult>(`/api/v1/sales-orders/${id}/shipments`, { method: "POST", body: { itemSku, qty }, token });
 }
