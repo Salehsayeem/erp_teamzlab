@@ -480,4 +480,40 @@ public class FinanceDeepP1Tests : IClassFixture<TestApiFactory>
         Assert.Equal("VALIDATION_ERROR", body.GetProperty("error").GetProperty("code").GetString());
         Assert.Contains("January 1", body.GetProperty("error").GetProperty("message").GetString());
     }
+
+    // 004 (P1 review 5, R14 deferral made loud): FP-<name> period ids share ONE global PK across
+    // legal entities until R14's entity-segmented id scheme (Option B) lands. A same-named
+    // period under another entity is INVISIBLE to the activation pre-check (entity-scoped), so
+    // a second-entity activation hits the shared PK on materialize — refused loudly as 409
+    // CALENDAR_PERIOD_CONFLICT, never a 500. The conflicting row is planted under LE-000 via a
+    // raw context (JournalRaceHardening convention); FY2034 keeps the activation contiguous
+    // with the coverage chain; the finally-block restores the store.
+    [Fact]
+    public async Task Second_Entity_Period_Id_Collision_Is_Refused_Not_A_500()
+    {
+        await EnsureCoverage(2033);
+        var id = await CreateCalendar("FY2034 4-4-5", 2034, "FourFourFive", "2034-01-01");
+        var options = new DbContextOptionsBuilder<ErpDbContext>().UseNpgsql(_factory.ConnectionString).Options;
+        using (var db = new ErpDbContext(options))
+        {
+            db.FiscalPeriods.Add(new Erp.Api.FiscalPeriod("FP-2034-P01", "T-001", "LE-000", "2034-P01",
+                new DateOnly(2034, 1, 1), new DateOnly(2034, 1, 31), Erp.Api.PeriodStatus.Open));
+            db.SaveChanges();
+        }
+        try
+        {
+            var res = await Activate(id);
+            Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+            var body = await Json(res);
+            Assert.Equal("CALENDAR_PERIOD_CONFLICT", body.GetProperty("error").GetProperty("code").GetString());
+            Assert.Contains("2034", body.GetProperty("error").GetProperty("message").GetString());
+        }
+        finally
+        {
+            using var db = new ErpDbContext(options);
+            await db.FiscalPeriods.Where(p => p.Name == "2034-P01" && p.LegalEntityId == "LE-000").ExecuteDeleteAsync();
+            await db.FiscalPeriods.Where(p => p.Name.StartsWith("2034-")).ExecuteDeleteAsync();
+            await db.FiscalCalendars.Where(c => c.Id == id).ExecuteDeleteAsync();
+        }
+    }
 }

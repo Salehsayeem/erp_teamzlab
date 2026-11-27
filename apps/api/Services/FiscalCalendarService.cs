@@ -103,7 +103,23 @@ public sealed class FiscalCalendarService(ErpDbContext db, EntityContext ec, INu
             $"Calendar {calendar.Name} activated by {user.Email}: {calendar.Periods.Count} periods materialized ({calendar.StartDate:yyyy-MM-dd}..{calendar.EndDate:yyyy-MM-dd}); adjustment period {calendar.Periods.Last(p => p.IsAdjustment).Name} designated.");
         audit.Emit(user, "finance.calendar.activated",
             new { calendarId = calendar.Id, year = calendar.Year, pattern = calendar.Pattern.ToString(), periods = calendar.Periods.Count, activatedBy = user.Id });
-        db.SaveChanges();
+        try
+        {
+            db.SaveChanges();
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException
+        {
+            SqlState: "23505",
+            ConstraintName: "PK_fiscal_periods",
+        })
+        {
+            // P1 review 5 — FP-<name> period ids share one GLOBAL PK across legal entities until
+            // R14's entity-segmented id scheme (Option B) lands; the entity-scoped pre-check above
+            // cannot see another entity's same-named period, so the PK is the real guard. Loud
+            // 409, never a 500 (catch narrowed to THAT constraint per the P5 void-catch lesson).
+            return (null, "CALENDAR_PERIOD_CONFLICT",
+                $"A fiscal period id that {calendar.Name} would materialize (FP-<period name>) already exists for another legal entity — the FP-<name> id scheme is global until the R14 entity-segmented id redesign.");
+        }
         return (activated, null, null);
     }
 
