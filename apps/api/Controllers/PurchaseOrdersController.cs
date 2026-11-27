@@ -84,6 +84,17 @@ public sealed class PurchaseOrdersController(IPurchaseOrderService orders, IPurc
         return code is null ? (Envelope.OkBody(ProjAck(ack!)), 201) : (Envelope.FailBody(code, error!), ErrorStatus.StatusFor(code));
     });
 
+    // click-through fu-5: acks were write-only — the read-back mirrors the write family
+    [HttpGet("{id}/acknowledgements")]
+    public IResult Acks(string id)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("po:read") && !u.Has("po:write"))
+            return Envelope.Fail("FORBIDDEN", "po:read or po:write permission required.", 403);
+        var (data, code, message) = changes.Acks(id);
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
     private static object ProjChange(PurchaseOrderChange c) => new
     {
         c.Id, c.PoId, c.ChangeNo, c.Status, c.Rationale, c.IsMaterial, c.BaseOrderVersion,

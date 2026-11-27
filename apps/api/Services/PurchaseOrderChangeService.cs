@@ -132,6 +132,19 @@ public sealed class PurchaseOrderChangeService(
 
     public bool HasPendingChange(string poId) => orders.HasPendingChange(poId);
 
+    // click-through fu-5: acks were write-only — read-back carrying every written field
+    // (version pin, supplier, discrepancy flag, accepted/rejected lines), newest version last
+    public (object? Data, string? Code, string? Message) Acks(string poId)
+    {
+        if (orders.FindPo(poId) is null) return (null, "PO_NOT_FOUND", "Purchase order not found.");
+        return (orders.AcksFor(poId).Select(a => new
+        {
+            a.Id, a.PoId, a.OrderVersion, a.SupplierId, a.Status, a.HasDiscrepancy, a.ReceivedBy, a.ReceivedAt,
+            late = a.Status is AckStatus.Superseded,
+            lines = JsonSerializer.Deserialize<List<PoAckLineInput>>(a.LinesJson, JsonOpts),
+        }).ToList(), null, null);
+    }
+
     public object? PoDetail(string poId)
     {
         var po = orders.FindPo(poId);
