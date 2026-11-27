@@ -3924,7 +3924,7 @@ export const en = {
       yearLabel: "Year",
       patternLabel: "Pattern",
       startDateLabel: "Start date",
-      invalidInput: "Check the name, the year (2000–2200) and the start date (must fall inside the year).",
+      invalidInput: "Check the name, the year (2000–2200) and the start date (January 1 of the year).",
       closeAction: "Close",
       closeTitle: "Close period",
       closeBody: "Closes {id} ({range}). Posting into a closed period stays locked; reopen is audited.",

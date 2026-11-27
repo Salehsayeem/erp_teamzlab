@@ -94,7 +94,7 @@ export default function FiscalPeriodsPage() {
     const year = Number(form.year);
     const name = form.name.trim();
     if (!name || !/^\d{4}$/.test(form.year) || year < 2000 || year > 2200
-      || !/^\d{4}-\d{2}-\d{2}$/.test(form.startDate) || !form.startDate.startsWith(form.year)) {
+      || !/^\d{4}-\d{2}-\d{2}$/.test(form.startDate) || form.startDate !== `${form.year}-01-01`) {
       setFormError(f.invalidInput);
       return;
     }
