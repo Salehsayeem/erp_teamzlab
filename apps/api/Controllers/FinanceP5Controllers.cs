@@ -174,10 +174,16 @@ public sealed class NumberSeriesController(INumberSeries numbers, IAuditReposito
         {
             audit.Save(); // same scoped context — one SaveChanges commits the void + audit trail
         }
-        catch (DbUpdateException ex) when (ex.InnerException is NpgsqlException { SqlState: "23505" })
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException
+        {
+            SqlState: "23505",
+            ConstraintName: "IX_number_series_voids_tenant_id_legal_entity_id_prefix_number",
+        })
         {
             // fix round: AlreadyVoided is read-then-write — a concurrent void of the same number
             // can commit first; the UNIQUE (tenant, entity, prefix, number) index is the real guard.
+            // re-review F2: narrowed to THAT index — the prefix-free PK (NSV-{number}) colliding
+            // across series is a different bug (R14 family) and must not masquerade as this 409.
             return (Envelope.FailBody("NUMBER_ALREADY_VOIDED",
                 $"{number} is already voided; a concurrent void committed first and this retry wrote nothing."), 409);
         }

@@ -439,6 +439,17 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         Assert.Contains(events.GetProperty("data").EnumerateArray(),
             e => e.GetProperty("entityType").GetString() == "finance_setting"
               && (e.GetProperty("summary").GetString() ?? "").Contains("finance.functional_currency"));
+
+        // re-review F5 — order-independence: undo the USD flip (single-row upsert) with an
+        // already-effective BDT so any later test in this class drafts against the seeded
+        // functional currency regardless of runner ordering
+        var reset = await PostAsync("/api/v1/finance-settings", new
+        {
+            key = "finance.functional_currency",
+            value = "BDT",
+            effectiveFrom = MonthStart(Today).AddMonths(-1),
+        }, Fin);
+        Assert.Equal(HttpStatusCode.OK, reset.StatusCode);
     }
 
     // 006 — currency CRUD: seeded 0/2/3-scale family, duplicate rejection, scale ∈ {0,2,3} only
@@ -589,7 +600,7 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         var options = new DbContextOptionsBuilder<ErpDbContext>().UseNpgsql(_factory.ConnectionString).Options;
         await using var db = new ErpDbContext(options);
         await using var tx = await db.Database.BeginTransactionAsync();
-        db.NumberSeriesVoids.Add(new Erp.Api.NumberSeriesVoid("NSV-FXR-9999", "T-001", "LE-001", "FXR", "FXR-9999",
+        db.NumberSeriesVoids.Add(new Erp.Api.NumberSeriesVoid("NSV-RACE-BARRIER-FXR-9999", "T-001", "LE-001", "FXR", "FXR-9999",
             "barrier: parked so the HTTP void races the unique index", "U-001", DateTimeOffset.UtcNow));
         db.SaveChanges(); // inside the explicit transaction — deliberately not committed yet
 
@@ -600,5 +611,37 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         var res = await httpVoid;
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         Assert.Equal("NUMBER_ALREADY_VOIDED", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    // 008 re-review F1 — concurrent approve race: the ApproveRate pre-check is check-then-act.
+    // An UNCOMMITTED approved rate with the same key is invisible to the READ COMMITTED pre-check,
+    // so the HTTP approval's UPDATE parks on the partial unique index; committing the barrier
+    // wakes it with a 23505 that must surface as 409 FX_RATE_AMBIGUOUS — never a 500 INTERNAL.
+    [Fact]
+    public async Task Concurrent_Approve_Of_A_Competing_Fx_Rate_Is_A_Conflict_Not_A_Server_Error()
+    {
+        var fresh = await PostAsync("/api/v1/fx-rates", new
+        {
+            baseCurrency = "JPY", quoteCurrency = "BDT", rateDate = new DateOnly(2026, 2, 1),
+            rateType = "Spot", rate = 0.82m, precision = 4, source = "p5-race-test",
+        }, Fin);
+        Assert.Equal(HttpStatusCode.Created, fresh.StatusCode);
+        var rateId = (await Json(fresh)).GetProperty("data").GetProperty("id").GetString()!;
+
+        var options = new DbContextOptionsBuilder<ErpDbContext>().UseNpgsql(_factory.ConnectionString).Options;
+        await using var db = new ErpDbContext(options);
+        await using var tx = await db.Database.BeginTransactionAsync();
+        db.FxRates.Add(new Erp.Api.FxRate("FXR-RACE-BARRIER", "T-001", "LE-001", "JPY", "BDT", new DateOnly(2026, 2, 1),
+            Erp.Api.FxRateType.Spot, 0.81m, 4, "barrier", DateTimeOffset.UtcNow,
+            Erp.Api.FxRateStatus.Approved, "system", "system", DateTimeOffset.UtcNow));
+        db.SaveChanges(); // inside the explicit transaction — deliberately not committed yet
+
+        var httpApprove = PostAsync($"/api/v1/fx-rates/{rateId}/approvals", new { }, Admin);
+        await Task.Delay(2000); // the HTTP UPDATE is now parked behind the barrier's index entry
+        await tx.CommitAsync();
+
+        var res = await httpApprove;
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("FX_RATE_AMBIGUOUS", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
     }
 }

@@ -2654,8 +2654,9 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new DimensionSet("DS-CostCenter", t, le, "CostCenter", "Cost Center", false, true));
 
         // permitted values with their own intervals: CC-001 open-ended active; CC-002 INACTIVE but
-        // still inside its 2026 interval — the "historical lines may reference an inactive value
-        // within its interval" fixture (003 AC2)
+        // still inside its 2026 interval — after the P5 fix round this is a REJECTION fixture for
+        // NEW postings (Active+interval required at create; 003 AC2's inactive-in-interval clause
+        // lives on for POSTED history only, which is never re-validated)
         mb.Entity<DimensionValue>().HasData(
             new DimensionValue("DV-CostCenter-CC-001", t, le, "CostCenter", "CC-001", new DateOnly(2026, 1, 1), null, true),
             new DimensionValue("DV-CostCenter-CC-002", t, le, "CostCenter", "CC-002", new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31), false));

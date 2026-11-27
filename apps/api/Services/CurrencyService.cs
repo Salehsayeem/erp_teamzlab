@@ -2,6 +2,7 @@ using Erp.Api.Data;
 using Erp.Api.Dtos;
 using Erp.Api.Interfaces;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Erp.Api.Services;
 
@@ -79,7 +80,18 @@ public sealed class CurrencyService(ErpDbContext db, EntityContext ec, INumberSe
             $"FX rate {rate.Id} {rate.BaseCurrency}/{rate.QuoteCurrency} {rate.Rate} approved by {approver.Email} (source '{rate.Source}', retrieved {rate.RetrievedAt:u}).");
         audit.Emit(approver, "finance.fxrate.approved",
             new { rateId = rate.Id, pair = $"{rate.BaseCurrency}/{rate.QuoteCurrency}", rateDate = rate.RateDate, rateType = rate.RateType.ToString(), rate.Rate, rate.Precision, approver = approver.Id });
-        db.SaveChanges();
+        try
+        {
+            db.SaveChanges();
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is NpgsqlException { SqlState: "23505" })
+        {
+            // re-review F1: the pre-check above is check-then-act — a competing approval can commit
+            // between the read and this SaveChanges; the partial unique index settles the race into
+            // the same 409 the pre-check returns (barrier-tested like the void path).
+            return (null, "FX_RATE_AMBIGUOUS",
+                $"A competing rate for {rate.BaseCurrency}/{rate.QuoteCurrency} on {rate.RateDate:yyyy-MM-dd} ({rate.RateType}) was approved concurrently; withdraw one to resolve.");
+        }
         return (approved, null, null);
     }
 
