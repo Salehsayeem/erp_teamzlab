@@ -7,7 +7,7 @@ using Xunit;
 // periods + the 53-week edge) with activation overlap/gap rejection, the close-checklist
 // dashboard (evidence/waiver/NA states) and the 063 money gate on fiscal-period close.
 // Brief §7 items 1–6 + item 28 negative sweep. Seeds exercised: FCAL-0001 (draft 4-4-5 FY2027),
-// CTK-0001 (mandatory reconciliation task on the seeded next-month period), R-FIN2/U-015.
+// CTK-0001 (mandatory reconciliation task on the dedicated seeded FP-P1-DEMO period), R-FIN2/U-015.
 // ORDER-INDEPENDENCE: activations follow the 004 AC2 chain rule (a new year must be contiguous
 // with existing coverage or be the first), so every test fills coverage with EnsureCoverage()
 // up to the year it needs, and probes overlap/gap on ranges no other test touches (2030-inside
@@ -385,8 +385,11 @@ public class FinanceDeepP1Tests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Created, okChecklist.StatusCode);
     }
 
-    // 062 — the seeded demo checklist is present on a fresh database (mandatory reconciliation
-    // task on the next-month period) so the gate is demonstrable from the UI out of the box.
+    // 062 — the seeded demo checklist is present on a fresh database: a mandatory pending
+    // reconciliation task on the dedicated seeded demo period FP-P1-DEMO (a far-future month the
+    // P1 migration seeds itself — AddFinanceSeed's rolling months stop at the current month, so
+    // no apply-time-computed period id is guaranteed to exist), and the PERIOD ROW is asserted
+    // to exist so the gate is demonstrable from the UI out of the box, never orphaned.
     [Fact]
     public async Task Seeded_Demo_Checklist_Carries_A_Mandatory_Pending_Task()
     {
@@ -397,5 +400,13 @@ public class FinanceDeepP1Tests : IClassFixture<TestApiFactory>
         Assert.True(seeded.GetProperty("mandatory").GetBoolean());
         Assert.Equal("Pending", seeded.GetProperty("status").GetString());
         Assert.Contains("reconcil", seeded.GetProperty("title").GetString()!.ToLowerInvariant());
+
+        // the task's period is REACHABLE: the migration seeds FP-P1-DEMO and points the task at it
+        Assert.Equal("FP-P1-DEMO", seeded.GetProperty("periodId").GetString());
+        var periods = await GetAsync("/api/v1/fiscal-periods", Admin);
+        var demo = periods.GetProperty("data").EnumerateArray()
+            .FirstOrDefault(p => p.GetProperty("id").GetString() == "FP-P1-DEMO");
+        Assert.False(demo.ValueKind == JsonValueKind.Undefined, "seeded demo period FP-P1-DEMO missing");
+        Assert.Equal("Open", demo.GetProperty("status").GetString());
     }
 }

@@ -148,8 +148,8 @@ public partial class _20261127180557_AddFinanceDeepP1 : Migration
             columns: new[] { "id", "tenant_id", "legal_entity_id", "name", "year", "pattern", "start_date", "end_date", "activated", "activated_by", "activated_at" },
             values: new object[] { "FCAL-0001", "T-001", "LE-001", "FY2027 4-4-5 (demo)", 2027, 1, new DateOnly(2027, 1, 1), new DateOnly(2027, 12, 31), false, null, null });
 
-        // the 4-4-5 walk: quarters of 4-4-5 weeks — 12 periods cover 364 days, the year remainder
-        // is the ADJUSTMENT period (a 53-week year pushes its extra week there, never into a month)
+        // the 4-4-5 walk: quarters of 4-4-5 weeks — 12 periods cover 364 days; the year remainder
+        // (1-2 days on a Gregorian year) is the ADJUSTMENT period
         migrationBuilder.InsertData(
             table: "fiscal_calendar_periods",
             columns: new[] { "calendar_id", "line_no", "tenant_id", "legal_entity_id", "name", "start_date", "end_date", "is_adjustment" },
@@ -170,26 +170,36 @@ public partial class _20261127180557_AddFinanceDeepP1 : Migration
                 { "FCAL-0001", 13, "T-001", "LE-001", "2027-ADJ", new DateOnly(2027, 12, 31), new DateOnly(2027, 12, 31), true },
             });
 
-        // CTK-0001: one mandatory reconciliation task on the seeded NEXT-month period (computed at
-        // APPLY time like AddFinanceSeed's rolling months) so the 063 gate is demonstrable from a
-        // fresh database: close that period → 409 CLOSE_GATE_BLOCKED naming CTK-0001. Chosen on
-        // the next month deliberately: the test suites close only dedicated probes or the CURRENT
-        // month, so the demo task never blocks another suite's lock fixtures.
-        var demoPeriod = new DateOnly(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1).AddMonths(1);
+        // P1 review 1 — CTK-0001 needs a period a fresh database actually HAS. AddFinanceSeed's
+        // rolling months are computed when THAT (already-applied) migration applies and stop at
+        // the current month, so a "next month" id computed here is not guaranteed to exist — the
+        // old FP-{next month} pointer was orphaned on every fresh DB. Seed a dedicated far-future
+        // Open period instead and point the task at it: close FP-P1-DEMO → 409 CLOSE_GATE_BLOCKED
+        // naming CTK-0001 demonstrates the 063 gate out of the box. Far future so no suite's
+        // probe periods or calendar coverage (2029+) ever touches it.
+        migrationBuilder.InsertData(
+            table: "fiscal_periods",
+            columns: new[] { "id", "tenant_id", "legal_entity_id", "name", "start_date", "end_date", "status" },
+            values: new object[] { "FP-P1-DEMO", "T-001", "LE-001", "P1-DEMO", new DateOnly(2099, 1, 1), new DateOnly(2099, 1, 31), 0 }); // PeriodStatus.Open
+
         migrationBuilder.InsertData(
             table: "close_tasks",
             columns: new[] { "id", "tenant_id", "legal_entity_id", "period_id", "title", "mandatory", "status" },
-            values: new object[] { "CTK-0001", "T-001", "LE-001", $"FP-{demoPeriod:yyyy-MM}", "Bank reconciliation", true, 0 });
+            values: new object[] { "CTK-0001", "T-001", "LE-001", "FP-P1-DEMO", "Bank reconciliation", true, 0 });
     }
 
     /// <inheritdoc />
     protected override void Down(MigrationBuilder migrationBuilder)
     {
-        var demoPeriod = new DateOnly(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1).AddMonths(1);
         migrationBuilder.DeleteData(
             table: "close_tasks",
             keyColumn: "id",
             keyValue: "CTK-0001");
+
+        migrationBuilder.DeleteData(
+            table: "fiscal_periods",
+            keyColumn: "id",
+            keyValue: "FP-P1-DEMO");
 
         migrationBuilder.DeleteData(
             table: "fiscal_calendar_periods",
