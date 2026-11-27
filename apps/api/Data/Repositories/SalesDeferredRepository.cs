@@ -109,10 +109,13 @@ public sealed class SalesDeferredRepository(ErpDbContext db, EntityContext ec) :
     public RebateClaim? FindClaim(string claimId) =>
         Scoped<RebateClaim>().FirstOrDefault(c => c.Id == claimId);
 
+    public List<RebateClaim> Claims() =>
+        Scoped<RebateClaim>().OrderBy(c => c.Id).ToList();
+
     public List<RebateClaim> ClaimsFor(string agreementId, string period) =>
         Scoped<RebateClaim>().Where(c => c.AgreementId == agreementId && c.Period == period).ToList();
 
-    public void SetClaimStatus(RebateClaim claim, RebateClaimStatus status, string? approverId)
+    public void SetClaimStatus(RebateClaim claim, RebateClaimStatus status, string? approverId, string? rejectionReason = null)
     {
         db.Entry(claim).Property(nameof(RebateClaim.Status)).CurrentValue = status;
         if (approverId is not null)
@@ -120,6 +123,8 @@ public sealed class SalesDeferredRepository(ErpDbContext db, EntityContext ec) :
             db.Entry(claim).Property(nameof(RebateClaim.ApprovedBy)).CurrentValue = approverId;
             db.Entry(claim).Property(nameof(RebateClaim.ApprovedAt)).CurrentValue = DateTimeOffset.UtcNow;
         }
+        if (rejectionReason is not null)
+            db.Entry(claim).Property(nameof(RebateClaim.RejectionReason)).CurrentValue = rejectionReason;
     }
 
     public int Save() => db.SaveChanges();

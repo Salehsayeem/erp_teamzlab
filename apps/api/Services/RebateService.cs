@@ -97,6 +97,47 @@ public sealed class RebateService(
         return (ClaimView(claim), null, null);
     }
 
+    // read-back with agreement/accrual context; a claim sitting over a cap that shrank after
+    // its approval surfaces as overCap — existing claims are never rewritten (money path)
+    public (object? data, string? code, string? message) ListClaims()
+    {
+        var committed = new Dictionary<string, decimal>();
+        var rows = deferred.Claims().Select(c =>
+        {
+            var agreement = deferred.FindAgreement(c.AgreementId);
+            var accrual = deferred.FindAccrual(c.AgreementId, c.Period);
+            var cap = accrual is { Status: RebateAccrualStatus.Approved } a ? a.ApprovedAmount ?? a.AccruedAmount : 0;
+            var key = $"{c.AgreementId}|{c.Period}";
+            var over = false;
+            if (c.Status is RebateClaimStatus.Submitted or RebateClaimStatus.Approved)
+            {
+                committed[key] = committed.GetValueOrDefault(key) + c.Amount;
+                over = committed[key] > cap; // cumulative, same guard as CreateClaim
+            }
+            return ClaimRow(c, agreement, cap, over);
+        }).ToList();
+        return (rows, null, null);
+    }
+
+    // rejection is its own decision (PO pattern): reason required, maker-checked, submitted-only
+    public (object? data, string? code, string? message) RejectClaim(CurrentUser u, string claimId, string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            return (null, "DECISION_REASON_REQUIRED", "A rejection reason is required.");
+        var claim = deferred.FindClaim(claimId);
+        if (claim is null) return (null, "REBATE_NOT_FOUND", "Rebate claim not found.");
+        if (!u.Has("rebates:settle")) return (null, "FORBIDDEN", "rebates:settle permission required (R-FIN).");
+        if (claim.Status != RebateClaimStatus.Submitted)
+            return (null, "REBATE_STATE_ERROR", $"Only submitted claims can be rejected (current: {claim.Status}).");
+        if (claim.RequestedBy == u.Id)
+            return (null, "REBATE_STATE_ERROR", "Maker-checker: the claimant cannot reject their own claim.");
+        deferred.SetClaimStatus(claim, RebateClaimStatus.Rejected, u.Id, reason);
+        audit.Log(u, "reject", "rebate_claim", claimId, $"Claim {claim.Amount:0.00} rejected: {reason}");
+        audit.Emit(u, "sales.rebate.claim.rejected", new { claimId, amount = claim.Amount, rejectedBy = u.Id, reason });
+        deferred.Save();
+        return (ClaimView(deferred.FindClaim(claimId)!), null, null);
+    }
+
     public (object? data, string? code, string? message) ApproveClaim(CurrentUser u, string claimId, string? reason)
     {
         var claim = deferred.FindClaim(claimId);
@@ -148,5 +189,14 @@ public sealed class RebateService(
         c.Id, c.AgreementId, c.Period, c.Amount, c.AgreementVersion,
         eligibleTxnIds = JsonDocument.Parse(c.EligibleTxnJson).RootElement.Clone(),
         c.Status, requestedBy = c.RequestedBy, c.RequestedAt, c.ApprovedBy, c.ApprovedAt, c.RejectionReason,
+    };
+
+    private static object ClaimRow(RebateClaim c, RebateAgreement? agreement, decimal cap, bool overCap) => new
+    {
+        c.Id, c.AgreementId, c.Period, c.Amount, c.AgreementVersion,
+        eligibleTxnIds = JsonDocument.Parse(c.EligibleTxnJson).RootElement.Clone(),
+        c.Status, requestedBy = c.RequestedBy, c.RequestedAt, c.ApprovedBy, c.ApprovedAt, c.RejectionReason,
+        customerId = agreement?.CustomerId, basis = agreement?.Basis, ratePct = agreement?.RatePct,
+        approvedCap = cap, overCap,
     };
 }

@@ -91,3 +91,4 @@ public record CreateRebateAgreementRequest(string CustomerId, string Basis, deci
 public record CalculateAccrualRequest(string Period);
 public record CreateRebateClaimRequest(string AgreementId, string Period, decimal Amount, IReadOnlyList<string>? EligibleTxnIds);
 public record ApproveRebateClaimRequest(string? Reason = null);
+public record RejectRebateClaimRequest(string? Reason = null);

@@ -11,8 +11,11 @@ import {
   createRebateClaim,
   fetchCustomers,
   listRebateAgreements,
+  listRebateClaims,
+  rejectRebateClaim,
   type CustomerRow,
   type RebateAgreementRow,
+  type RebateClaimListRow,
 } from "@/lib/services/sales";
 import { useAuth } from "@/hooks/useAuth";
 import { hasPermission, salesActionError, SalesMeError, useSalesMe } from "../_lib/helpers";
@@ -82,6 +85,13 @@ export default function RebatesPage() {
   const [settleBusy, setSettleBusy] = useState(false);
   const [settleModalError, setSettleModalError] = useState<string | null>(null);
 
+  const [claims, setClaims] = useState<RebateClaimListRow[] | null>(null);
+  const [claimsError, setClaimsError] = useState<string | null>(null);
+  const [rejectTargetId, setRejectTargetId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectBusy, setRejectBusy] = useState(false);
+  const [rejectModalError, setRejectModalError] = useState<string | null>(null);
+
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   function pushToast(tone: ToastItem["tone"], message: string) {
     setToasts((prev) => [...prev, { id: crypto.randomUUID(), tone, message }]);
@@ -107,6 +117,21 @@ export default function RebatesPage() {
     }
   }, [token, t]);
   useEffect(() => { void load(); }, [load]);
+
+  // claims read-back: a 403 here must not gate the agreements table
+  // (same dead-end rule as the agreements-403 fix on this page)
+  const loadClaims = useCallback(async () => {
+    if (!token) return;
+    const res = await listRebateClaims(token);
+    if (res.ok) {
+      setClaims(res.data);
+      setClaimsError(null);
+    } else {
+      setClaims(null);
+      setClaimsError(salesActionError(t, res.code, res.message));
+    }
+  }, [token, t]);
+  useEffect(() => { void loadClaims(); }, [loadClaims]);
 
   useEffect(() => {
     if (!token) return;
@@ -192,12 +217,11 @@ export default function RebatesPage() {
     setClaimAmount("");
     setClaimTxns("");
     pushToast("success", tc.claimCreated + " " + res.data.id);
+    await loadClaims();
   }
 
 
-  // Settlement is approve-only: the API has no claim-reject semantics yet
-  // (ApproveClaim unconditionally approves; claims-reject is ledgered with
-  // the claims-GET read gap for the next slice).
+  // Settlement approval is finance-only; rejection is its own decision (POST rejections).
   async function confirmSettle() {
     if (!token || settleApproveId === null) return;
     setSettleBusy(true);
@@ -211,6 +235,27 @@ export default function RebatesPage() {
     setSettleApproveId(null);
     setSettleNote("");
     pushToast("success", tc.claimApproved);
+    await loadClaims();
+  }
+
+  async function confirmReject() {
+    if (!token || rejectTargetId === null) return;
+    if (!rejectReason.trim()) {
+      setRejectModalError(tc.reasonRequired);
+      return;
+    }
+    setRejectBusy(true);
+    setRejectModalError(null);
+    const res = await rejectRebateClaim(token, rejectTargetId, rejectReason.trim());
+    setRejectBusy(false);
+    if (!res.ok) {
+      setRejectModalError(salesActionError(t, res.code, res.message));
+      return;
+    }
+    setRejectTargetId(null);
+    setRejectReason("");
+    pushToast("success", tc.claimRejected);
+    await loadClaims();
   }
 
   function openSettle() {
@@ -320,6 +365,60 @@ export default function RebatesPage() {
       </section>
 
       <section className="card">
+        <h2 className="t-title">{tc.claimsTitle}</h2>
+        {claimsError ? (
+          <ErrorState message={claimsError} retryLabel={t.common.retry} onRetry={() => void loadClaims()} />
+        ) : claims === null ? <LoadingSkeleton rows={4} /> : claims.length === 0 ? (
+          <EmptyState title={tc.noClaims} />
+        ) : (
+          <div className="table-scroll">
+            <table className="table table--lines">
+              <thead>
+                <tr>
+                  <th scope="col">{tc.claimColumns.id}</th>
+                  <th scope="col">{tc.claimColumns.agreement}</th>
+                  <th scope="col">{tc.claimColumns.period}</th>
+                  <th scope="col">{tc.claimColumns.customer}</th>
+                  <th scope="col">{tc.claimColumns.amount}</th>
+                  <th scope="col">{tc.claimColumns.cap}</th>
+                  <th scope="col">{tc.claimColumns.status}</th>
+                  <th scope="col">{t.journals.actions}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {claims.map((c) => (
+                  <tr key={c.id}>
+                    <td data-label={tc.claimColumns.id} className="mono">{c.id}</td>
+                    <td data-label={tc.claimColumns.agreement} className="mono">{c.agreementId}</td>
+                    <td data-label={tc.claimColumns.period} className="mono">{c.period}</td>
+                    <td data-label={tc.claimColumns.customer} className="mono">{c.customerId ?? "—"}</td>
+                    <td data-label={tc.claimColumns.amount} className="mono">{fmtMoney(c.amount, locale, "BDT")}</td>
+                    <td data-label={tc.claimColumns.cap} className="mono">
+                      {fmtMoney(c.approvedCap, locale, "BDT")}
+                      {c.overCap ? <> <Badge tone="danger">{tc.overCap}</Badge></> : null}
+                    </td>
+                    <td data-label={tc.claimColumns.status}>
+                      <Badge tone={localTone(TONE_MAP, c.status)}>{localStatus(t, tc.statusLabels, c.status)}</Badge>
+                      {c.rejectionReason ? <><br /><span className="t-caption">{c.rejectionReason}</span></> : null}
+                    </td>
+                    <td data-label={t.journals.actions}>
+                      <div className="row-actions">
+                        {c.status === "Submitted" ? (
+                          <Button small variant="secondary" disabled={!meReady || settleGate === false} onClick={() => { setRejectTargetId(c.id); setRejectReason(""); setRejectModalError(null); }}>
+                            {tc.rejectClaim}
+                          </Button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="card">
         <h2 className="t-title">{tc.settleTitle}</h2>
         <p className="t-caption">{tc.settleHint}</p>
         <div className="form-grid">
@@ -356,6 +455,17 @@ export default function RebatesPage() {
         <div className="modal__actions">
           <Button variant="secondary" onClick={() => setSettleApproveId(null)}>{t.common.cancel}</Button>
           <Button loading={settleBusy} onClick={() => void confirmSettle()}>{tc.approveClaim}</Button>
+        </div>
+      </Modal>
+
+      <Modal open={rejectTargetId !== null} onClose={() => setRejectTargetId(null)} title={tc.rejectConfirmTitle} closeLabel={t.common.cancel}>
+        <p>{tc.rejectConfirm}</p>
+        <p className="t-caption">{tc.claimColumns.id}: <span className="mono">{rejectTargetId}</span></p>
+        <Input id="rb-reject-reason" label={tc.rejectionReason} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} error={rejectModalError ?? undefined} />
+        {rejectModalError ? <p className="banner" role="alert">{rejectModalError}</p> : null}
+        <div className="modal__actions">
+          <Button variant="secondary" onClick={() => setRejectTargetId(null)}>{t.common.cancel}</Button>
+          <Button loading={rejectBusy} onClick={() => void confirmReject()}>{tc.rejectClaim}</Button>
         </div>
       </Modal>
     </div>

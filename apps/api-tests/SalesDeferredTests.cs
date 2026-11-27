@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Erp.Api.Tests;
+using Npgsql;
 using Xunit;
 
 // Deferred SALES screens wave (ERP-SALES-021..026/030 quotes+pricing first slice; later
@@ -1316,6 +1317,143 @@ public partial class SalesDeferredTests
             agreementId = agreement2, period = period2, amount = 25m, eligibleTxnIds = new[] { invoice2 },
         }, Sales);
         Assert.Equal(HttpStatusCode.Created, remainder.StatusCode);
+    }
+
+    // read-gap: claims were approve-only — the list carries agreement/accrual context and
+    // flags claims sitting over a cap that shrank after they were approved
+    [Fact]
+    public async Task Rebate_Claims_List_With_Agreement_And_Accrual_Context()
+    {
+        var (agreementId, invoiceId, _) = await SeedRebateFlow(); // 1000 net @ 5% (+ tax) → accrued cap
+        var customerId = (await GetInvoice(invoiceId)).GetProperty("customerId").GetString()!;
+        var period = $"{Today:yyyy-MM}";
+        var calc = await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals", new { period }, Sales);
+        Assert.Equal(HttpStatusCode.Created, calc.StatusCode);
+        var cap = (await Json(calc)).GetProperty("data").GetProperty("accruedAmount").GetDecimal();
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals/{period}/approvals", new { }, Fin)).StatusCode);
+        var created = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId, period, amount = cap / 2, eligibleTxnIds = new[] { invoiceId },
+        }, Sales);
+        var claimId = (await Json(created)).GetProperty("data").GetProperty("id").GetString()!;
+
+        // R-PROC holds neither rebates:write nor rebates:settle → no read
+        Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync("/api/v1/rebates/claims", "U-002"));
+
+        var list = await GetAsync("/api/v1/rebates/claims", Fin);
+        var row = list.GetProperty("data").EnumerateArray()
+            .FirstOrDefault(c => c.GetProperty("id").GetString() == claimId);
+        Assert.NotEqual(default, row);
+        Assert.Equal(cap / 2, row.GetProperty("amount").GetDecimal());
+        Assert.Equal(agreementId, row.GetProperty("agreementId").GetString());
+        Assert.Equal(period, row.GetProperty("period").GetString());
+        Assert.Equal(customerId, row.GetProperty("customerId").GetString());
+        Assert.Equal("net_sales", row.GetProperty("basis").GetString());
+        Assert.Equal("Submitted", row.GetProperty("status").GetString());
+        Assert.Equal(cap, row.GetProperty("approvedCap").GetDecimal());
+        Assert.False(row.GetProperty("overCap").GetBoolean());
+    }
+
+    // read-gap: rejection is its own decision — reason required, maker-checked, submitted-only
+    [Fact]
+    public async Task Rebate_Claim_Reject_Requires_Reason_Blocks_Self_And_NonPending()
+    {
+        var (agreementId, invoiceId, _) = await SeedRebateFlow();
+        var period = $"{Today:yyyy-MM}";
+        Assert.Equal(HttpStatusCode.Created, (await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals", new { period }, Sales)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals/{period}/approvals", new { }, Fin)).StatusCode);
+        // Admin (R-ADMIN "*") is the claimant so maker-checker has a settle-holder to compare
+        var created = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId, period, amount = 20m, eligibleTxnIds = new[] { invoiceId },
+        }, Admin);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var claimId = (await Json(created)).GetProperty("data").GetProperty("id").GetString()!;
+
+        // missing reason → 400 (DECISION_REASON_REQUIRED, PO reject pattern)
+        var noReason = await PostAsync($"/api/v1/rebates/claims/{claimId}/rejections", new { }, Fin);
+        Assert.Equal(HttpStatusCode.BadRequest, noReason.StatusCode);
+        Assert.Equal("DECISION_REASON_REQUIRED", (await Json(noReason)).GetProperty("error").GetProperty("code").GetString());
+
+        // maker-checker: the claimant cannot reject their own claim
+        var self = await PostAsync($"/api/v1/rebates/claims/{claimId}/rejections", new { reason = "self" }, Admin);
+        Assert.Equal(HttpStatusCode.Conflict, self.StatusCode);
+        Assert.Equal("REBATE_STATE_ERROR", (await Json(self)).GetProperty("error").GetProperty("code").GetString());
+
+        // R-FIN rejects with a reason → Rejected + reason persisted
+        var ok = await PostAsync($"/api/v1/rebates/claims/{claimId}/rejections", new { reason = "dup txn ids" }, Fin);
+        Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
+        var rejected = (await Json(ok)).GetProperty("data");
+        Assert.Equal("Rejected", rejected.GetProperty("status").GetString());
+        Assert.Equal("dup txn ids", rejected.GetProperty("rejectionReason").GetString());
+
+        // non-pending: a Rejected claim cannot be rejected again
+        var again = await PostAsync($"/api/v1/rebates/claims/{claimId}/rejections", new { reason = "again" }, Fin);
+        Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
+        Assert.Equal("REBATE_STATE_ERROR", (await Json(again)).GetProperty("error").GetProperty("code").GetString());
+    }
+
+    // parked re-check: an accrual recalc after claims exist must never mutate approved money
+    // (ApprovedAmount stays frozen → existing claims stay; new claims stay capped at it), and
+    // claims left over a shrunk cap surface as overCap instead of being rewritten
+    [Fact]
+    public async Task Recalc_After_Claims_Keeps_Approved_Money_And_Surfaces_OverCap()
+    {
+        var (agreementId, invoiceId, _) = await SeedRebateFlow(); // 1000 net @ 5% (+ tax)
+        var period = $"{Today:yyyy-MM}";
+        var calc = await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals", new { period }, Sales);
+        Assert.Equal(HttpStatusCode.Created, calc.StatusCode);
+        var cap = (await Json(calc)).GetProperty("data").GetProperty("accruedAmount").GetDecimal();
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals/{period}/approvals", new { }, Fin)).StatusCode);
+        var created = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId, period, amount = cap, eligibleTxnIds = new[] { invoiceId },
+        }, Sales);
+        var claimId = (await Json(created)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/rebate-claims/{claimId}/approvals", new { }, Fin)).StatusCode);
+
+        // real recalc-shrink: a credit adjustment drops the invoice open → recalc shrinks
+        // AccruedAmount but must leave ApprovedAmount (the approved money) frozen
+        var adj = await PostAsync("/api/v1/adjustments", new
+        {
+            kind = "Credit", invoiceId, reason = "recalc shrink probe",
+            lines = new[] { new { itemSku = Tag("SKU"), qty = 1m, unitPrice = 500m } },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, adj.StatusCode);
+        var adjId = (await Json(adj)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/adjustments/{adjId}/approvals", new { }, Fin)).StatusCode);
+        var recalc = await PostAsync($"/api/v1/rebate-agreements/{agreementId}/accruals", new { period }, Sales);
+        Assert.Equal(HttpStatusCode.Created, recalc.StatusCode); // existing contract: calc/re-calc both 201
+        var accrual = (await Json(recalc)).GetProperty("data");
+        Assert.True(accrual.GetProperty("accruedAmount").GetDecimal() < cap, "credit adjustment should shrink the recalculated accrual");
+        Assert.Equal(cap, accrual.GetProperty("approvedAmount").GetDecimal());
+
+        // new claims stay capped at the frozen approved amount (not the shrunk accrual)
+        var blocked = await PostAsync("/api/v1/rebate-claims", new
+        {
+            agreementId, period, amount = 1m, eligibleTxnIds = new[] { invoiceId },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Conflict, blocked.StatusCode);
+        Assert.Equal("REBATE_EXCEEDS_ACCRUAL", (await Json(blocked)).GetProperty("error").GetProperty("code").GetString());
+
+        // white-box: the same accrual with the approved cap re-cut below committed claims —
+        // the existing claim survives unmutated and the list flags it overCap (never rewritten)
+        await using var conn = new NpgsqlConnection(_factory.ConnectionString);
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "UPDATE rebate_accruals SET approved_amount = 1 WHERE agreement_id = @id AND period = @p", conn);
+        cmd.Parameters.AddWithValue("id", agreementId);
+        cmd.Parameters.AddWithValue("p", period);
+        Assert.Equal(1, await cmd.ExecuteNonQueryAsync());
+
+        var list = await GetAsync("/api/v1/rebates/claims", Fin);
+        var row = list.GetProperty("data").EnumerateArray()
+            .FirstOrDefault(c => c.GetProperty("id").GetString() == claimId);
+        Assert.NotEqual(default, row);
+        Assert.Equal("Approved", row.GetProperty("status").GetString());
+        Assert.Equal(cap, row.GetProperty("amount").GetDecimal());
+        Assert.Equal(1m, row.GetProperty("approvedCap").GetDecimal());
+        Assert.True(row.GetProperty("overCap").GetBoolean());
     }
 }
 
