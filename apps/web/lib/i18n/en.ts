@@ -951,6 +951,11 @@ export const en = {
       releases: "Release history",
       poRef: "PO ref",
       detailLoadFailed: "Could not load the blanket order.",
+      back: "Back to blanket orders",
+      releasesEmpty: "No releases yet — the ceiling is untouched.",
+      createdBy: "Created by",
+      releasedBy: "Released by",
+      releasedAt: "Released at",
     },
     receipts: {
       title: "Receipts",
