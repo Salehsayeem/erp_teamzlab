@@ -585,6 +585,7 @@ export type Requisition = {
   exceptionFlaggedAt: string | null;
   stepVersion?: number | null; // pending step's decision token — list rows carry it (decide validates the step, not the record)
   lines?: RequisitionLine[]; // list rows omit it; only detail carries lines
+  totalQty?: number; // fu-7: server-side sum of line qty — list rows carry it (detail projection omits it)
   total: number;
 };
 export type RequisitionStep = {

@@ -121,7 +121,7 @@ export default function RequisitionsPage() {
                 <Link className="mono" href={`/procurement/requisitions/${encodeURIComponent(r.id)}`}>{r.id}</Link> — {r.purpose}
               </td>
               <td data-label={t.procurement.common.status}><Badge tone={statusTone(r.status)}>{statusLabel(r.status)}</Badge></td>
-              <td className="mono">{r.lines?.[0]?.qty ?? "—"}</td>
+              <td className="mono">{r.totalQty ?? "—"}</td>
               <td className="mono">{fmtMoney(r.total, locale, r.currency ?? "BDT")}</td>
               <td>
                 <div className="row-actions">
