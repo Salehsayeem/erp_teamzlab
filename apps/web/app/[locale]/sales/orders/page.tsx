@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { getDictionary, isLocale, type Locale } from "@/lib/i18n";
 import {
   approveSalesOrder,
+  rejectSalesOrder,
   createSalesOrder,
   fetchCustomers,
   fetchSalesOrders,
@@ -364,7 +365,9 @@ export default function SalesOrdersPage() {
                           <td colSpan={6}>
                             <Input id={`reject-${so.id}`} label={tc.rejectionReason} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
                             <div className="row-actions" style={{ justifyContent: "flex-start" }}>
-                              <Button small loading={busyId === so.id} disabled={busyId !== null || !rejectReason.trim()} onClick={() => void act(so.id, () => approveSalesOrder(token ?? "", so.id, rejectReason.trim())).then((ok) => { if (ok) setRejectFor(null); })}>
+                              {/* Rejection is its own endpoint (POST /rejections) and requires a
+                                  reason — the confirm stays disabled until a real reason exists. */}
+                              <Button small loading={busyId === so.id} disabled={busyId !== null || !rejectReason.trim()} onClick={() => void act(so.id, () => rejectSalesOrder(token ?? "", so.id, rejectReason.trim())).then((ok) => { if (ok) setRejectFor(null); })}>
                                 {tc.confirmReject}
                               </Button>
                               <Button small variant="secondary" onClick={() => setRejectFor(null)}>{t.common.cancel}</Button>

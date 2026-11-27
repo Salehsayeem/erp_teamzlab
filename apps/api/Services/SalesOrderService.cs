@@ -321,6 +321,9 @@ public sealed class SalesOrderService(
     // R-T7i: approval is gated on so:approve (moved off so:write); approver ≠ creator still holds.
     // 057 AC2: an approval that would push exposure past the customer's credit limit lands the
     // order in CreditHold instead of Confirmed — release is a separate credit:override act.
+    // Explicit decision binding (click-through fu-2): approvals always approve — a reason is an
+    // approval note recorded in the audit trail, never a silent rejection. Rejection lives on
+    // its own endpoint and requires a reason.
     public (SalesOrder? order, string? code, string? message) Approve(CurrentUser approver, string soId, string? reason)
     {
         var so = orders.Find(soId);
@@ -328,14 +331,6 @@ public sealed class SalesOrderService(
         if (so.Status != SoStatus.PendingApproval) return (null, "SO_APPROVAL_ERROR", $"Only pending sales orders can be approved (current: {so.Status}).");
         if (so.CreatedBy == approver.Id) return (null, "SO_APPROVAL_ERROR", "Maker-checker: the creator cannot approve their own sales order.");
         if (!approver.Has("so:approve")) return (null, "FORBIDDEN", "so:approve permission required.");
-
-        if (reason is not null)
-        {
-            orders.MarkRejected(so, approver.Id, reason);
-            audit.Log(approver, "reject", "sales_order", so.Id, $"SO rejected: {reason}");
-            orders.Save();
-            return (so, null, null);
-        }
 
         // review 2a: the exposure check and the approval commit are serialized per customer —
         // SELECT … FOR UPDATE on the customer row inside the approval transaction means a
@@ -359,10 +354,28 @@ public sealed class SalesOrderService(
         }
 
         orders.MarkConfirmed(so, approver.Id);
-        audit.Log(approver, "approve", "sales_order", so.Id, $"SO approved by {approver.Email}");
+        audit.Log(approver, "approve", "sales_order", so.Id,
+            reason is null ? $"SO approved by {approver.Email}" : $"SO approved by {approver.Email} — note: {reason}");
         audit.Emit(approver, "sales.so.approved", new { soId = so.Id, approver = approver.Id });
         orders.Save();
         if (ownsTx) tx!.Commit();
+        return (so, null, null);
+    }
+
+    // Rejection is its own decision: requires a reason, lands the SO in Rejected.
+    public (SalesOrder? order, string? code, string? message) Reject(CurrentUser approver, string soId, string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            return (null, "DECISION_REASON_REQUIRED", "A rejection reason is required.");
+        var so = orders.Find(soId);
+        if (so is null) return (null, "SO_NOT_FOUND", "Sales order not found.");
+        if (so.Status != SoStatus.PendingApproval) return (null, "SO_APPROVAL_ERROR", $"Only pending sales orders can be rejected (current: {so.Status}).");
+        if (so.CreatedBy == approver.Id) return (null, "SO_APPROVAL_ERROR", "Maker-checker: the creator cannot reject their own sales order.");
+        if (!approver.Has("so:approve")) return (null, "FORBIDDEN", "so:approve permission required.");
+
+        orders.MarkRejected(so, approver.Id, reason);
+        audit.Log(approver, "reject", "sales_order", so.Id, $"SO rejected: {reason}");
+        orders.Save();
         return (so, null, null);
     }
 

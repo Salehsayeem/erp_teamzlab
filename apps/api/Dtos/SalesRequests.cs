@@ -6,6 +6,7 @@ public record CreateCustomerRequest(string Name, string TaxId, string Email,
     decimal? CreditLimit = null, int PaymentTermNetDays = 30, bool RemindersSuppressed = false);
 public record CreateSoRequest(string CustomerId, IReadOnlyList<SoLine> Lines, string? SourceQuoteRevisionId = null);
 public record ApproveSoRequest(string? Reason);
+public record RejectSoRequest(string? Reason);
 // ExpectedDate (037): stamped on the line when a shipment leaves a measurable remainder
 public record ShipRequest(string ItemSku, decimal Qty, DateOnly? ExpectedDate = null);
 public record ReleaseCreditRequest();
