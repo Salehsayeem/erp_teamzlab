@@ -43,10 +43,56 @@ const TASK_TONES: Record<string, BadgeTone> = {
   NotApplicable: "muted",
 };
 
+// Task table, hoisted to module level (P1 review 2): an inline component was recreated every
+// render, remounting the tabs (and losing focus) whenever the gate panel state changed.
+function TaskRows({ rows, f, onPick, onNa }: {
+  rows: CloseTaskRow[];
+  f: Dict["fin"]["close"];
+  onPick: (r: CloseTaskRow) => void;
+  onNa: (r: CloseTaskRow) => void;
+}) {
+  if (rows.length === 0) return <EmptyState title={f.empty} />;
+  return (
+    <Table
+      caption={f.title}
+      rows={rows}
+      columns={[
+        { key: "id", label: f.columns.id, mono: true, render: (r) => r.id },
+        { key: "task", label: f.columns.task, render: (r) => (
+          <span>
+            {r.title}{" "}
+            {r.mandatory
+              ? <Badge tone="danger">{f.mandatory}</Badge>
+              : <span className="t-caption">{f.optional}</span>}
+          </span>
+        ) },
+        { key: "period", label: f.columns.period, mono: true, render: (r) => r.periodId },
+        { key: "due", label: f.columns.due, mono: true, render: (r) => r.dueDate ?? "—" },
+        { key: "state", label: f.columns.state, render: (r) => (
+          <Badge tone={TASK_TONES[r.status] ?? "muted"}>{r.status}</Badge>
+        ) },
+        { key: "evidence", label: f.columns.evidence, render: (r) => {
+          if (r.status === "Completed") return <span className="t-caption">{f.evidenceDone.replace("{ref}", r.evidenceRef ?? "")}</span>;
+          if (r.status === "Waived") return <span className="t-caption">{f.waivedDone.replace("{reason}", r.waiverReason ?? "")}</span>;
+          if (r.status === "NotApplicable") return <span className="t-caption">{f.naDone.replace("{reason}", r.naReason ?? "")}</span>;
+          return "—";
+        } },
+        { key: "actions", label: f.columns.actions, render: (r) =>
+          r.status === "Pending" ? (
+            <div className="row-actions">
+              <Button onClick={() => onPick(r)}>{f.completeAction}</Button>
+              <Button variant="secondary" onClick={() => onNa(r)}>{f.naAction}</Button>
+            </div>
+          ) : null },
+      ]}
+    />
+  );
+}
+
 // Finance close (062/063): the checklist dashboard buckets tasks overdue / blocked / open /
 // complete (Tabs with roving arrows), completes with evidence or an authorized waiver, marks
 // N/A with a reason, and the gate-close panel lists the blocking task ids before confirming.
-// Errors surface in-modal / in-panel - never hidden.
+// All four states render explicitly; errors surface in-modal / in-panel - never hidden.
 export default function CloseChecklistsPage() {
   const params = useParams<{ locale: string }>();
   const locale: Locale = isLocale(params.locale) ? params.locale : "en";
@@ -56,7 +102,6 @@ export default function CloseChecklistsPage() {
   const [tasks, setTasks] = useState<CloseTaskRow[] | null>(null);
   const [periods, setPeriods] = useState<FiscalPeriodRow[] | null>(null);
   const [phase, setPhase] = useState<Phase>("loading");
-  const [banner, setBanner] = useState<string | null>(null);
   const [tab, setTab] = useState("overdue");
 
   const [completing, setCompleting] = useState<CloseTaskRow | null>(null);
@@ -172,48 +217,20 @@ export default function CloseChecklistsPage() {
 
   const gateBlockers = (gateTasks ?? []).filter((r) => r.status === "Pending" && r.mandatory);
 
-  function TaskRows({ rows }: { rows: CloseTaskRow[] }) {
-    if (rows.length === 0) return <EmptyState title={f.empty} />;
-    return (
-      <Table
-        caption={f.title}
-        rows={rows}
-        columns={[
-          { key: "id", label: f.columns.id, mono: true, render: (r) => r.id },
-          { key: "task", label: f.columns.task, render: (r) => (
-            <span>
-              {r.title}{" "}
-              {r.mandatory
-                ? <Badge tone="danger">{f.mandatory}</Badge>
-                : <span className="t-caption">{f.optional}</span>}
-            </span>
-          ) },
-          { key: "period", label: f.columns.period, mono: true, render: (r) => r.periodId },
-          { key: "due", label: f.columns.due, mono: true, render: (r) => r.dueDate ?? "—" },
-          { key: "state", label: f.columns.state, render: (r) => (
-            <Badge tone={TASK_TONES[r.status] ?? "muted"}>{r.status}</Badge>
-          ) },
-          { key: "evidence", label: f.columns.evidence, render: (r) => {
-            if (r.status === "Completed") return <span className="t-caption">{f.evidenceDone.replace("{ref}", r.evidenceRef ?? "")}</span>;
-            if (r.status === "Waived") return <span className="t-caption">{f.waivedDone.replace("{reason}", r.waiverReason ?? "")}</span>;
-            if (r.status === "NotApplicable") return <span className="t-caption">{f.naDone.replace("{reason}", r.naReason ?? "")}</span>;
-            return "—";
-          } },
-          { key: "actions", label: f.columns.actions, render: (r) =>
-            r.status === "Pending" ? (
-              <div className="row-actions">
-                <Button onClick={() => { setCompleting(r); setCompleteForm({ evidence: "", waiver: false, waiverReason: "" }); setCompleteError(null); }}>
-                  {f.completeAction}
-                </Button>
-                <Button variant="secondary" onClick={() => { setNaTarget(r); setNaReason(""); setNaError(null); }}>
-                  {f.naAction}
-                </Button>
-              </div>
-            ) : null },
-        ]}
-      />
-    );
+  function openComplete(r: CloseTaskRow) {
+    setCompleting(r);
+    setCompleteForm({ evidence: "", waiver: false, waiverReason: "" });
+    setCompleteError(null);
   }
+
+  function openNa(r: CloseTaskRow) {
+    setNaTarget(r);
+    setNaReason("");
+    setNaError(null);
+  }
+
+  if (!ready || phase === "loading") return <LoadingSkeleton rows={7} label={t.common.loading} />;
+  if (phase === "error") return <ErrorState message={f.loadFailed} retryLabel={t.common.retry} onRetry={() => void load()} />;
 
   return (
     <div className="stack">
@@ -221,17 +238,16 @@ export default function CloseChecklistsPage() {
         <h1 className="t-display">{f.title}</h1>
         <p className="t-caption">{f.subtitle}</p>
       </div>
-      {banner ? <p className="banner" role="alert">{banner}</p> : null}
 
       <Tabs
         label={f.title}
         activeId={tab}
         onChange={setTab}
         tabs={[
-          { id: "overdue", label: `${f.tabs.overdue} (${buckets.overdue.length})`, content: <TaskRows rows={buckets.overdue} /> },
-          { id: "blocked", label: `${f.tabs.blocked} (${buckets.blocked.length})`, content: <TaskRows rows={buckets.blocked} /> },
-          { id: "open", label: `${f.tabs.open} (${buckets.open.length})`, content: <TaskRows rows={buckets.open} /> },
-          { id: "complete", label: `${f.tabs.complete} (${buckets.complete.length})`, content: <TaskRows rows={buckets.complete} /> },
+          { id: "overdue", label: `${f.tabs.overdue} (${buckets.overdue.length})`, content: <TaskRows rows={buckets.overdue} f={f} onPick={openComplete} onNa={openNa} /> },
+          { id: "blocked", label: `${f.tabs.blocked} (${buckets.blocked.length})`, content: <TaskRows rows={buckets.blocked} f={f} onPick={openComplete} onNa={openNa} /> },
+          { id: "open", label: `${f.tabs.open} (${buckets.open.length})`, content: <TaskRows rows={buckets.open} f={f} onPick={openComplete} onNa={openNa} /> },
+          { id: "complete", label: `${f.tabs.complete} (${buckets.complete.length})`, content: <TaskRows rows={buckets.complete} f={f} onPick={openComplete} onNa={openNa} /> },
         ]}
       />
 
