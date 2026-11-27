@@ -73,7 +73,12 @@ export default function AppSidebar({
     },
     {
       heading: dict.nav.groups.finance,
-      items: [{ href: "finance/journals", label: dict.nav.journals }],
+      items: [
+        { href: "finance/journals", label: dict.nav.journals },
+        { href: "finance/currencies", label: dict.nav.currencies },
+        { href: "finance/dimensions", label: dict.nav.dimensions },
+        { href: "finance/number-series", label: dict.nav.numberSeries },
+      ],
     },
     {
       heading: dict.nav.groups.people,
