@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Erp.Api.Data;
+using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 // FINANCE-deep P5 foundations (ERP-FINANCE-002/003/006/007/008/016): currency/FX master with
@@ -35,7 +37,8 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         res = await PostAsync("/api/v1/dimension-values",
             new { setCode = "Region", value = "R-1", effectiveFrom = new DateOnly(2026, 1, 1) }, Fin);
         Assert.True(res.StatusCode is HttpStatusCode.Created or HttpStatusCode.Conflict, $"R-1: {(int)res.StatusCode}");
-        // inactive value with a CLOSED interval — usable only for dates inside 2026 Q1
+        // inactive value with a CLOSED interval — a rejection fixture for new postings (fix round:
+        // Active=true is required for new drafts at any date; only posted history may reference it)
         res = await PostAsync("/api/v1/dimension-values",
             new { setCode = "Region", value = "R-2", effectiveFrom = new DateOnly(2026, 1, 1), effectiveTo = new DateOnly(2026, 3, 31), active = false }, Fin);
         Assert.True(res.StatusCode is HttpStatusCode.Created or HttpStatusCode.Conflict, $"R-2: {(int)res.StatusCode}");
@@ -59,6 +62,13 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         await using var stream = await res.Content.ReadAsStreamAsync();
         using var doc = await JsonDocument.ParseAsync(stream);
         return doc.RootElement.Clone();
+    }
+
+    private async Task<HttpResponseMessage> GetRawAsync(string path, string token)
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
+        return await client.GetAsync(path);
     }
 
     private static async Task<JsonElement> Json(HttpResponseMessage res)
@@ -120,9 +130,10 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
 
     // 003 AC1/AC2 — a line missing a required dimension is rejected LINE-LEVEL naming the
     // dimension; a value outside its effective interval (or not in the permitted set) is
-    // rejected; a historical line may reference an INACTIVE value inside its interval.
+    // rejected; NEW postings must cite an ACTIVE value (fix round) — only lines already
+    // posted while the value was active keep referencing it without re-validation.
     [Fact]
-    public async Task Missing_Required_Dimension_Rejected_Line_Level_Inactive_In_Interval_Allowed()
+    public async Task Missing_Required_Dimension_Rejected_Line_Level_And_Inactive_Value_Rejected_For_New_Postings()
     {
         await EnsureRegion(); // the required set + R-1 (open) + R-2 (inactive, 2026 Q1 only)
 
@@ -158,14 +169,28 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.BadRequest, outside.StatusCode);
         Assert.Contains("Region", (await Json(outside)).GetProperty("error").GetProperty("message").GetString());
 
-        // AC2 (historical): inactive R-2 INSIDE its interval on a 2026-01-15 line → drafts fine
+        // fix round: Active=true is required for NEW postings (any date) — seeded CC-002 is
+        // inactive INSIDE its 2026 interval, so a new line citing it is rejected even in-interval
+        // (Region dims present so the required-dimension check is not what rejects)
+        var inactive = await PostAsync("/api/v1/journals", new
+        {
+            memo = "dimension inactive probe",
+            lines = new[] { Line("5100", "Cost of Goods Sold", 10m, 0m, dimensions: new Dictionary<string, string> { ["Region"] = "R-1", ["CostCenter"] = "CC-002" }), Line("2100", "Accounts Payable", 0m, 10m, dimensions: new Dictionary<string, string> { ["Region"] = "R-1", ["CostCenter"] = "CC-002" }) },
+            date = Today,
+        }, Fin);
+        Assert.Equal(HttpStatusCode.BadRequest, inactive.StatusCode);
+        Assert.Contains("CC-002", (await Json(inactive)).GetProperty("error").GetProperty("message").GetString());
+
+        // the back-dated draft the pre-fix suite accepted is rejected the same way — AC2 now
+        // means only that POSTED lines are never re-validated when a value is later deactivated
         var historical = await PostAsync("/api/v1/journals", new
         {
             memo = "dimension historical probe",
             lines = new[] { Line("5100", "Cost of Goods Sold", 10m, 0m, dimensions: new Dictionary<string, string> { ["Region"] = "R-2" }), Line("2100", "Accounts Payable", 0m, 10m, dimensions: new Dictionary<string, string> { ["Region"] = "R-2" }) },
             date = new DateOnly(2026, 1, 15),
         }, Fin);
-        Assert.Equal(HttpStatusCode.Created, historical.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, historical.StatusCode);
+        Assert.Contains("R-2", (await Json(historical)).GetProperty("error").GetProperty("message").GetString());
     }
 
     // 006 AC1/AC2 — unknown/inactive currency rejected at journal create; zero/2/3-decimal
@@ -198,7 +223,7 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.BadRequest, inactive.StatusCode);
         Assert.Contains("TST", (await Json(inactive)).GetProperty("error").GetProperty("message").GetString());
 
-        // JPY settles at 0 decimals — a fractional amount is rejected naming the currency + scale
+        // JPY settles at 0 decimals — a fractional TRANSACTION amount is rejected naming the currency + scale
         var scale = await PostAsync("/api/v1/journals", new
         {
             memo = "jpy scale probe",
@@ -209,6 +234,31 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         var scaleBody = await Json(scale);
         Assert.Equal("VALIDATION_ERROR", scaleBody.GetProperty("error").GetProperty("code").GetString());
         Assert.Contains("JPY", scaleBody.GetProperty("error").GetProperty("message").GetString());
+
+        // fix round: Debit/Credit are FUNCTIONAL-currency amounts (BDT, 2dp) — the LINE currency's
+        // scale only governs amountInCurrency. A 2dp functional debit on a 0dp JPY line is legal
+        // when the transaction amount stays 0dp; the pre-fix check falsely rejected it on JPY scale.
+        var jpyOk = await PostAsync("/api/v1/journals", new
+        {
+            memo = "jpy functional scale probe",
+            lines = new[] { Line("1400", "Inventory", 100.55m, 0m, currency: "JPY", amountInCurrency: 100m, dimensions: Region), Line("2100", "Accounts Payable", 0m, 100.55m, dimensions: Region) },
+            date = prior,
+        }, Fin);
+        Assert.Equal(HttpStatusCode.Created, jpyOk.StatusCode);
+
+        // ...while a functional debit beyond the FUNCTIONAL currency's own scale is rejected even
+        // on a 3dp line currency whose transaction amount is perfectly in BHD scale
+        await PostAsync("/api/v1/currencies", new { code = "BHD", name = "Bahraini Dinar", decimalScale = 3 }, Fin);
+        var bhd = await PostAsync("/api/v1/journals", new
+        {
+            memo = "functional scale violation probe",
+            lines = new[] { Line("1400", "Inventory", 10.555m, 0m, currency: "BHD", amountInCurrency: 10.555m, dimensions: Region), Line("2100", "Accounts Payable", 0m, 10.555m, dimensions: Region) },
+            date = prior,
+        }, Fin);
+        Assert.Equal(HttpStatusCode.BadRequest, bhd.StatusCode);
+        var bhdBody = await Json(bhd);
+        Assert.Equal("VALIDATION_ERROR", bhdBody.GetProperty("error").GetProperty("code").GetString());
+        Assert.Contains("BDT", bhdBody.GetProperty("error").GetProperty("message").GetString());
 
         // valid USD line drafts and stores the transaction currency on the line (007 AC1)
         var (ok, journalId) = await CreateDraft("usd line probe", new[]
@@ -225,8 +275,10 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
     }
 
     // 008 AC1/AC2 — resolution returns EXACTLY ONE approved rate per pair/date/type or a
-    // blocking error (FX_RATE_MISSING / FX_RATE_AMBIGUOUS, no silent fallback); provenance is
-    // stored (source, retrieved-at, precision, rate date); approval is maker-checked.
+    // blocking error (FX_RATE_MISSING / FX_RATE_AMBIGUOUS, no silent fallback); approving a
+    // second rate over an approved one is refused up front (no state change) and the recovery
+    // path is withdraw-with-reason; provenance is stored (source, retrieved-at, precision,
+    // rate date); approval is maker-checked.
     [Fact]
     public async Task Fx_Resolution_Exactly_One_Or_Blocked_Provenance_And_Maker_Checker()
     {
@@ -238,10 +290,13 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         Assert.Equal("Approved", ok.GetProperty("data").GetProperty("status").GetString());
         Assert.Equal(4, ok.GetProperty("data").GetProperty("precision").GetInt32());
 
-        // no rate for the pair → blocking missing, never a fallback
-        var missing = await GetAsync("/api/v1/fx-rates/resolve?base=USD&quote=EUR&date=2026-01-01&type=Spot", Fin);
+        // no rate for the pair → blocking missing, never a fallback; missing reference data is
+        // a 404, not a state conflict (fix round)
+        var missingRes = await GetRawAsync("/api/v1/fx-rates/resolve?base=USD&quote=EUR&date=2026-01-01&type=Spot", Fin);
+        var missing = await Json(missingRes);
         Assert.False(missing.GetProperty("success").GetBoolean());
         Assert.Equal("FX_RATE_MISSING", missing.GetProperty("error").GetProperty("code").GetString());
+        Assert.Equal(HttpStatusCode.NotFound, missingRes.StatusCode);
 
         // create a second USD→BDT rate for the same date/type; approver must differ from preparer
         var res = await PostAsync("/api/v1/fx-rates", new
@@ -258,6 +313,34 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Conflict, self.StatusCode);
         Assert.Equal("FX_RATE_APPROVAL_ERROR", (await Json(self)).GetProperty("error").GetProperty("code").GetString());
 
+        // fix round: approving a second rate for an already-approved key is refused up front —
+        // FX_RATE_AMBIGUOUS with NO state change (recovery is withdrawal, never a silent pick)
+        var second = await PostAsync($"/api/v1/fx-rates/{rateId}/approvals", new { }, Admin);
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        Assert.Equal("FX_RATE_AMBIGUOUS", (await Json(second)).GetProperty("error").GetProperty("code").GetString());
+        var stillPending = await GetAsync("/api/v1/fx-rates", Fin);
+        Assert.Equal("Pending", stillPending.GetProperty("data").EnumerateArray()
+            .First(r => r.GetProperty("id").GetString() == rateId).GetProperty("status").GetString());
+
+        // withdrawal without a reason is a 400 — the reason is the recovery audit trail
+        var noReason = await PostAsync("/api/v1/fx-rates/FXR-0001/withdrawals", new { }, Fin);
+        Assert.Equal(HttpStatusCode.BadRequest, noReason.StatusCode);
+
+        // (b) recovery path: withdraw the approved rate, then the pending one approves cleanly
+        var withdrawn = await PostAsync("/api/v1/fx-rates/FXR-0001/withdrawals",
+            new { reason = "superseded by corrected bank feed" }, Fin);
+        Assert.Equal(HttpStatusCode.OK, withdrawn.StatusCode);
+        Assert.Equal("Withdrawn", (await Json(withdrawn)).GetProperty("data").GetProperty("status").GetString());
+
+        // a Pending rate withdraws too — and a withdrawn rate can never be approved afterwards
+        var withdrawPending = await PostAsync("/api/v1/fx-rates/FXR-0002/withdrawals",
+            new { reason = "seed pair retired" }, Admin);
+        Assert.Equal(HttpStatusCode.OK, withdrawPending.StatusCode);
+        var approveWithdrawn = await PostAsync("/api/v1/fx-rates/FXR-0002/approvals", new { }, Admin);
+        Assert.Equal(HttpStatusCode.Conflict, approveWithdrawn.StatusCode);
+        Assert.Equal("FX_RATE_APPROVAL_ERROR", (await Json(approveWithdrawn)).GetProperty("error").GetProperty("code").GetString());
+
+        // ambiguity resolved: the second rate now approves and resolution returns EXACTLY ONE
         var approved = await PostAsync($"/api/v1/fx-rates/{rateId}/approvals", new { }, Admin);
         Assert.Equal(HttpStatusCode.OK, approved.StatusCode);
         var body = await Json(approved);
@@ -269,10 +352,9 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
         Assert.Equal("FX_RATE_APPROVAL_ERROR", (await Json(again)).GetProperty("error").GetProperty("code").GetString());
 
-        // two approved rates for one pair/date/type → resolution BLOCKS (no silent pick)
-        var ambiguous = await GetAsync("/api/v1/fx-rates/resolve?base=USD&quote=BDT&date=2026-01-01&type=Spot", Fin);
-        Assert.False(ambiguous.GetProperty("success").GetBoolean());
-        Assert.Equal("FX_RATE_AMBIGUOUS", ambiguous.GetProperty("error").GetProperty("code").GetString());
+        var resolved = await GetAsync("/api/v1/fx-rates/resolve?base=USD&quote=BDT&date=2026-01-01&type=Spot", Fin);
+        Assert.True(resolved.GetProperty("success").GetBoolean());
+        Assert.Equal(120m, resolved.GetProperty("data").GetProperty("rate").GetDecimal());
 
         // 404 on approvals against an unknown rate id
         var noRate = await PostAsync("/api/v1/fx-rates/FXR-9999/approvals", new { }, Admin);
@@ -309,6 +391,32 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         var setting = (await Json(res)).GetProperty("data");
         Assert.Equal("USD", setting.GetProperty("value").GetString());
         Assert.Equal(MonthStart(Today).AddMonths(1), DateOnly.Parse(setting.GetProperty("effectiveFrom").GetString()!));
+
+        // ratified ruling: with a single-row upsert there is no previous value to resolve a
+        // pre-effective draft against — a draft dated BEFORE the pending change is rejected,
+        // naming the pending change and both dates
+        var stale = await PostAsync("/api/v1/journals", new
+        {
+            memo = "pre-effective draft probe",
+            lines = new[] { Line("1400", "Inventory", 10m, 0m, dimensions: Region), Line("2100", "Accounts Payable", 0m, 10m, dimensions: Region) },
+            date = Today,
+        }, Fin);
+        Assert.Equal(HttpStatusCode.BadRequest, stale.StatusCode);
+        var staleBody = await Json(stale);
+        Assert.Equal("VALIDATION_ERROR", staleBody.GetProperty("error").GetProperty("code").GetString());
+        var staleMessage = staleBody.GetProperty("error").GetProperty("message").GetString();
+        Assert.Contains("USD", staleMessage);
+        Assert.Contains(MonthStart(Today).AddMonths(1).ToString("yyyy-MM-dd"), staleMessage);
+        Assert.Contains(Today.ToString("yyyy-MM-dd"), staleMessage);
+
+        // drafts dated on/after the effective date use the new value and pass
+        var fresh = await PostAsync("/api/v1/journals", new
+        {
+            memo = "post-effective draft probe",
+            lines = new[] { Line("1400", "Inventory", 10m, 0m, dimensions: Region), Line("2100", "Accounts Payable", 0m, 10m, dimensions: Region) },
+            date = MonthStart(Today).AddMonths(1),
+        }, Fin);
+        Assert.Equal(HttpStatusCode.Created, fresh.StatusCode);
 
         // a bogus functional currency is rejected
         var bogus = await PostAsync("/api/v1/finance-settings", new
@@ -443,13 +551,14 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         await Sweep("/api/v1/number-series/J/voids", new { number = "J-0002", reason = "sweep" });
         await Sweep("/api/v1/dimension-sets", new { code = "NOPE", name = "Nope", required = false });
 
-        // the maker path is open: R-FIN2 carries journals:write
-        var prior = MonthStart(Today).AddMonths(-1).AddDays(14);
+        // the maker path is open: R-FIN2 carries journals:write (dated on/after any pending
+        // functional-currency change this class may have recorded — see the 007 test)
+        var nextMonthMid = MonthStart(Today).AddMonths(1).AddDays(14);
         var (made, _) = await CreateDraftAs(FinMaker, "r-fin2 maker probe", new[]
         {
             Line("1400", "Inventory", 5m, 0m, dimensions: Region),
             Line("2100", "Accounts Payable", 0m, 5m, dimensions: Region),
-        }, prior);
+        }, nextMonthMid);
         Assert.Equal(HttpStatusCode.Created, made.StatusCode);
 
         // R-FIN succeeds where the maker was blocked
@@ -466,5 +575,30 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         if (res.StatusCode != HttpStatusCode.Created)
             Assert.Fail($"journal create {(int)res.StatusCode}: {await res.Content.ReadAsStringAsync()}");
         return (res, (await Json(res)).GetProperty("data").GetProperty("id").GetString()!);
+    }
+
+    // 016 fix round — concurrent double-void race: the AlreadyVoided pre-check is read-then-write,
+    // so two racing voids of one number can both pass it. Deterministic barrier (house race form,
+    // JournalRaceHardeningTests): an UNCOMMITTED void row for the same number is invisible to the
+    // request's READ COMMITTED pre-check, so its INSERT parks on the unique index; committing the
+    // barrier wakes it with a 23505 that must surface as 409 NUMBER_ALREADY_VOIDED — never a 500.
+    // The FXR prefix keeps the J-series voidedCount assertion in the 016 test order-independent.
+    [Fact]
+    public async Task Concurrent_Void_Of_The_Same_Number_Is_A_Conflict_Not_A_Server_Error()
+    {
+        var options = new DbContextOptionsBuilder<ErpDbContext>().UseNpgsql(_factory.ConnectionString).Options;
+        await using var db = new ErpDbContext(options);
+        await using var tx = await db.Database.BeginTransactionAsync();
+        db.NumberSeriesVoids.Add(new Erp.Api.NumberSeriesVoid("NSV-FXR-9999", "T-001", "LE-001", "FXR", "FXR-9999",
+            "barrier: parked so the HTTP void races the unique index", "U-001", DateTimeOffset.UtcNow));
+        db.SaveChanges(); // inside the explicit transaction — deliberately not committed yet
+
+        var httpVoid = PostAsync("/api/v1/number-series/FXR/voids", new { number = "FXR-9999", reason = "printed twice" }, Fin);
+        await Task.Delay(2000); // the HTTP insert is now parked behind the barrier's index entry
+        await tx.CommitAsync();
+
+        var res = await httpVoid;
+        Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
+        Assert.Equal("NUMBER_ALREADY_VOIDED", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
     }
 }
