@@ -128,6 +128,11 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAccountService, AccountService>();
         services.AddScoped<ITaxCodeService, TaxCodeService>();
         services.AddScoped<IFinanceAgingService, FinanceAgingService>();
+        // FINANCE-deep P5 foundations — one scoped CurrencyService serves both faces (008: the
+        // resolver is consumed by later phases and by GET fx-rates/resolve)
+        services.AddScoped<ICurrencyService, CurrencyService>();
+        services.AddScoped<IFxRateResolver, CurrencyService>();
+        services.AddScoped<IDimensionService, DimensionService>();
         return services;
     }
 }

@@ -195,6 +195,12 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<TaxCode> TaxCodes => Set<TaxCode>();
     public DbSet<FinanceSetting> FinanceSettings => Set<FinanceSetting>();
+    // FINANCE-deep P5 foundations (006/007/008/003/016): currency/FX master, dimensions, voids
+    public DbSet<Currency> Currencies => Set<Currency>();
+    public DbSet<FxRate> FxRates => Set<FxRate>();
+    public DbSet<DimensionSet> DimensionSets => Set<DimensionSet>();
+    public DbSet<DimensionValue> DimensionValues => Set<DimensionValue>();
+    public DbSet<NumberSeriesVoid> NumberSeriesVoids => Set<NumberSeriesVoid>();
     public DbSet<User> Users => Set<User>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<Membership> Memberships => Set<Membership>();
@@ -2158,6 +2164,11 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                 l.Property<string>("LegalEntityId");
                 l.HasIndex("JournalId");
                 l.HasIndex("TenantId", "LegalEntityId");
+                // P5 (003): line dimension assignments ride as a jsonb bag — read back as a
+                // dictionary, never queried server-side (validation loads the rows it needs)
+                l.Property(x => x.Dimensions).HasColumnType("jsonb").HasConversion(
+                    d => d == null ? null : System.Text.Json.JsonSerializer.Serialize(d, (System.Text.Json.JsonSerializerOptions?)null),
+                    s => string.IsNullOrEmpty(s) ? null : System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(s, (System.Text.Json.JsonSerializerOptions?)null));
             });
         });
 
@@ -2193,6 +2204,49 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             e.ToTable("finance_settings");
             e.HasKey(x => x.Id);
             e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Key }).IsUnique();
+        });
+
+        // -------- FINANCE-deep P5 foundations (tenant+entity on every table from day one) --------
+        mb.Entity<Currency>(e =>
+        {
+            e.ToTable("currencies");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+        });
+
+        mb.Entity<FxRate>(e =>
+        {
+            e.ToTable("fx_rates");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            // 008: the resolver's lookup shape — pair + date + type over approved rows
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.BaseCurrency, x.QuoteCurrency, x.RateDate, x.RateType, x.Status });
+        });
+
+        mb.Entity<DimensionSet>(e =>
+        {
+            e.ToTable("dimension_sets");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Code }).IsUnique();
+        });
+
+        mb.Entity<DimensionValue>(e =>
+        {
+            e.ToTable("dimension_values");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SetCode });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.SetCode, x.Value }).IsUnique();
+        });
+
+        mb.Entity<NumberSeriesVoid>(e =>
+        {
+            e.ToTable("number_series_voids");
+            e.HasKey(x => x.Id);
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId });
+            e.HasIndex(x => new { x.TenantId, x.LegalEntityId, x.Prefix, x.Number }).IsUnique();
         });
     }
 
@@ -2360,9 +2414,13 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                      "req", "rql", "cat", "uom", "bko", "blr", "asn", "ins", "rtn", "clm", "qnr", "evd", "obs",
                      // deferred SALES wave prefixes (AddSalesDeferredScreens): quotes, price
                      // books, recurring schedules, deliveries, RMAs, receipt candidates, rebates
-                     "qte", "pbl", "rcs", "dlv", "rma", "rcp", "rbt" })
+                     "qte", "pbl", "rcs", "dlv", "rma", "rcp", "rbt",
+                     // FINANCE-deep P5 (AddFinanceDeepP5): FX rates. StartsAt 3 because FXR-0001/
+                     // FXR-0002 are seeded rows — the same A-0001 convention.
+                     "fxr" })
             mb.HasSequence<long>($"doc_{prefix}");
         mb.HasSequence<long>("doc_a", s => s.StartsAt(2));
+        mb.HasSequence<long>("doc_fxr", s => s.StartsAt(3));
     }
 
     private static void SnakeCaseAllColumns(ModelBuilder mb)
@@ -2409,7 +2467,19 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
                     // server-side); then deferred PROCUREMENT additions: requisitions approve/read/
                     // override, suppliers:review, analytics:read
                     "leave:adjust", "payroll:release", "payroll:close", "people:analytics:read",
-                    "requisitions:approve", "requisitions:read", "requisitions:override", "suppliers:review", "analytics:read" }, TenantId = t, LegalEntityId = le },
+                    "requisitions:approve", "requisitions:read", "requisitions:override", "suppliers:review", "analytics:read",
+                    // FINANCE-deep wave: the FULL §3 superset union ships NOW so later phases
+                    // (P1 periods/close, P2 tax publish, P3 AP, P4 AR/GL) never re-union this row
+                    // (merge lesson: UpdateData replaces the whole permissions column, never a
+                    // delta). fx:read/fx:write = currency/FX admin (006/008) + number-series admin
+                    // (016); close:write/close:approve (062/063); tax:publish (042);
+                    // ap:write/approve/override (019–026); ar:write (028–030); gl:write (018).
+                    "fx:read", "fx:write", "close:write", "close:approve", "tax:publish",
+                    "ap:write", "ap:approve", "ap:override", "ar:write", "gl:write" }, TenantId = t, LegalEntityId = le },
+            // FINANCE-deep Q-F6: the maker-only finance role (mirrors R-PROC2) — journals:write,
+            // tax read/write, ap read/write, ar:write, periods:read; NO approve/publish/close/fx —
+            // every money gate stays with R-FIN proper so U-015 can draft but never release
+            new { Id = "R-FIN2", Name = "finance_maker", Permissions = new[] { "journals:write", "periods:read", "tax:read", "tax:write", "ap:read", "ap:write", "ar:write" }, TenantId = t, LegalEntityId = le },
             new { Id = "R-SALES", Name = "sales_officer", Permissions = new[] { "customers:write", "so:write", "shipments:write",
                     "so:approve",
                     "leads:read", "leads:write", "crm:read", "crm:write", "opps:read", "opps:write",
@@ -2480,7 +2550,10 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             // test time, and a seeded U-013 would break that fixture's bootstrap
             // Q-S1: second sales user — quote/amendment maker-checker needs a sales-capable
             // approver that is not U-004 (instance-level approver ≠ issuer, 023/034)
-            new { Id = "U-014", Email = "sales-manager@teamzlab.dev", DisplayName = "Sales Manager", Active = true, TenantId = t, LegalEntityId = le });
+            new { Id = "U-014", Email = "sales-manager@teamzlab.dev", DisplayName = "Sales Manager", Active = true, TenantId = t, LegalEntityId = le },
+            // FINANCE-deep Q-F6: second finance user for maker-checker (mirrors U-009/U-010).
+            // U-013 stays RESERVED (MFG WaveD fixture), U-014 taken (SALES manager) — next free id
+            new { Id = "U-015", Email = "fin-checker@teamzlab.dev", DisplayName = "Finance Checker", Active = true, TenantId = t, LegalEntityId = le });
 
         mb.Entity<Membership>().HasData(
             new Membership("U-001", t, le, "R-ADMIN"),
@@ -2495,7 +2568,8 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new Membership("U-009", t, le, "R-PROC2"),
             new Membership("U-011", t, le, "R-QC"),
             new Membership("U-012", t, le, "R-MFG"),
-            new Membership("U-014", t, le, "R-SALES"));
+            new Membership("U-014", t, le, "R-SALES"),
+            new Membership("U-015", t, le, "R-FIN2"));
 
         mb.Entity<AuditEvent>().HasData(new
         {
@@ -2553,6 +2627,47 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
         // downtime validator fails closed when the row is missing
         mb.Entity<FinanceSetting>().HasData(
             new FinanceSetting("FS-mfg-downtime", t, le, "mfg.downtime_reasons", "SETUP,MACHINE_DOWN,TOOL_CHANGE,NO_OPERATOR,MATERIAL_SHORT,QUALITY_STOP"));
+
+        // -------- FINANCE-deep P5 foundations (006/007/008/003) --------
+        // currency master: the 0/2/3 settlement-scale family (006 AC2) — BDT is the entity's
+        // functional currency, USD the demo foreign pair, JPY the 0-decimal edge
+        mb.Entity<Currency>().HasData(
+            new Currency("CUR-BDT", t, le, "BDT", "Bangladeshi Taka", 2, true),
+            new Currency("CUR-USD", t, le, "USD", "US Dollar", 2, true),
+            new Currency("CUR-JPY", t, le, "JPY", "Japanese Yen", 0, true));
+
+        // 008: one approved USD→BDT rate WITH full provenance (the resolver's happy fixture) and
+        // one pending JPY→BDT rate so the approval path has something to act on. doc_fxr starts
+        // at 3 so API-created ids never collide with these rows.
+        mb.Entity<FxRate>().HasData(
+            new FxRate("FXR-0001", t, le, "USD", "BDT", new DateOnly(2026, 1, 1), FxRateType.Spot, 122.5000m, 4,
+                "seed:bn-bank-indicator", new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+                FxRateStatus.Approved, "system", "system", new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)),
+            new FxRate("FXR-0002", t, le, "JPY", "BDT", new DateOnly(2026, 1, 1), FxRateType.Spot, 0.8200m, 4,
+                "seed:bn-bank-indicator", new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero),
+                FxRateStatus.Pending, "system"));
+
+        // 003 demo dimension set. RULING: Required ships FALSE — a REQUIRED seeded set would put
+        // a dimension gate under every existing journal create (all prior waves' tests + flows);
+        // P5 tests create their own required set, later phases may flip this row via the API.
+        mb.Entity<DimensionSet>().HasData(
+            new DimensionSet("DS-CostCenter", t, le, "CostCenter", "Cost Center", false, true));
+
+        // permitted values with their own intervals: CC-001 open-ended active; CC-002 INACTIVE but
+        // still inside its 2026 interval — after the P5 fix round this is a REJECTION fixture for
+        // NEW postings (Active+interval required at create; 003 AC2's inactive-in-interval clause
+        // lives on for POSTED history only, which is never re-validated)
+        mb.Entity<DimensionValue>().HasData(
+            new DimensionValue("DV-CostCenter-CC-001", t, le, "CostCenter", "CC-001", new DateOnly(2026, 1, 1), null, true),
+            new DimensionValue("DV-CostCenter-CC-002", t, le, "CostCenter", "CC-002", new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31), false));
+
+        // 007 (ratified ruling, fix round): the functional currency is a single-row upsert — a
+        // change overwrites the row with its EffectiveFrom, so journal drafts dated BEFORE that
+        // date are rejected (there is no previous value left to resolve against) and drafts
+        // on/after it use the new value. Posted journals are never restated — their functional
+        // amounts are stored on the lines; the change trail lives in audit_events.
+        mb.Entity<FinanceSetting>().HasData(
+            new FinanceSetting("FS-functional-currency", t, le, "finance.functional_currency", "BDT", new DateOnly(2026, 1, 1)));
 
         // deferred PROCUREMENT follow-up (click-through fu-2): the taxonomy a requisition
         // submission consumes on a brand-new database — the EA unit the web requisition form

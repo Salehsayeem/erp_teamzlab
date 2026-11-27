@@ -16,7 +16,7 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
     // If you encounter a merge conflict in the line below, it means you need to
     // discard one of the migration branches and recreate its migrations on top of
     // the other branch. See https://aka.ms/efcore-docs-migrations-conflicts for more info.
-    public override string LastMigrationId => "20261127150951_AddProcurementTaxonomySeed";
+    public override string LastMigrationId => "20261127151812_AddFinanceDeepP5";
 
     protected override void BuildModel(ModelBuilder modelBuilder)
     {
@@ -103,6 +103,9 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
         modelBuilder.HasSequence("doc_fa");
 
         modelBuilder.HasSequence("doc_fae");
+
+        modelBuilder.HasSequence("doc_fxr")
+            .StartsAt(3L);
 
         modelBuilder.HasSequence("doc_grd");
 
@@ -2818,6 +2821,82 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.ToTable("crm_cases");
             });
 
+        modelBuilder.Entity("Erp.Api.Currency", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<bool>("Active")
+                    .HasColumnType("boolean")
+                    .HasColumnName("active");
+
+                b.Property<string>("Code")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("code");
+
+                b.Property<int>("DecimalScale")
+                    .HasColumnType("integer")
+                    .HasColumnName("decimal_scale");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("Name")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("name");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "Code")
+                    .IsUnique();
+
+                b.ToTable("currencies");
+
+                b.HasData(
+                    new
+                    {
+                        Id = "CUR-BDT",
+                        Active = true,
+                        Code = "BDT",
+                        DecimalScale = 2,
+                        LegalEntityId = "LE-001",
+                        Name = "Bangladeshi Taka",
+                        TenantId = "T-001"
+                    },
+                    new
+                    {
+                        Id = "CUR-USD",
+                        Active = true,
+                        Code = "USD",
+                        DecimalScale = 2,
+                        LegalEntityId = "LE-001",
+                        Name = "US Dollar",
+                        TenantId = "T-001"
+                    },
+                    new
+                    {
+                        Id = "CUR-JPY",
+                        Active = true,
+                        Code = "JPY",
+                        DecimalScale = 0,
+                        LegalEntityId = "LE-001",
+                        Name = "Japanese Yen",
+                        TenantId = "T-001"
+                    });
+            });
+
         modelBuilder.Entity("Erp.Api.Customer", b =>
             {
                 b.Property<string>("Id")
@@ -3117,6 +3196,135 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .IsUnique();
 
                 b.ToTable("depreciation_runs");
+            });
+
+        modelBuilder.Entity("Erp.Api.DimensionSet", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<bool>("Active")
+                    .HasColumnType("boolean")
+                    .HasColumnName("active");
+
+                b.Property<string>("Code")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("code");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("Name")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("name");
+
+                b.Property<bool>("Required")
+                    .HasColumnType("boolean")
+                    .HasColumnName("required");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "Code")
+                    .IsUnique();
+
+                b.ToTable("dimension_sets");
+
+                b.HasData(
+                    new
+                    {
+                        Id = "DS-CostCenter",
+                        Active = true,
+                        Code = "CostCenter",
+                        LegalEntityId = "LE-001",
+                        Name = "Cost Center",
+                        Required = false,
+                        TenantId = "T-001"
+                    });
+            });
+
+        modelBuilder.Entity("Erp.Api.DimensionValue", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<bool>("Active")
+                    .HasColumnType("boolean")
+                    .HasColumnName("active");
+
+                b.Property<DateOnly>("EffectiveFrom")
+                    .HasColumnType("date")
+                    .HasColumnName("effective_from");
+
+                b.Property<DateOnly?>("EffectiveTo")
+                    .HasColumnType("date")
+                    .HasColumnName("effective_to");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("SetCode")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("set_code");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<string>("Value")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("value");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "SetCode");
+
+                b.HasIndex("TenantId", "LegalEntityId", "SetCode", "Value")
+                    .IsUnique();
+
+                b.ToTable("dimension_values");
+
+                b.HasData(
+                    new
+                    {
+                        Id = "DV-CostCenter-CC-001",
+                        Active = true,
+                        EffectiveFrom = new DateOnly(2026, 1, 1),
+                        LegalEntityId = "LE-001",
+                        SetCode = "CostCenter",
+                        TenantId = "T-001",
+                        Value = "CC-001"
+                    },
+                    new
+                    {
+                        Id = "DV-CostCenter-CC-002",
+                        Active = false,
+                        EffectiveFrom = new DateOnly(2026, 1, 1),
+                        EffectiveTo = new DateOnly(2026, 12, 31),
+                        LegalEntityId = "LE-001",
+                        SetCode = "CostCenter",
+                        TenantId = "T-001",
+                        Value = "CC-002"
+                    });
             });
 
         modelBuilder.Entity("Erp.Api.Dispatch", b =>
@@ -3804,6 +4012,10 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .HasColumnType("text")
                     .HasColumnName("id");
 
+                b.Property<DateOnly?>("EffectiveFrom")
+                    .HasColumnType("date")
+                    .HasColumnName("effective_from");
+
                 b.Property<string>("Key")
                     .IsRequired()
                     .HasColumnType("text")
@@ -3818,6 +4030,14 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .IsRequired()
                     .HasColumnType("text")
                     .HasColumnName("tenant_id");
+
+                b.Property<DateTimeOffset?>("UpdatedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("updated_at");
+
+                b.Property<string>("UpdatedBy")
+                    .HasColumnType("text")
+                    .HasColumnName("updated_by");
 
                 b.Property<string>("Value")
                     .IsRequired()
@@ -3879,6 +4099,15 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                         LegalEntityId = "LE-001",
                         TenantId = "T-001",
                         Value = "SETUP,MACHINE_DOWN,TOOL_CHANGE,NO_OPERATOR,MATERIAL_SHORT,QUALITY_STOP"
+                    },
+                    new
+                    {
+                        Id = "FS-functional-currency",
+                        EffectiveFrom = new DateOnly(2026, 1, 1),
+                        Key = "finance.functional_currency",
+                        LegalEntityId = "LE-001",
+                        TenantId = "T-001",
+                        Value = "BDT"
                     });
             });
 
@@ -4124,6 +4353,119 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.HasIndex("TenantId", "LegalEntityId", "Period");
 
                 b.ToTable("forecast_submissions");
+            });
+
+        modelBuilder.Entity("Erp.Api.FxRate", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<DateTimeOffset?>("ApprovedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("approved_at");
+
+                b.Property<string>("ApprovedBy")
+                    .HasColumnType("text")
+                    .HasColumnName("approved_by");
+
+                b.Property<string>("BaseCurrency")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("base_currency");
+
+                b.Property<string>("CreatedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("created_by");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<int>("Precision")
+                    .HasColumnType("integer")
+                    .HasColumnName("precision");
+
+                b.Property<string>("QuoteCurrency")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("quote_currency");
+
+                b.Property<decimal>("Rate")
+                    .HasColumnType("numeric")
+                    .HasColumnName("rate");
+
+                b.Property<DateOnly>("RateDate")
+                    .HasColumnType("date")
+                    .HasColumnName("rate_date");
+
+                b.Property<int>("RateType")
+                    .HasColumnType("integer")
+                    .HasColumnName("rate_type");
+
+                b.Property<DateTimeOffset>("RetrievedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("retrieved_at");
+
+                b.Property<string>("Source")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("source");
+
+                b.Property<int>("Status")
+                    .HasColumnType("integer")
+                    .HasColumnName("status");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "BaseCurrency", "QuoteCurrency", "RateDate", "RateType", "Status");
+
+                b.ToTable("fx_rates");
+
+                b.HasData(
+                    new
+                    {
+                        Id = "FXR-0001",
+                        ApprovedAt = new DateTimeOffset(new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                        ApprovedBy = "system",
+                        BaseCurrency = "USD",
+                        CreatedBy = "system",
+                        LegalEntityId = "LE-001",
+                        Precision = 4,
+                        QuoteCurrency = "BDT",
+                        Rate = 122.5000m,
+                        RateDate = new DateOnly(2026, 1, 1),
+                        RateType = 0,
+                        RetrievedAt = new DateTimeOffset(new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                        Source = "seed:bn-bank-indicator",
+                        Status = 1,
+                        TenantId = "T-001"
+                    },
+                    new
+                    {
+                        Id = "FXR-0002",
+                        BaseCurrency = "JPY",
+                        CreatedBy = "system",
+                        LegalEntityId = "LE-001",
+                        Precision = 4,
+                        QuoteCurrency = "BDT",
+                        Rate = 0.8200m,
+                        RateDate = new DateOnly(2026, 1, 1),
+                        RateType = 0,
+                        RetrievedAt = new DateTimeOffset(new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified), new TimeSpan(0, 0, 0, 0, 0)),
+                        Source = "seed:bn-bank-indicator",
+                        Status = 0,
+                        TenantId = "T-001"
+                    });
             });
 
         modelBuilder.Entity("Erp.Api.GarnishmentOrder", b =>
@@ -5756,6 +6098,13 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                         TenantId = "T-001",
                         LegalEntityId = "LE-001",
                         RoleId = "R-SALES"
+                    },
+                    new
+                    {
+                        UserId = "U-015",
+                        TenantId = "T-001",
+                        LegalEntityId = "LE-001",
+                        RoleId = "R-FIN2"
                     });
             });
 
@@ -6097,6 +6446,56 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.HasIndex("TenantId", "LegalEntityId", "Status");
 
                 b.ToTable("nonconformances");
+            });
+
+        modelBuilder.Entity("Erp.Api.NumberSeriesVoid", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("Number")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("number");
+
+                b.Property<string>("Prefix")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("prefix");
+
+                b.Property<string>("Reason")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("reason");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<DateTimeOffset>("VoidedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("voided_at");
+
+                b.Property<string>("VoidedBy")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("voided_by");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "Prefix", "Number")
+                    .IsUnique();
+
+                b.ToTable("number_series_voids");
             });
 
         modelBuilder.Entity("Erp.Api.OnboardingTask", b =>
@@ -9431,7 +9830,15 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                         Id = "R-FIN",
                         LegalEntityId = "LE-001",
                         Name = "finance_officer",
-                        Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write", "refunds:approve", "rebates:settle", "forecasts:read", "leave:adjust", "payroll:release", "payroll:close", "people:analytics:read", "requisitions:approve", "requisitions:read", "requisitions:override", "suppliers:review", "analytics:read" },
+                        Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write", "refunds:approve", "rebates:settle", "forecasts:read", "leave:adjust", "payroll:release", "payroll:close", "people:analytics:read", "requisitions:approve", "requisitions:read", "requisitions:override", "suppliers:review", "analytics:read", "fx:read", "fx:write", "close:write", "close:approve", "tax:publish", "ap:write", "ap:approve", "ap:override", "ar:write", "gl:write" },
+                        TenantId = "T-001"
+                    },
+                    new
+                    {
+                        Id = "R-FIN2",
+                        LegalEntityId = "LE-001",
+                        Name = "finance_maker",
+                        Permissions = new[] { "journals:write", "periods:read", "tax:read", "tax:write", "ap:read", "ap:write", "ar:write" },
                         TenantId = "T-001"
                     },
                     new
@@ -12140,6 +12547,15 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                         Email = "sales-manager@teamzlab.dev",
                         LegalEntityId = "LE-001",
                         TenantId = "T-001"
+                    },
+                    new
+                    {
+                        Id = "U-015",
+                        Active = true,
+                        DisplayName = "Finance Checker",
+                        Email = "fin-checker@teamzlab.dev",
+                        LegalEntityId = "LE-001",
+                        TenantId = "T-001"
                     });
             });
 
@@ -13350,13 +13766,25 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                             .HasColumnType("text")
                             .HasColumnName("account_name");
 
+                        b1.Property<decimal?>("AmountInCurrency")
+                            .HasColumnType("numeric")
+                            .HasColumnName("amount_in_currency");
+
                         b1.Property<decimal>("Credit")
                             .HasColumnType("numeric")
                             .HasColumnName("credit");
 
+                        b1.Property<string>("Currency")
+                            .HasColumnType("text")
+                            .HasColumnName("currency");
+
                         b1.Property<decimal>("Debit")
                             .HasColumnType("numeric")
                             .HasColumnName("debit");
+
+                        b1.Property<string>("Dimensions")
+                            .HasColumnType("jsonb")
+                            .HasColumnName("dimensions");
 
                         b1.Property<string>("LegalEntityId")
                             .HasColumnType("text")
