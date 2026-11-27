@@ -61,6 +61,12 @@ public sealed class JournalService(
                 $"Rejected: functional currency change to {functional} effective {effectiveFrom:yyyy-MM-dd}; draft dated {date:yyyy-MM-dd}.");
         var functionalCurrency = db.Currencies.FirstOrDefault(c =>
             c.TenantId == ec.TenantId && c.LegalEntityId == ec.EntityId && c.Code == functional);
+        // F3 ruling (owner, 2026-11-27): fail CLOSED — if the functional currency has no row in
+        // the currency master, the Debit/Credit settlement-scale check cannot run, and silently
+        // skipping it is exactly the hole the check exists to close.
+        if (functionalCurrency is null)
+            return ("VALIDATION_ERROR",
+                $"Functional currency {functional} has no row in the currency master; the settlement-scale check cannot run — configure it before posting.");
         for (var i = 0; i < lines.Count; i++)
         {
             var l = lines[i];
@@ -83,7 +89,7 @@ public sealed class JournalService(
             if (l.AmountInCurrency is { } txn && ScaleOf(txn) > currency.DecimalScale)
                 return ("VALIDATION_ERROR",
                     $"Line {i + 1}: amount {txn} exceeds the {currency.DecimalScale}-decimal settlement scale of {currency.Code}.");
-            if (functionalCurrency is not null)
+            if (functionalCurrency is not null) // always non-null here — fail-closed guard above
                 foreach (var amount in new[] { l.Debit, l.Credit })
                     if (amount is { } v && ScaleOf(v) > functionalCurrency.DecimalScale)
                         return ("VALIDATION_ERROR",

@@ -644,4 +644,45 @@ public class FinanceDeepP5Tests : IClassFixture<TestApiFactory>
         Assert.Equal(HttpStatusCode.Conflict, res.StatusCode);
         Assert.Equal("FX_RATE_AMBIGUOUS", (await Json(res)).GetProperty("error").GetProperty("code").GetString());
     }
+
+    // 006 re-review F3 — RATIFIED fail-closed ruling: if the functional currency resolves to a
+    // code with NO row in the currency master, the Debit/Credit settlement-scale check cannot
+    // run — silently skipping it (the old fail-open guard) is the exact hole the check closes.
+    // The API cannot set an unknown functional currency (CURRENCY_NOT_FOUND guard), so the
+    // reachable path is the currency row missing for the configured code; the test writes the
+    // setting directly (EUR is valid-format but unseeded) and restores BDT afterwards.
+    [Fact]
+    public async Task Journal_With_Unconfigured_Functional_Currency_Is_Rejected_Fail_Closed()
+    {
+        var options = new DbContextOptionsBuilder<ErpDbContext>().UseNpgsql(_factory.ConnectionString).Options;
+        await using var db = new ErpDbContext(options);
+        var setting = db.FinanceSettings.Single(s =>
+            s.TenantId == "T-001" && s.LegalEntityId == "LE-001" && s.Key == Erp.Api.Services.CurrencyService.FunctionalCurrencyKey);
+        var original = setting.Value;
+        db.FinanceSettings.Entry(setting).CurrentValues.SetValues(setting with { Value = "EUR" });
+        db.SaveChanges();
+
+        try
+        {
+            var draft = await PostAsync("/api/v1/journals", new
+            {
+                memo = "fail-closed probe",
+                lines = new[]
+                {
+                    Line("1400", "Inventory", 25m, 0m, dimensions: Region),
+                    Line("2100", "Accounts Payable", 0m, 25m, dimensions: Region),
+                },
+                date = Today,
+            }, Fin);
+            Assert.Equal(HttpStatusCode.BadRequest, draft.StatusCode);
+            var body = await Json(draft);
+            Assert.Equal("VALIDATION_ERROR", body.GetProperty("error").GetProperty("code").GetString());
+            Assert.Contains("EUR", body.GetProperty("error").GetProperty("message").GetString());
+        }
+        finally
+        {
+            db.FinanceSettings.Entry(setting).CurrentValues.SetValues(setting with { Value = original });
+            db.SaveChanges();
+        }
+    }
 }
