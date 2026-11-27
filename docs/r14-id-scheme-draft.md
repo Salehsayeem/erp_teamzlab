@@ -1,6 +1,10 @@
 # R14 — Multi-Entity ID & Numbering Scheme (Design Draft)
 
-Status: DRAFT — for owner sign-off. No code or migration accompanies this document.
+Status: **RATIFIED by owner (2026-11-27): Option B** — tenant-scoped `number_series` table per
+(entity, doc type) with entity-segmented ids, per the phased path in §5 (Phase 1 entity-segment
+folding first; Phase 2 series-table cutover; Phase 3 UUID/ULID stays owner-call deferred).
+Implementation still sequenced LAST per the plan; the §5 open questions resolve as the phases land.
+Original draft state: DRAFT — for owner sign-off. No code or migration accompanies this document.
 Branch: `docs/r14-id-scheme-draft` (off `dev-sayeem` @ `6140606`), 2026-11-27.
 
 R14 is the last planned wave ("R14 multi-entity (id-scheme design sign-off, runs last)" —
