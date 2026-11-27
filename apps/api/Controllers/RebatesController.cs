@@ -70,6 +70,26 @@ public sealed class RebatesController(IRebateService rebates) : ControllerBase
         return code is null ? (Envelope.OkBody(data!), 200) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
     });
 
+    // read-gap: claims were approve-only — the read-back mirrors the write family (063)
+    [HttpGet("rebates/claims")]
+    public IResult ListClaims()
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("rebates:write") && !u.Has("rebates:settle"))
+            return Envelope.Fail("FORBIDDEN", "rebates:write or rebates:settle permission required.", 403);
+        var (data, code, message) = rebates.ListClaims();
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
+
+    // rejection is its own decision: requires a reason, lands the claim in Rejected
+    [HttpPost("rebates/claims/{id}/rejections")]
+    public IResult RejectClaim(string id, RejectRebateClaimRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var u = CurrentUser.From(HttpContext);
+        var (data, code, message) = rebates.RejectClaim(u, id, request.Reason);
+        return code is null ? (Envelope.OkBody(data!), 200) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
+    });
+
     // retro-change edge: preview the delta before any approved adjustment posts
     [HttpGet("rebate-agreements/{id}/recalculation-previews")]
     public IResult RecalculationPreview(string id, [FromQuery] string period, [FromQuery] decimal newRatePct)

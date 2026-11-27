@@ -11,6 +11,8 @@ public interface IRebateService
     (object? data, string? code, string? message) CalculateAccrual(CurrentUser u, string agreementId, string period);
     (object? data, string? code, string? message) ApproveAccrual(CurrentUser u, string agreementId, string period);
     (object? data, string? code, string? message) CreateClaim(CurrentUser u, string agreementId, string period, decimal amount, IReadOnlyList<string> eligibleTxnIds);
+    (object? data, string? code, string? message) ListClaims();
     (object? data, string? code, string? message) ApproveClaim(CurrentUser u, string claimId, string? reason);
+    (object? data, string? code, string? message) RejectClaim(CurrentUser u, string claimId, string? reason);
     (object? data, string? code, string? message) RecalculationPreview(string agreementId, string period, decimal newRatePct);
 }

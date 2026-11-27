@@ -866,6 +866,16 @@ export type RebateClaimRow = {
   rejectionReason: string | null;
 };
 
+// List row: claim + agreement/accrual context; overCap flags a claim left above a
+// cap that shrank after its approval (surfaced, never rewritten server-side)
+export type RebateClaimListRow = RebateClaimRow & {
+  customerId: string | null;
+  basis: string | null;
+  ratePct: number | null;
+  approvedCap: number;
+  overCap: boolean;
+};
+
 export function listRebateAgreements(token: string) {
   return apiFetch<RebateAgreementRow[]>("/api/v1/rebate-agreements", { token });
 }
@@ -883,6 +893,13 @@ export function createRebateClaim(token: string, body: { agreementId: string; pe
 }
 export function approveRebateClaim(token: string, id: string, reason: string | null) {
   return apiFetch<RebateClaimRow>(`/api/v1/rebate-claims/${id}/approvals`, { method: "POST", body: { reason }, token });
+}
+export function listRebateClaims(token: string) {
+  return apiFetch<RebateClaimListRow[]>("/api/v1/rebates/claims", { token });
+}
+// Rejection is its own endpoint and requires a reason (the approvals endpoint only ever approves).
+export function rejectRebateClaim(token: string, id: string, reason: string) {
+  return apiFetch<RebateClaimRow>(`/api/v1/rebates/claims/${id}/rejections`, { method: "POST", body: { reason }, token });
 }
 
 // --- Sales analytics (ERP-SALES-065) -------------------------------------------------

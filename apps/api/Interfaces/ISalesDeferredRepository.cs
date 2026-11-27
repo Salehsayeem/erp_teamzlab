@@ -35,7 +35,8 @@ public interface ISalesDeferredRepository
     void SetAccrualApproved(RebateAccrual accrual, string approverId);
     void AddClaim(RebateClaim claim);
     RebateClaim? FindClaim(string claimId);
+    List<RebateClaim> Claims();
     List<RebateClaim> ClaimsFor(string agreementId, string period);
-    void SetClaimStatus(RebateClaim claim, RebateClaimStatus status, string? approverId);
+    void SetClaimStatus(RebateClaim claim, RebateClaimStatus status, string? approverId, string? rejectionReason = null);
     int Save();
 }
