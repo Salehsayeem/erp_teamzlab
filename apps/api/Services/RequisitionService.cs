@@ -23,6 +23,9 @@ public sealed class RequisitionService(
             r.SubmittedBy, r.SubmittedAt, r.RuleId, r.RuleVersion, r.ApproverRole,
             r.ExceptionCode, r.ExceptionNarrative, r.ExceptionEvidenceRef, r.ExceptionFlaggedAt,
             stepVersion = tokens.TryGetValue(r.Id, out var v) ? v : (int?)null,
+            // fu-7: list rows carry the qty summary server-side — the web Qty column reads it
+            // (list DTOs omit lines, so the client cannot sum them)
+            totalQty = r.Lines.Sum(l => l.Qty),
             total = r.Lines.Sum(l => decimal.Round(l.Qty * l.UnitPrice, 2, MidpointRounding.AwayFromZero)),
         }).ToList();
     }

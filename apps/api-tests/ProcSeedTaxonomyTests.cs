@@ -77,4 +77,34 @@ public class ProcSeedTaxonomyTests : IClassFixture<TestApiFactory>
         Assert.Equal("EA", line.GetProperty("baseUnit").GetString()); // EA is base — normalizes to itself
         Assert.Equal(2m, line.GetProperty("baseQty").GetDecimal());
     }
+
+    // Click-through fu-7: the requisitions list DTO omitted line quantities, so the web Qty
+    // column rendered a permanent "—" — list rows now carry totalQty (sum of line qty).
+    [Fact]
+    public async Task Requisition_list_rows_carry_totalQty_sum_of_line_qty()
+    {
+        var cats = await GetAsync("/api/v1/procurement-categories", "U-002");
+        var cat = cats.EnumerateArray().First(c => c.GetProperty("status").GetString() == "Active");
+        var needBy = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7));
+
+        var create = await PostAsync("/api/v1/requisitions", new
+        {
+            purpose = "qty summary probe",
+            currency = "BDT",
+            lines = new[]
+            {
+                new { categoryId = cat.GetProperty("id").GetString(), description = "line one", qty = 2m, unitPrice = 10m, unit = "EA", needBy },
+                new { categoryId = cat.GetProperty("id").GetString(), description = "line two", qty = 3m, unitPrice = 5m, unit = "EA", needBy },
+            },
+        }, "U-002");
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        await using var createStream = await create.Content.ReadAsStreamAsync();
+        using var createDoc = await JsonDocument.ParseAsync(createStream);
+        var id = createDoc.RootElement.GetProperty("data").GetProperty("id").GetString()!;
+
+        var list = await GetAsync("/api/v1/requisitions", "U-002");
+        var row = list.EnumerateArray().First(r => r.GetProperty("id").GetString() == id);
+        Assert.Equal(5m, row.GetProperty("totalQty").GetDecimal());
+        Assert.Equal(35m, row.GetProperty("total").GetDecimal());
+    }
 }
