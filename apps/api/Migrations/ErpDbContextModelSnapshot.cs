@@ -16,7 +16,7 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
     // If you encounter a merge conflict in the line below, it means you need to
     // discard one of the migration branches and recreate its migrations on top of
     // the other branch. See https://aka.ms/efcore-docs-migrations-conflicts for more info.
-    public override string LastMigrationId => "20261127151812_AddFinanceDeepP5";
+    public override string LastMigrationId => "20261127182542_AddPoReadSeed";
 
     protected override void BuildModel(ModelBuilder modelBuilder)
     {
@@ -9822,7 +9822,7 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                         Id = "R-PROC",
                         LegalEntityId = "LE-001",
                         Name = "procurement_officer",
-                        Permissions = new[] { "suppliers:write", "po:write", "receipts:write", "inventory:write", "inventory:transfer", "sourcing:read", "sourcing:write", "contracts:read", "contracts:write", "suppliers:read", "requisitions:write", "requisitions:read", "catalog:write", "receipts:inspect", "analytics:read" },
+                        Permissions = new[] { "suppliers:write", "po:read", "po:write", "receipts:write", "inventory:write", "inventory:transfer", "sourcing:read", "sourcing:write", "contracts:read", "contracts:write", "suppliers:read", "requisitions:write", "requisitions:read", "catalog:write", "receipts:inspect", "analytics:read" },
                         TenantId = "T-001"
                     },
                     new
@@ -9830,7 +9830,7 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                         Id = "R-FIN",
                         LegalEntityId = "LE-001",
                         Name = "finance_officer",
-                        Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write", "refunds:approve", "rebates:settle", "forecasts:read", "leave:adjust", "payroll:release", "payroll:close", "people:analytics:read", "requisitions:approve", "requisitions:read", "requisitions:override", "suppliers:review", "analytics:read", "fx:read", "fx:write", "close:write", "close:approve", "tax:publish", "ap:write", "ap:approve", "ap:override", "ar:write", "gl:write" },
+                        Permissions = new[] { "journals:read", "journals:approve", "journals:write", "ap:read", "po:read", "po:approve", "periods:read", "periods:write", "tax:read", "tax:write", "accounts:read", "accounts:write", "ar:read", "invoices:read", "so:approve", "invoices:approve", "credit:read", "credit:override", "sourcing:read", "sourcing:approve", "contracts:read", "contracts:approve", "payroll:read", "payroll:approve", "paycodes:read", "paycodes:write", "refunds:approve", "rebates:settle", "forecasts:read", "leave:adjust", "payroll:release", "payroll:close", "people:analytics:read", "requisitions:approve", "requisitions:read", "requisitions:override", "suppliers:review", "analytics:read", "fx:read", "fx:write", "close:write", "close:approve", "tax:publish", "ap:write", "ap:approve", "ap:override", "ar:write", "gl:write" },
                         TenantId = "T-001"
                     },
                     new

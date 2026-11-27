@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Erp.Api.Data;
+using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Xunit;
 
@@ -541,5 +543,24 @@ public class ApiReadTests : IClassFixture<TestApiFactory>
         var res = await GetRawAsync($"/api/v1/purchase-orders/{poId}/acknowledgements", Sales);
         Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
         Assert.Equal("FORBIDDEN", ErrorCode(await Json(res)));
+    }
+
+    // ==================== 8. seed probe: po:read ships on the roles that consume PO reads ====================
+    // po:read gates the PO list/ack reads (family-OR with po:write) but was absent from every
+    // role seed array — the acks probe above only passed for R-PROC because po:write papers over
+    // it. The seed must carry the read half explicitly.
+
+    [Fact]
+    public async Task Po_Read_Is_Seeded_On_Procurement_And_Finance_Roles()
+    {
+        var options = new DbContextOptionsBuilder<ErpDbContext>().UseNpgsql(_factory.ConnectionString).Options;
+        await using var db = new ErpDbContext(options);
+        var perms = await db.Roles.ToDictionaryAsync(r => r.Id, r => r.Permissions);
+
+        // R-PROC consumes the PO screens; R-FIN approves POs (approvers read what they approve)
+        Assert.Contains("po:read", perms["R-PROC"]);
+        Assert.Contains("po:read", perms["R-FIN"]);
+        // sales has no PO business — U-004 must stay 403 (section-7 probe)
+        Assert.DoesNotContain("po:read", perms.GetValueOrDefault("R-SALES") ?? []);
     }
 }
