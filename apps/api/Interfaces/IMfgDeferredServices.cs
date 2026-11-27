@@ -44,6 +44,8 @@ public interface ISchedulingService
 public interface IMrpService
 {
     (object data, string? code, string? message) CreateRun(CurrentUser user, Dtos.CreateMrpRunRequest request);
+    object Runs();
+    object Lines(string? runId);
     object Recommendations(string runId);
     object ActionMessages(string runId);
     (object data, string? code, string? message) Convert(CurrentUser user, string lineId, Dtos.MrpConversionRequest request);
@@ -97,6 +99,8 @@ public interface IQualityService
     (object data, string? code, string? message) AmendResult(CurrentUser inspector, string inspectionId, string resultId, Dtos.AmendResultRequest request);
     (object data, string? code, string? message) Finalize(CurrentUser inspector, string inspectionId, Dtos.FinalizeInspectionRequest request);
     object Results(string inspectionId);
+    object Inspections();
+    (object data, string? code, string? message) CapaActions(string capaId);
     // MF9
     (object data, string? code, string? message) Hold(CurrentUser user, Dtos.CreateQualityHoldRequest request);
     (object data, string? code, string? message) DisposeHold(CurrentUser disposer, string holdId, Dtos.HoldDispositionRequest request);

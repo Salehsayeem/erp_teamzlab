@@ -127,6 +127,10 @@ public sealed class MfgDeferredRepository(ErpDbContext db, EntityContext ec) : I
 
     // ---- MF4 ----
     public void AddMrpRun(MrpRun run) => db.MrpRuns.Add(run);
+    public List<MrpRun> MrpRuns() => Sc<MrpRun>().OrderBy(r => r.Id).ToList();
+    public List<MrpLine> MrpLines(string? runId) =>
+        runId is null ? Sc<MrpLine>().OrderBy(l => l.Id).ToList()
+        : Sc<MrpLine>().Where(l => l.RunId == runId).OrderBy(l => l.LineNo).ToList();
     public void SetMrpRunSnapshot(MrpRun run, string snapshotJson) =>
         Set(run, nameof(MrpRun.SnapshotJson), snapshotJson);
     public MrpRun? FindMrpRun(string runId) => Sc<MrpRun>().FirstOrDefault(r => r.Id == runId);
@@ -268,6 +272,7 @@ public sealed class MfgDeferredRepository(ErpDbContext db, EntityContext ec) : I
     public void AddSamplingPlan(SamplingPlan plan) => db.SamplingPlans.Add(plan);
     public SamplingPlan? SamplingFor(string qualityPlanId) => Sc<SamplingPlan>().FirstOrDefault(s => s.QualityPlanId == qualityPlanId);
     public void AddInspection(Inspection inspection) => db.Inspections.Add(inspection);
+    public List<Inspection> Inspections() => Sc<Inspection>().OrderBy(i => i.Id).ToList();
     public Inspection? FindInspection(string inspectionId) => Sc<Inspection>().FirstOrDefault(i => i.Id == inspectionId);
     public bool SetInspectionFinalized(Inspection inspection, string finalizedBy, DateTimeOffset at)
     {

@@ -250,6 +250,17 @@ public sealed class MrpService(
     public object Recommendations(string runId) =>
         mfg.MrpLinesFor(runId).Select(ProjLine).ToList();
 
+    // read-gap indexes: runs without their line/message payloads (per-row joins would N+1),
+    // lines optionally scoped to one run
+    public object Runs() => mfg.MrpRuns().Select(r => new
+    {
+        r.Id, status = r.Status.ToString(), r.HorizonFrom, r.HorizonTo,
+        r.FailureDetail, r.CreatedBy, r.CreatedAt,
+    }).ToList();
+
+    public object Lines(string? runId) =>
+        mfg.MrpLines(runId).Select(ProjLine).ToList();
+
     public object ActionMessages(string runId) =>
         mfg.ActionMessagesFor(runId).Select(m => new
         {

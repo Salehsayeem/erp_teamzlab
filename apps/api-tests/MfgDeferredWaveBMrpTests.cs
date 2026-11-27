@@ -56,6 +56,15 @@ public class MfgDeferredWaveBMrpTests : IClassFixture<TestApiFactory>
     private static string ErrCode(HttpResponseMessage res) =>
         RawJson(res).GetAwaiter().GetResult().GetProperty("error").GetProperty("code").GetString()!;
 
+    private async Task<HttpResponseMessage> GetRawAsync(string path, string? token)
+    {
+        var client = _factory.CreateClient();
+        if (token is not null) client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
+        return await client.GetAsync(path);
+    }
+
+    private async Task<HttpStatusCode> GetStatusAsync(string path, string? token) => (await GetRawAsync(path, token)).StatusCode;
+
     private async Task SeedStock(string sku, decimal qty, decimal price)
     {
         var proc = "U-002";
@@ -325,5 +334,39 @@ public class MfgDeferredWaveBMrpTests : IClassFixture<TestApiFactory>
         // the converted line still exists after publication (recommendations survive publish)
         var conv = await PostAsync($"/api/v1/mrp-lines/{lineId}/conversions", new { }, Planner);
         Assert.True(conv.IsSuccessStatusCode || ErrCode(conv) == "MRP_SOURCES_STALE");
+    }
+
+    // ---- read-gap: mrp-runs had no index (write-only create) ----
+
+    [Fact]
+    public async Task Mrp_Runs_Index_Lists_Created_Runs()
+    {
+        var run = await RunMrp(Mfg, [("FG-IDX-A", 10m)]);
+        var runId = run.GetProperty("id").GetString()!;
+
+        // R-PROC holds no mfg:read/mfg:mrp → no read
+        Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync("/api/v1/mrp-runs", "U-002"));
+
+        var list = await GetAsync("/api/v1/mrp-runs", Mfg);
+        var row = list.GetProperty("data").EnumerateArray()
+            .FirstOrDefault(r => r.GetProperty("id").GetString() == runId);
+        Assert.NotEqual(default, row);
+        Assert.Equal(Mfg, row.GetProperty("createdBy").GetString());
+    }
+
+    // ---- read-gap: mrp-lines were write-only (convert/decide) with no index ----
+
+    [Fact]
+    public async Task Mrp_Lines_Index_Lists_Run_Recommendations()
+    {
+        var run = await RunMrp(Mfg, [("FG-IDX-B", 5m)]);
+        var runId = run.GetProperty("id").GetString()!;
+
+        Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync($"/api/v1/mrp-lines?runId={runId}", "U-002"));
+
+        var list = await GetAsync($"/api/v1/mrp-lines?runId={runId}", Mfg);
+        var rows = list.GetProperty("data").EnumerateArray()
+            .Where(l => l.GetProperty("runId").GetString() == runId).ToList();
+        Assert.NotEmpty(rows);
     }
 }

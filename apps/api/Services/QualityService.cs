@@ -208,6 +208,14 @@ public sealed class QualityService(
 
     public object Results(string inspectionId) => mfg.ResultsFor(inspectionId).Select(ProjResult).ToList();
 
+    public object Inspections() => mfg.Inspections().Select(ProjInspection).ToList();
+
+    public (object data, string? code, string? message) CapaActions(string capaId)
+    {
+        if (mfg.FindCapaCase(capaId) is null) return (null!, "CAPA_NOT_FOUND", "CAPA case not found.");
+        return (mfg.CapaActionsFor(capaId).Select(ProjCapaAction).ToList(), null, null);
+    }
+
     private static bool? Evaluate(QualityCharacteristic characteristic, string rawValue) =>
         characteristic.DataType switch
         {

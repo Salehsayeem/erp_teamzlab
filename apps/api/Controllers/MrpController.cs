@@ -22,6 +22,15 @@ public sealed class MrpController(IMrpService mrp) : ControllerBase
             : (Envelope.OkBody(data!), 201);
     });
 
+    // read-gap: runs were write-only at the index level — the read-back mirrors the create family
+    [HttpGet]
+    public IResult Index()
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("mfg:read")) return Envelope.Fail("FORBIDDEN", "mfg:read permission required.", 403);
+        return Envelope.Ok<object>(mrp.Runs());
+    }
+
     [HttpGet("{id}/recommendations")]
     public IResult Recommendations(string id)
     {
@@ -54,6 +63,15 @@ public sealed class MrpController(IMrpService mrp) : ControllerBase
 [Route("api/v1/mrp-lines")]
 public sealed class MrpLinesController(IMrpService mrp) : ControllerBase
 {
+    // read-gap: recommendation lines were write-only (convert/decide) with no index
+    [HttpGet]
+    public IResult Index([FromQuery] string? runId)
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("mfg:read")) return Envelope.Fail("FORBIDDEN", "mfg:read permission required.", 403);
+        return Envelope.Ok<object>(mrp.Lines(runId));
+    }
+
     [HttpPost("{id}/conversions")]
     public IResult Convert(string id, [FromBody] MrpConversionRequest? request) => Idem.Wrap(HttpContext, request ?? (object)new { }, () =>
     {
