@@ -21,11 +21,80 @@ public class PilotFlowTests : IClassFixture<TestApiFactory>
         return await client.PostAsJsonAsync(path, body);
     }
 
+    private async Task<JsonElement> GetAsync(string path, string? token)
+    {
+        var client = _factory.CreateClient();
+        if (token is not null) client.DefaultRequestHeaders.Add("Authorization", $"Bearer {token}");
+        return await Json(await client.GetAsync(path));
+    }
+
     private static async Task<JsonElement> Json(HttpResponseMessage res)
     {
         await using var stream = await res.Content.ReadAsStreamAsync();
         using var doc = await JsonDocument.ParseAsync(stream);
         return doc.RootElement.Clone();
+    }
+
+    private async Task<string> CreatePendingPoAsync(string maker)
+    {
+        var res = await PostAsync("/api/v1/suppliers", new { name = "Acme Steel", taxId = "TRX-9911", email = "sales@acme.test" }, maker);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var supplierId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+
+        res = await PostAsync("/api/v1/purchase-orders", new
+        {
+            supplierId,
+            lines = new[] { new { itemSku = "STL-ROD-12", description = "Steel rod 12mm", qty = 100m, unitPrice = 45.50m } },
+        }, maker);
+        Assert.Equal(HttpStatusCode.Created, res.StatusCode);
+        var poId = (await Json(res)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/purchase-orders/{poId}/submit", new { }, maker)).StatusCode);
+        return poId;
+    }
+
+    // Follow-up fu-1 (click-through): explicit decision binding — a reason on the approvals
+    // endpoint is an approval NOTE, never a silent rejection.
+    [Fact]
+    public async Task PO_approve_with_reason_approves_and_records_note_in_audit()
+    {
+        var poId = await CreatePendingPoAsync("U-002");
+
+        var res = await PostAsync($"/api/v1/purchase-orders/{poId}/approvals",
+            new { reason = "Approved per budget release Q4" }, "U-001");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("Approved", (await Json(res)).GetProperty("data").GetProperty("status").GetString());
+
+        var audit = await GetAsync("/api/v1/audit-events", "U-001");
+        Assert.Contains(audit.GetProperty("data").EnumerateArray(),
+            e => e.GetProperty("action").GetString() == "approve"
+                && e.GetProperty("entityId").GetString() == poId
+                && (e.GetProperty("summary").GetString() ?? "").Contains("Approved per budget release Q4"));
+    }
+
+    [Fact]
+    public async Task PO_reject_with_reason_rejects_and_persists_reason()
+    {
+        var poId = await CreatePendingPoAsync("U-002");
+
+        var res = await PostAsync($"/api/v1/purchase-orders/{poId}/rejections",
+            new { reason = "Wrong supplier terms" }, "U-001");
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.Equal("Rejected", (await Json(res)).GetProperty("data").GetProperty("status").GetString());
+
+        var detail = await GetAsync($"/api/v1/purchase-orders/{poId}", "U-002");
+        Assert.Equal("Wrong supplier terms", detail.GetProperty("data").GetProperty("rejectionReason").GetString());
+    }
+
+    [Fact]
+    public async Task PO_reject_without_reason_is_400_envelope_error()
+    {
+        var poId = await CreatePendingPoAsync("U-002");
+
+        var res = await PostAsync($"/api/v1/purchase-orders/{poId}/rejections", new { }, "U-001");
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        var body = await Json(res);
+        Assert.False(body.GetProperty("success").GetBoolean());
+        Assert.Equal("DECISION_REASON_REQUIRED", body.GetProperty("error").GetProperty("code").GetString());
     }
 
     [Fact]

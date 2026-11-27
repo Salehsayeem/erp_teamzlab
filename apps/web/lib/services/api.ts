@@ -178,6 +178,14 @@ export function approvePo(token: string, id: string, reason: string | null) {
     token,
   });
 }
+// Rejection is its own endpoint and requires a reason (the approvals endpoint only ever approves).
+export function rejectPo(token: string, id: string, reason: string) {
+  return apiFetch<PurchaseOrder>(`/api/v1/purchase-orders/${id}/rejections`, {
+    method: "POST",
+    body: { reason },
+    token,
+  });
+}
 export function postReceipt(token: string, body: { purchaseOrderId: string; itemSku: string; qty: number }) {
   return apiFetch<unknown>("/api/v1/receipts", { method: "POST", body, token });
 }

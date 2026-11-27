@@ -35,6 +35,9 @@ public sealed class PurchaseOrderService(
         return (po, null, null);
     }
 
+    // Explicit decision binding (click-through fu-1): approvals always approve — a reason is an
+    // approval note recorded in the audit trail, never a silent rejection. Rejection lives on its
+    // own endpoint and requires a reason.
     public (PurchaseOrder? order, string? code, string? message) Approve(CurrentUser approver, string poId, string? reason)
     {
         var po = orders.Find(poId);
@@ -43,11 +46,26 @@ public sealed class PurchaseOrderService(
         if (po.CreatedBy == approver.Id) return (null, "PO_APPROVAL_ERROR", "Maker-checker: the creator cannot approve their own purchase order.");
         if (!approver.Has("po:approve")) return (null, "FORBIDDEN", "po:approve permission required.");
 
-        if (reason is null) orders.MarkApproved(po, approver.Id);
-        else orders.MarkRejected(po, approver.Id, reason);
-        audit.Log(approver, reason is null ? "approve" : "reject", "purchase_order", po.Id,
-            reason is null ? $"PO approved by {approver.Email}" : $"PO rejected: {reason}");
-        if (reason is null) audit.Emit(approver, "procurement.po.approved", new { poId = po.Id, approver = approver.Id });
+        orders.MarkApproved(po, approver.Id);
+        audit.Log(approver, "approve", "purchase_order", po.Id,
+            reason is null ? $"PO approved by {approver.Email}" : $"PO approved by {approver.Email} — note: {reason}");
+        audit.Emit(approver, "procurement.po.approved", new { poId = po.Id, approver = approver.Id });
+        orders.Save();
+        return (po, null, null);
+    }
+
+    public (PurchaseOrder? order, string? code, string? message) Reject(CurrentUser approver, string poId, string? reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            return (null, "DECISION_REASON_REQUIRED", "A rejection reason is required.");
+        var po = orders.Find(poId);
+        if (po is null) return (null, "PO_NOT_FOUND", "Purchase order not found.");
+        if (po.Status != PoStatus.PendingApproval) return (null, "PO_APPROVAL_ERROR", $"Only pending POs can be rejected (current: {po.Status}).");
+        if (po.CreatedBy == approver.Id) return (null, "PO_APPROVAL_ERROR", "Maker-checker: the creator cannot reject their own purchase order.");
+        if (!approver.Has("po:approve")) return (null, "FORBIDDEN", "po:approve permission required.");
+
+        orders.MarkRejected(po, approver.Id, reason);
+        audit.Log(approver, "reject", "purchase_order", po.Id, $"PO rejected: {reason}");
         orders.Save();
         return (po, null, null);
     }
