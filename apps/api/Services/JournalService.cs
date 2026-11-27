@@ -21,15 +21,81 @@ public sealed class JournalService(
     public (Journal? journal, string? code, string? message) Create(CurrentUser user, Dtos.CreateJournalRequest request)
     {
         if (!user.Has("journals:write")) return (null, "FORBIDDEN", "journals:write permission required.");
+        // P5 (002/003/006): the brief's enforcement point is CREATE — accounts, currency scale
+        // and required dimensions are validated per line at draft time (approval rechecks).
+        var lineError = ValidateLines(request.Lines, request.Date ?? DateOnly.FromDateTime(DateTime.UtcNow));
+        if (lineError is not null) return (null, lineError.Value.code, lineError.Value.message);
         var journal = new Journal(numbers.Next("J"), ec.TenantId, ec.EntityId, JournalStatus.Pending,
             request.Memo,
-            request.Lines.Select(l => new JournalLine(l.AccountCode, l.AccountName, l.Debit, l.Credit, l.TaxCodeId)).ToList(),
+            request.Lines.Select(l => new JournalLine(l.AccountCode, l.AccountName, l.Debit, l.Credit, l.TaxCodeId, 0,
+                l.Currency?.Trim().ToUpperInvariant(), l.AmountInCurrency, l.Dimensions)).ToList(),
             DateTimeOffset.UtcNow, user.Id, reversalOfId: null, accountingDate: request.Date);
         journals.Add(journal);
         audit.Log(user, "create", "journal", journal.Id,
             $"Manual journal drafted: {journal.Lines.Count} line(s), accounting date {journal.EffectiveDate:yyyy-MM-dd}");
         journals.Save();
         return (journal, null, null);
+    }
+
+    // 002 AC1 posting eligibility + 003 required dimensions + 006 currency scale, line-level:
+    // every error names the line index (and the offending dimension/currency) so the entry form
+    // can point at the row. Approval rechecks account eligibility at commit (ResolveAccounts).
+    private (string code, string message)? ValidateLines(IReadOnlyList<Dtos.JournalLineInput> lines, DateOnly date)
+    {
+        var required = db.DimensionSets
+            .Where(s => s.TenantId == ec.TenantId && s.LegalEntityId == ec.EntityId && s.Required && s.Active)
+            .OrderBy(s => s.Code).ToList();
+        var allSets = db.DimensionSets
+            .Where(s => s.TenantId == ec.TenantId && s.LegalEntityId == ec.EntityId)
+            .ToDictionary(s => s.Code);
+        var values = db.DimensionValues
+            .Where(v => v.TenantId == ec.TenantId && v.LegalEntityId == ec.EntityId).ToList();
+        var functional = db.FinanceSettings.FirstOrDefault(s =>
+                s.TenantId == ec.TenantId && s.LegalEntityId == ec.EntityId && s.Key == CurrencyService.FunctionalCurrencyKey)?.Value
+            ?? EntityContext.SeedEntity.Currency;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var l = lines[i];
+            var account = accounts.FindByCode(l.AccountCode);
+            if (account is null)
+                return ("ACCOUNT_NOT_FOUND", $"Line {i + 1}: account {l.AccountCode} is not in the chart of accounts.");
+            if (!account.DirectPostingAllowed)
+                return ("ACCOUNT_NOT_POSTABLE", $"Line {i + 1}: account {account.Code} {account.Name} does not allow direct posting.");
+
+            var currencyCode = l.Currency?.Trim().ToUpperInvariant() ?? functional;
+            var currency = db.Currencies.FirstOrDefault(c =>
+                c.TenantId == ec.TenantId && c.LegalEntityId == ec.EntityId && c.Code == currencyCode);
+            if (currency is null)
+                return ("CURRENCY_NOT_FOUND", $"Line {i + 1}: currency {currencyCode} is not in the currency master.");
+            if (!currency.Active)
+                return ("VALIDATION_ERROR", $"Line {i + 1}: currency {currency.Code} is inactive; new transactions may not cite it.");
+            foreach (var amount in new[] { l.Debit, l.Credit, l.AmountInCurrency })
+                if (amount is { } v && ScaleOf(v) > currency.DecimalScale)
+                    return ("VALIDATION_ERROR",
+                        $"Line {i + 1}: amount {v} exceeds the {currency.DecimalScale}-decimal settlement scale of {currency.Code}.");
+
+            foreach (var set in required)
+                if (l.Dimensions is null || !l.Dimensions.TryGetValue(set.Code, out _))
+                    return ("VALIDATION_ERROR",
+                        $"Line {i + 1}: required dimension '{set.Code}' ({set.Name}) is missing on {date:yyyy-MM-dd}.");
+            foreach (var (setCode, dimValue) in l.Dimensions ?? [])
+            {
+                if (!allSets.ContainsKey(setCode))
+                    return ("VALIDATION_ERROR", $"Line {i + 1}: dimension '{setCode}' is not defined for this legal entity.");
+                if (!values.Any(v => v.SetCode == setCode && v.Value == dimValue
+                        && v.EffectiveFrom <= date && (v.EffectiveTo is null || v.EffectiveTo >= date)))
+                    return ("VALIDATION_ERROR",
+                        $"Line {i + 1}: dimension {setCode} value '{dimValue}' is not permitted on {date:yyyy-MM-dd}.");
+            }
+        }
+        return null;
+    }
+
+    private static int ScaleOf(decimal amount)
+    {
+        var scale = 0;
+        while (amount != decimal.Truncate(amount) && scale < 28) { amount *= 10; scale++; }
+        return scale;
     }
 
     public (Journal? journal, string? code, string? message) Approve(CurrentUser approver, string journalId, string? reason)
@@ -100,7 +166,7 @@ public sealed class JournalService(
         var (guardCode, guardMsg) = FinanceGuards.EnsurePeriodOpen(db, ec, DateOnly.FromDateTime(DateTime.UtcNow));
         if (guardCode is not null) return (null, guardCode, guardMsg);
 
-        var lines = j.Lines.Select(l => new JournalLine(l.AccountCode, l.AccountName, l.Credit, l.Debit)).ToList();
+        var lines = j.Lines.Select(l => new JournalLine(l.AccountCode, l.AccountName, l.Credit, l.Debit, l.TaxCodeId, l.TaxAmount, l.Currency, l.AmountInCurrency, l.Dimensions)).ToList();
         var rev = new Journal(numbers.Next("J"), j.TenantId, j.LegalEntityId, JournalStatus.Posted,
             $"Reversal of {j.Id}: {j.Memo}", lines, DateTimeOffset.UtcNow, user.Id, j.Id);
         journals.Add(rev);

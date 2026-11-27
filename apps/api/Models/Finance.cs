@@ -5,7 +5,11 @@ public enum JournalStatus { Pending, Posted }
 // trailing optional tax fields (task-5): taxCodeId pins the resolved revision row (032 provenance),
 // taxAmount is the signed rounded tax for the line — Round((Debit−Credit) × RatePct/100, 2, AwayFromZero).
 // Existing 4-field call sites compile unchanged.
-public record JournalLine(string AccountCode, string AccountName, decimal Debit, decimal Credit, string? TaxCodeId = null, decimal TaxAmount = 0);
+// P5 (006/007/003): optional transaction currency (null = the functional currency), the
+// independently-stored transaction amount, and the line's dimension assignments —
+// validated at journal create (currency exists/active, scale, required dimensions).
+public record JournalLine(string AccountCode, string AccountName, decimal Debit, decimal Credit, string? TaxCodeId = null, decimal TaxAmount = 0,
+    string? Currency = null, decimal? AmountInCurrency = null, Dictionary<string, string>? Dimensions = null);
 
 // Lines as a settable body property for EF (see PurchaseOrder) — same JSON shape, same call sites
 public record Journal(string Id, string TenantId, string LegalEntityId, JournalStatus Status, string Memo, DateTimeOffset CreatedAt, string CreatedBy, string? ReversalOfId = null, DateOnly? AccountingDate = null)
@@ -39,5 +43,8 @@ public enum TaxBasis { Standard, Zero, Exempt }
 
 public record TaxCode(string Id, string TenantId, string LegalEntityId, string Code, string Jurisdiction, decimal RatePct, TaxBasis Basis, bool Recoverable, DateOnly EffectiveFrom, DateOnly? EffectiveTo, int Version, string PublishedBy, DateTimeOffset PublishedAt);
 
-// R9b: aging bucket boundaries + credit terms live as data, never as code constants
-public record FinanceSetting(string Id, string TenantId, string LegalEntityId, string Key, string Value);
+// R9b: aging bucket boundaries + credit terms live as data, never as code constants.
+// P5 (007): changes are effective-dated — EffectiveFrom plus who/when (audit keeps the trail);
+// trailing optional parameters keep every existing constructor call site compiling.
+public record FinanceSetting(string Id, string TenantId, string LegalEntityId, string Key, string Value,
+    DateOnly? EffectiveFrom = null, string? UpdatedBy = null, DateTimeOffset? UpdatedAt = null);
