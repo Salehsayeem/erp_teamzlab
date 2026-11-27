@@ -1086,6 +1086,39 @@ public partial class SalesDeferredTests
         Assert.Equal("Approved", approvedBody.GetProperty("data").GetProperty("status").GetString());
         Assert.Equal(Fin, approvedBody.GetProperty("data").GetProperty("approvedBy").GetString());
     }
+
+    // NEXT-SLICE read gap: RefundService.List existed service-side with no route — the
+    // finance officer (and the requester) can list refund requests with full fields
+    [Fact]
+    public async Task Refunds_List_Returns_Created_Refunds_With_Full_Fields()
+    {
+        var (invoiceId, _) = await SeedPostedInvoice(4m, 25m); // 100 + tax
+        var adj = await PostAsync("/api/v1/adjustments", new
+        {
+            kind = "Credit", invoiceId, reason = "refund list probe",
+            lines = new[] { new { itemSku = Tag("SKU"), qty = 1m, unitPrice = 25m } },
+        }, Sales);
+        Assert.Equal(HttpStatusCode.Created, adj.StatusCode);
+        var adjId = (await Json(adj)).GetProperty("data").GetProperty("id").GetString()!;
+        Assert.Equal(HttpStatusCode.OK, (await PostAsync($"/api/v1/adjustments/{adjId}/approvals", new { }, Fin)).StatusCode);
+        var refund = await PostAsync($"/api/v1/adjustments/{adjId}/refund-requests", new { }, Sales);
+        Assert.Equal(HttpStatusCode.Created, refund.StatusCode);
+        var refundId = (await Json(refund)).GetProperty("data").GetProperty("id").GetString()!;
+
+        // R-PROC holds neither refunds:approve nor returns:write → no read
+        Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync("/api/v1/refunds", "U-002"));
+
+        var list = await GetAsync("/api/v1/refunds", Fin);
+        var row = list.GetProperty("data").EnumerateArray()
+            .FirstOrDefault(r => r.GetProperty("id").GetString() == refundId);
+        Assert.NotEqual(default, row);
+        Assert.Equal(adjId, row.GetProperty("adjustmentId").GetString());
+        Assert.Equal(invoiceId, row.GetProperty("invoiceId").GetString());
+        Assert.True(row.GetProperty("amount").GetDecimal() > 0);
+        Assert.Equal("Requested", row.GetProperty("status").GetString());
+        Assert.Equal(Sales, row.GetProperty("requestedBy").GetString());
+        Assert.Equal("REF", row.GetProperty("id").GetString()!.Split(':').Last());
+    }
 }
 
 // ==== S8 receipt candidates + AR reconciliation (054/055/056) ====

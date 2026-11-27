@@ -65,4 +65,16 @@ public sealed class SalesReturnsController(
         var (data, code, message) = refunds.Approve(u, id, request.Reason);
         return code is null ? (Envelope.OkBody(data!), 200) : (Envelope.FailBody(code, message!), ErrorStatus.StatusFor(code));
     });
+
+    // read-gap: RefundService.List existed service-side with no route — the read-back
+    // mirrors the write family (refunds:approve settles, returns:write requests)
+    [HttpGet("refunds")]
+    public IResult ListRefunds()
+    {
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("refunds:approve") && !u.Has("returns:write"))
+            return Envelope.Fail("FORBIDDEN", "refunds:approve or returns:write permission required.", 403);
+        var (data, code, message) = refunds.List();
+        return code is null ? Envelope.Ok<object>(data!) : Envelope.Fail(code, message!, ErrorStatus.StatusFor(code));
+    }
 }
