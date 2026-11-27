@@ -2660,8 +2660,11 @@ public class ErpDbContext(DbContextOptions<ErpDbContext> options) : DbContext(op
             new DimensionValue("DV-CostCenter-CC-001", t, le, "CostCenter", "CC-001", new DateOnly(2026, 1, 1), null, true),
             new DimensionValue("DV-CostCenter-CC-002", t, le, "CostCenter", "CC-002", new DateOnly(2026, 1, 1), new DateOnly(2026, 12, 31), false));
 
-        // 007: the functional currency is effective-dated data — postings at/before the effective
-        // date keep resolving against the previous value (history lives in audit_events)
+        // 007 (ratified ruling, fix round): the functional currency is a single-row upsert — a
+        // change overwrites the row with its EffectiveFrom, so journal drafts dated BEFORE that
+        // date are rejected (there is no previous value left to resolve against) and drafts
+        // on/after it use the new value. Posted journals are never restated — their functional
+        // amounts are stored on the lines; the change trail lives in audit_events.
         mb.Entity<FinanceSetting>().HasData(
             new FinanceSetting("FS-functional-currency", t, le, "finance.functional_currency", "BDT", new DateOnly(2026, 1, 1)));
 

@@ -50,9 +50,17 @@ public sealed class JournalService(
             .ToDictionary(s => s.Code);
         var values = db.DimensionValues
             .Where(v => v.TenantId == ec.TenantId && v.LegalEntityId == ec.EntityId).ToList();
-        var functional = db.FinanceSettings.FirstOrDefault(s =>
-                s.TenantId == ec.TenantId && s.LegalEntityId == ec.EntityId && s.Key == CurrencyService.FunctionalCurrencyKey)?.Value
-            ?? EntityContext.SeedEntity.Currency;
+        // 007 (ratified ruling): the functional currency is a single-row upsert — a pending
+        // change overwrites the row, so a draft dated BEFORE its EffectiveFrom has no previous
+        // value to resolve against and is rejected; drafts on/after the date use the new value.
+        var setting = db.FinanceSettings.FirstOrDefault(s =>
+                s.TenantId == ec.TenantId && s.LegalEntityId == ec.EntityId && s.Key == CurrencyService.FunctionalCurrencyKey);
+        var functional = setting?.Value ?? EntityContext.SeedEntity.Currency;
+        if (setting?.EffectiveFrom is { } effectiveFrom && date < effectiveFrom)
+            return ("VALIDATION_ERROR",
+                $"Rejected: functional currency change to {functional} effective {effectiveFrom:yyyy-MM-dd}; draft dated {date:yyyy-MM-dd}.");
+        var functionalCurrency = db.Currencies.FirstOrDefault(c =>
+            c.TenantId == ec.TenantId && c.LegalEntityId == ec.EntityId && c.Code == functional);
         for (var i = 0; i < lines.Count; i++)
         {
             var l = lines[i];
@@ -69,10 +77,17 @@ public sealed class JournalService(
                 return ("CURRENCY_NOT_FOUND", $"Line {i + 1}: currency {currencyCode} is not in the currency master.");
             if (!currency.Active)
                 return ("VALIDATION_ERROR", $"Line {i + 1}: currency {currency.Code} is inactive; new transactions may not cite it.");
-            foreach (var amount in new[] { l.Debit, l.Credit, l.AmountInCurrency })
-                if (amount is { } v && ScaleOf(v) > currency.DecimalScale)
-                    return ("VALIDATION_ERROR",
-                        $"Line {i + 1}: amount {v} exceeds the {currency.DecimalScale}-decimal settlement scale of {currency.Code}.");
+            // 006 fix round: Debit/Credit are FUNCTIONAL-currency amounts — the transaction value
+            // is stored independently in AmountInCurrency, so the LINE currency's settlement scale
+            // governs only AmountInCurrency, while Debit/Credit answer to the functional scale.
+            if (l.AmountInCurrency is { } txn && ScaleOf(txn) > currency.DecimalScale)
+                return ("VALIDATION_ERROR",
+                    $"Line {i + 1}: amount {txn} exceeds the {currency.DecimalScale}-decimal settlement scale of {currency.Code}.");
+            if (functionalCurrency is not null)
+                foreach (var amount in new[] { l.Debit, l.Credit })
+                    if (amount is { } v && ScaleOf(v) > functionalCurrency.DecimalScale)
+                        return ("VALIDATION_ERROR",
+                            $"Line {i + 1}: amount {v} exceeds the {functionalCurrency.DecimalScale}-decimal functional scale of {functionalCurrency.Code}.");
 
             foreach (var set in required)
                 if (l.Dimensions is null || !l.Dimensions.TryGetValue(set.Code, out _))
@@ -82,7 +97,9 @@ public sealed class JournalService(
             {
                 if (!allSets.ContainsKey(setCode))
                     return ("VALIDATION_ERROR", $"Line {i + 1}: dimension '{setCode}' is not defined for this legal entity.");
-                if (!values.Any(v => v.SetCode == setCode && v.Value == dimValue
+                // 003 fix round: new postings (any date) must cite an ACTIVE value in interval —
+                // posted lines are never re-validated, so history keeps inactive-but-valid references.
+                if (!values.Any(v => v.SetCode == setCode && v.Value == dimValue && v.Active
                         && v.EffectiveFrom <= date && (v.EffectiveTo is null || v.EffectiveTo >= date)))
                     return ("VALIDATION_ERROR",
                         $"Line {i + 1}: dimension {setCode} value '{dimValue}' is not permitted on {date:yyyy-MM-dd}.");

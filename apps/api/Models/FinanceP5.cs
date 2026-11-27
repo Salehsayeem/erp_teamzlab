@@ -7,7 +7,9 @@ public record Currency(string Id, string TenantId, string LegalEntityId, string 
 
 // 008: provenance rides on the row — source, retrieved-at, rate date, precision, approver
 public enum FxRateType { Spot, PeriodAverage, Closing }
-public enum FxRateStatus { Pending, Approved }
+// Withdrawn (fix round): the recovery path out of an ambiguous key — a Pending or Approved rate
+// leaves the exactly-one window through withdraw-with-reason. Appended so stored ints stay stable.
+public enum FxRateStatus { Pending, Approved, Withdrawn }
 
 public record FxRate(string Id, string TenantId, string LegalEntityId, string BaseCurrency, string QuoteCurrency,
     DateOnly RateDate, FxRateType RateType, decimal Rate, int Precision, string Source, DateTimeOffset RetrievedAt,

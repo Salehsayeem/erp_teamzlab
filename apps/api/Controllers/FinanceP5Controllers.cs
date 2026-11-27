@@ -1,6 +1,8 @@
 using Erp.Api.Dtos;
 using Erp.Api.Interfaces;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Erp.Api.Controllers;
 
@@ -79,6 +81,19 @@ public sealed class FxRatesController(ICurrencyService currencies, IFxRateResolv
         var (rate, code, error) = currencies.ApproveRate(u, id);
         return code is not null ? Envelope.Fail(code, error!, ErrorStatus.StatusFor(code)) : Envelope.Ok<object>(rate!);
     }
+
+    // 008 fix round: withdraw a Pending/Approved rate (reason mandatory — it is the recovery
+    // audit trail) so an ambiguous or superseded key can become resolvable again
+    [HttpPost("{id}/withdrawals")]
+    public IResult Withdraw(string id, WithdrawFxRateRequest request) => Idem.Wrap(HttpContext, request, () =>
+    {
+        var err = Guards.Check(request.Reason, "Reason", 500);
+        if (err is not null) return (Envelope.FailBody("VALIDATION_ERROR", err), 400);
+        var u = CurrentUser.From(HttpContext);
+        if (!u.Has("fx:write")) return (Envelope.FailBody("FORBIDDEN", "fx:write permission required."), 403);
+        var (rate, code, error) = currencies.WithdrawRate(u, id, request.Reason.Trim());
+        return code is not null ? (Envelope.FailBody(code, error!), ErrorStatus.StatusFor(code)) : (Envelope.OkBody(rate!), 200);
+    });
 }
 
 [ApiController]
@@ -155,7 +170,17 @@ public sealed class NumberSeriesController(INumberSeries numbers, IAuditReposito
         audit.Log(u, "void", "number_series", $"{normalized}/{number}",
             $"Doc number {number} voided from series {normalized}: {request.Reason.Trim()} (per policy the sequence does not reissue it).");
         audit.Emit(u, "finance.number-series.voided", new { prefix = normalized, number, reason = request.Reason.Trim(), voidedBy = u.Id });
-        audit.Save(); // same scoped context — one SaveChanges commits the void + audit trail
+        try
+        {
+            audit.Save(); // same scoped context — one SaveChanges commits the void + audit trail
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is NpgsqlException { SqlState: "23505" })
+        {
+            // fix round: AlreadyVoided is read-then-write — a concurrent void of the same number
+            // can commit first; the UNIQUE (tenant, entity, prefix, number) index is the real guard.
+            return (Envelope.FailBody("NUMBER_ALREADY_VOIDED",
+                $"{number} is already voided; a concurrent void committed first and this retry wrote nothing."), 409);
+        }
         return (Envelope.OkBody(v), 201);
     });
 }

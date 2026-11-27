@@ -30,6 +30,9 @@ public record CreateCurrencyRequest(string Code, string Name, int DecimalScale, 
 public record CreateFxRateRequest(string BaseCurrency, string QuoteCurrency, DateOnly RateDate, FxRateType RateType,
     decimal Rate, int? Precision = null, string? Source = null);
 
+// 008 fix round: withdraw a Pending/Approved rate out of the exactly-one window; reason mandatory
+public record WithdrawFxRateRequest(string Reason);
+
 public record CreateDimensionSetRequest(string Code, string Name, bool? Required = null);
 
 public record CreateDimensionValueRequest(string SetCode, string Value, DateOnly EffectiveFrom, DateOnly? EffectiveTo = null, bool? Active = null);

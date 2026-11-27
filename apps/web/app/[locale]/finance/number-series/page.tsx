@@ -42,7 +42,7 @@ export default function NumberSeriesPage() {
   async function submitVoid() {
     if (!token || !voidTarget) return;
     setVoidFormError(null);
-    if (!voidForm.number.trim() || !voidForm.reason.trim()) { setVoidFormError(s.actionFailed); return; }
+    if (!voidForm.number.trim() || !voidForm.reason.trim()) { setVoidFormError(s.requiredMissing); return; }
     setVoidBusy(true);
     const res = await voidNumber(token, voidTarget.prefix, { number: voidForm.number.trim(), reason: voidForm.reason.trim() });
     setVoidBusy(false);

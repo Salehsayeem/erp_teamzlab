@@ -64,6 +64,15 @@ public sealed class CurrencyService(ErpDbContext db, EntityContext ec, INumberSe
         if (rate.Status != FxRateStatus.Pending) return (null, "FX_RATE_APPROVAL_ERROR", "Only pending FX rates can be approved.");
         if (rate.CreatedBy == approver.Id)
             return (null, "FX_RATE_APPROVAL_ERROR", "Maker-checker: the preparer cannot approve their own FX rate.");
+        // 008 fix round: approving a second rate over an already-approved key would create the
+        // exact ambiguity the resolver blocks on — refuse BEFORE any state change. The recovery
+        // path is withdraw-with-reason on one of the rates, not a silent pick at resolve time.
+        var blocking = Rates.FirstOrDefault(r => r.Id != rateId && r.BaseCurrency == rate.BaseCurrency
+            && r.QuoteCurrency == rate.QuoteCurrency && r.RateDate == rate.RateDate
+            && r.RateType == rate.RateType && r.Status == FxRateStatus.Approved);
+        if (blocking is not null)
+            return (null, "FX_RATE_AMBIGUOUS",
+                $"{blocking.Id} is already approved for {rate.BaseCurrency}/{rate.QuoteCurrency} on {rate.RateDate:yyyy-MM-dd} ({rate.RateType}); withdraw it before approving a competing rate.");
         var approved = rate with { Status = FxRateStatus.Approved, ApprovedBy = approver.Id, ApprovedAt = DateTimeOffset.UtcNow };
         db.FxRates.Entry(rate).CurrentValues.SetValues(approved);
         audit.Log(approver, "approve", "fx_rate", rate.Id,
@@ -72,6 +81,22 @@ public sealed class CurrencyService(ErpDbContext db, EntityContext ec, INumberSe
             new { rateId = rate.Id, pair = $"{rate.BaseCurrency}/{rate.QuoteCurrency}", rateDate = rate.RateDate, rateType = rate.RateType.ToString(), rate.Rate, rate.Precision, approver = approver.Id });
         db.SaveChanges();
         return (approved, null, null);
+    }
+
+    // 008 fix round: the recovery path out of ambiguity (or a mis-keyed draft) — a Pending or
+    // Approved rate leaves the exactly-one window; the reason is mandatory and audited.
+    public (FxRate? rate, string? code, string? message) WithdrawRate(CurrentUser user, string rateId, string reason)
+    {
+        var rate = Rates.FirstOrDefault(r => r.Id == rateId);
+        if (rate is null) return (null, "FX_RATE_NOT_FOUND", "FX rate not found.");
+        if (rate.Status == FxRateStatus.Withdrawn)
+            return (null, "FX_RATE_WITHDRAWAL_ERROR", $"FX rate {rateId} is already withdrawn.");
+        var withdrawn = rate with { Status = FxRateStatus.Withdrawn };
+        db.FxRates.Entry(rate).CurrentValues.SetValues(withdrawn);
+        audit.Log(user, "withdraw", "fx_rate", rate.Id,
+            $"FX rate {rate.Id} {rate.BaseCurrency}/{rate.QuoteCurrency} {rate.Rate} {rate.RateType} for {rate.RateDate:yyyy-MM-dd} withdrawn by {user.Email}: {reason}");
+        db.SaveChanges();
+        return (withdrawn, null, null);
     }
 
     // 008 AC1/AC2 — exactly one approved rate per pair/date/type, else a blocking error

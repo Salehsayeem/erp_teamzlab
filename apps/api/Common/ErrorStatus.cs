@@ -13,6 +13,8 @@ public static class ErrorStatus
         // deferred SALES wave — brief-pinned 400s: price-book interval overlap (024 AC2),
         // customer hierarchy cycle/self-parent (012 AC1) — request-shaped, not state conflicts
         "PRICE_OVERLAP" or "CUSTOMER_HIERARCHY_CYCLE" => 400,
+        // fix round: missing reference data is a 404, not a state conflict (FX_RATE_AMBIGUOUS stays 409)
+        "FX_RATE_MISSING" => 404,
         "FORBIDDEN" or "DELEGATION_SCOPE_DENIED" or "DISPOSITION_SOD_ERROR" => 403,
         _ when code.EndsWith("_NOT_FOUND", StringComparison.Ordinal) => 404,
         _ => 409,

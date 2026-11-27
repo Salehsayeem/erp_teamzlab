@@ -10,6 +10,7 @@ public interface ICurrencyService
     object ListRates();
     (FxRate? rate, string? code, string? message) CreateRate(CurrentUser user, CreateFxRateRequest request);
     (FxRate? rate, string? code, string? message) ApproveRate(CurrentUser approver, string rateId);
+    (FxRate? rate, string? code, string? message) WithdrawRate(CurrentUser user, string rateId, string reason);
     (FinanceSetting? setting, string? code, string? message) UpsertSetting(CurrentUser user, UpsertFinanceSettingRequest request);
 }
 

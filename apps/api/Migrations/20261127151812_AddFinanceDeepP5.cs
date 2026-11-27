@@ -308,11 +308,21 @@ public partial class _20261127151812_AddFinanceDeepP5 : Migration
             table: "number_series_voids",
             columns: new[] { "tenant_id", "legal_entity_id", "prefix", "number" },
             unique: true);
+
+        // 008 DB backstop (fix round): at most ONE Approved rate per pair/date/type — the
+        // service-level pre-check is read-then-write, so racing approvals are settled here.
+        // status is an int column: Approved = 1 (Pending 0, Withdrawn 2). Hand-edited in place
+        // while this migration is unapplied (standing ruling); the Designer is left as-is —
+        // runtime applies Up(), and this raw-SQL index is scaffolding-invisible by design.
+        migrationBuilder.Sql(
+            "CREATE UNIQUE INDEX fx_rates_one_approved_per_key ON fx_rates (tenant_id, legal_entity_id, base_currency, quote_currency, rate_date, rate_type) WHERE status = 1;");
     }
 
     /// <inheritdoc />
     protected override void Down(MigrationBuilder migrationBuilder)
     {
+        migrationBuilder.Sql("DROP INDEX fx_rates_one_approved_per_key;");
+
         migrationBuilder.DropTable(
             name: "currencies");
 
