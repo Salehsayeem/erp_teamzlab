@@ -29,8 +29,9 @@ public record Journal(string Id, string TenantId, string LegalEntityId, JournalS
 // 005: reopen is an event (audited reason), not a status — SoftClosed/Closed both reject posting (R9e)
 public enum PeriodStatus { Open, SoftClosed, Closed }
 
-// 004: entity-specific calendar; LE-001 seeds plain calendar months (R9d — 4-4-5 deferred)
-public record FiscalPeriod(string Id, string TenantId, string LegalEntityId, string Name, DateOnly StartDate, DateOnly EndDate, PeriodStatus Status, string? ClosedBy = null, DateTimeOffset? ClosedAt = null, string? ReopenReason = null);
+// 004: entity-specific calendar; LE-001 seeds plain calendar months (R9d — 4-4-5 deferred).
+// P1: IsAdjustment marks the designated adjustment period (late events route there, 063 edge).
+public record FiscalPeriod(string Id, string TenantId, string LegalEntityId, string Name, DateOnly StartDate, DateOnly EndDate, PeriodStatus Status, string? ClosedBy = null, DateTimeOffset? ClosedAt = null, string? ReopenReason = null, bool IsAdjustment = false);
 
 // 001/002: versioned accounts with type, normal balance and direct-posting eligibility
 public enum AccountType { Asset, Liability, Equity, Revenue, Expense }

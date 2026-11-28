@@ -2,11 +2,12 @@ using Erp.Api.Interfaces;
 
 namespace Erp.Api.Services;
 
-// Fiscal periods (FINANCE-004/005, 063 trimmed): create with overlap rejection, close through the
-// draft-journal gate, reopen only with a reason — every transition audited + outboxed (R9d: the
-// reopen IS the correction path; there is no direct posting into a locked month).
+// Fiscal periods (FINANCE-004/005): create with overlap rejection, close through the gates
+// (unposted drafts + unresolved mandatory close tasks, 063), reopen only with a reason — every
+// transition audited + outboxed (R9d: the reopen IS the correction path; there is no direct
+// posting into a locked month).
 public sealed class FiscalPeriodService(
-    IFiscalPeriodRepository periods, IAuditRepository audit, EntityContext ec) : IFiscalPeriodService
+    IFiscalPeriodRepository periods, IAuditRepository audit, EntityContext ec, ICloseService close) : IFiscalPeriodService
 {
     public object List(PeriodStatus? status, DateOnly? from, DateOnly? to) =>
         periods.All()
@@ -32,23 +33,36 @@ public sealed class FiscalPeriodService(
         return (period, null, null);
     }
 
-    public (FiscalPeriod? period, string? code, string? message) Close(CurrentUser user, string periodId, string? reason)
+    public (FiscalPeriod? period, string? code, string? message) Close(CurrentUser user, string periodId, string? reason, bool waiveBlockers = false)
     {
         var period = periods.Find(periodId);
         if (period is null) return (null, "PERIOD_NOT_FOUND", "Fiscal period not found.");
         if (period.Status == PeriodStatus.Closed)
             return (null, "PERIOD_STATUS", $"Period {period.Name} is already closed.");
 
-        // 063 AC1 trimmed gate: any unapproved (Pending) journal dated inside the period blocks close
+        // 063 gate 1: any unapproved (Pending) journal dated inside the period blocks close
         var blocking = periods.PendingInRange(period.StartDate, period.EndDate);
         if (blocking.Count > 0)
             return (null, "CLOSE_GATE_BLOCKED",
                 $"Period {period.Name} cannot close: {blocking.Count} unposted journal(s) pending: {string.Join(", ", blocking.Select(b => b.Id))}.");
 
+        // 063 gate 2 (money gate): unresolved mandatory close tasks block close, naming each task.
+        // The waiver variant (close:approve at the controller) waives them WITH reason/user/time
+        // and RETAINS the rows in close evidence instead of deleting them.
+        var openTasks = close.UnresolvedMandatory(periodId);
+        if (openTasks.Count > 0)
+        {
+            if (!waiveBlockers)
+                return (null, "CLOSE_GATE_BLOCKED",
+                    $"Period {period.Name} cannot close: {openTasks.Count} mandatory close task(s) unresolved: {string.Join(", ", openTasks.Select(t => t.Id))}.");
+            close.WaiveAllForClose(user, periodId, reason ?? "waived at gate close");
+        }
+
         periods.MarkClosed(period, user.Id);
         audit.Log(user, "close", "fiscal_period", period.Id,
-            $"Period {period.Name} closed by {user.Email}{(string.IsNullOrWhiteSpace(reason) ? "" : $" — {reason}")}");
-        audit.Emit(user, "finance.period.closed", new { periodId = period.Id, name = period.Name, reason });
+            $"Period {period.Name} closed by {user.Email}{(openTasks.Count > 0 ? $" with WAIVER over {openTasks.Count} unresolved task(s)" : "")}{(string.IsNullOrWhiteSpace(reason) ? "" : $" — {reason}")}");
+        audit.Emit(user, "finance.period.closed",
+            new { periodId = period.Id, name = period.Name, reason, waivedTaskIds = openTasks.Select(t => t.Id).ToArray() });
         periods.Save();
         return (period, null, null);
     }

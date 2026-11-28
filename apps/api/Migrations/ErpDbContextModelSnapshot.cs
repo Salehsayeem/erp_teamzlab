@@ -78,6 +78,9 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
 
         modelBuilder.HasSequence("doc_cre");
 
+        modelBuilder.HasSequence("doc_ctk")
+            .StartsAt(2L);
+
         modelBuilder.HasSequence("doc_ctr");
 
         modelBuilder.HasSequence("doc_cus");
@@ -103,6 +106,9 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
         modelBuilder.HasSequence("doc_fa");
 
         modelBuilder.HasSequence("doc_fae");
+
+        modelBuilder.HasSequence("doc_fcal")
+            .StartsAt(2L);
 
         modelBuilder.HasSequence("doc_fxr")
             .StartsAt(3L);
@@ -1770,6 +1776,79 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.HasIndex("TenantId", "LegalEntityId");
 
                 b.ToTable("capa_verifications");
+            });
+
+        modelBuilder.Entity("Erp.Api.CloseTask", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<DateTimeOffset?>("CompletedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("completed_at");
+
+                b.Property<string>("CompletedBy")
+                    .HasColumnType("text")
+                    .HasColumnName("completed_by");
+
+                b.Property<string>("DependsOnTaskId")
+                    .HasColumnType("text")
+                    .HasColumnName("depends_on_task_id");
+
+                b.Property<DateOnly?>("DueDate")
+                    .HasColumnType("date")
+                    .HasColumnName("due_date");
+
+                b.Property<string>("EvidenceRef")
+                    .HasColumnType("text")
+                    .HasColumnName("evidence_ref");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<bool>("Mandatory")
+                    .HasColumnType("boolean")
+                    .HasColumnName("mandatory");
+
+                b.Property<string>("NaReason")
+                    .HasColumnType("text")
+                    .HasColumnName("na_reason");
+
+                b.Property<string>("PeriodId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("period_id");
+
+                b.Property<int>("Status")
+                    .HasColumnType("integer")
+                    .HasColumnName("status");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<string>("Title")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("title");
+
+                b.Property<string>("WaiverReason")
+                    .HasColumnType("text")
+                    .HasColumnName("waiver_reason");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "PeriodId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "Status");
+
+                b.ToTable("close_tasks");
             });
 
         modelBuilder.Entity("Erp.Api.CollectionReminder", b =>
@@ -4111,6 +4190,67 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     });
             });
 
+        modelBuilder.Entity("Erp.Api.FiscalCalendar", b =>
+            {
+                b.Property<string>("Id")
+                    .HasColumnType("text")
+                    .HasColumnName("id");
+
+                b.Property<bool>("Activated")
+                    .HasColumnType("boolean")
+                    .HasColumnName("activated");
+
+                b.Property<DateTimeOffset?>("ActivatedAt")
+                    .HasColumnType("timestamp with time zone")
+                    .HasColumnName("activated_at");
+
+                b.Property<string>("ActivatedBy")
+                    .HasColumnType("text")
+                    .HasColumnName("activated_by");
+
+                b.Property<DateOnly>("EndDate")
+                    .HasColumnType("date")
+                    .HasColumnName("end_date");
+
+                b.Property<string>("LegalEntityId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("legal_entity_id");
+
+                b.Property<string>("Name")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("name");
+
+                b.Property<int>("Pattern")
+                    .HasColumnType("integer")
+                    .HasColumnName("pattern");
+
+                b.Property<DateOnly>("StartDate")
+                    .HasColumnType("date")
+                    .HasColumnName("start_date");
+
+                b.Property<string>("TenantId")
+                    .IsRequired()
+                    .HasColumnType("text")
+                    .HasColumnName("tenant_id");
+
+                b.Property<int>("Year")
+                    .HasColumnType("integer")
+                    .HasColumnName("year");
+
+                b.HasKey("Id");
+
+                b.HasIndex("TenantId", "LegalEntityId");
+
+                b.HasIndex("TenantId", "LegalEntityId", "StartDate");
+
+                b.HasIndex("TenantId", "LegalEntityId", "Year", "Pattern")
+                    .IsUnique();
+
+                b.ToTable("fiscal_calendars");
+            });
+
         modelBuilder.Entity("Erp.Api.FiscalPeriod", b =>
             {
                 b.Property<string>("Id")
@@ -4128,6 +4268,10 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                 b.Property<DateOnly>("EndDate")
                     .HasColumnType("date")
                     .HasColumnName("end_date");
+
+                b.Property<bool>("IsAdjustment")
+                    .HasColumnType("boolean")
+                    .HasColumnName("is_adjustment");
 
                 b.Property<string>("LegalEntityId")
                     .IsRequired()
@@ -13574,6 +13718,61 @@ partial class ErpDbContextModelSnapshot : ModelSnapshot
                     .HasForeignKey("EventId")
                     .OnDelete(DeleteBehavior.Restrict)
                     .IsRequired();
+            });
+
+        modelBuilder.Entity("Erp.Api.FiscalCalendar", b =>
+            {
+                b.OwnsMany("Erp.Api.CalendarPeriod", "Periods", b1 =>
+                    {
+                        b1.Property<string>("CalendarId")
+                            .HasColumnType("text")
+                            .HasColumnName("calendar_id");
+
+                        var lineNo = b1.Property<int>("LineNo")
+                            .ValueGeneratedOnAdd()
+                            .HasColumnType("integer")
+                            .HasColumnName("line_no");
+
+                        NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(lineNo);
+
+                        b1.Property<DateOnly>("EndDate")
+                            .HasColumnType("date")
+                            .HasColumnName("end_date");
+
+                        b1.Property<bool>("IsAdjustment")
+                            .HasColumnType("boolean")
+                            .HasColumnName("is_adjustment");
+
+                        b1.Property<string>("LegalEntityId")
+                            .HasColumnType("text")
+                            .HasColumnName("legal_entity_id");
+
+                        b1.Property<string>("Name")
+                            .IsRequired()
+                            .HasColumnType("text")
+                            .HasColumnName("name");
+
+                        b1.Property<DateOnly>("StartDate")
+                            .HasColumnType("date")
+                            .HasColumnName("start_date");
+
+                        b1.Property<string>("TenantId")
+                            .HasColumnType("text")
+                            .HasColumnName("tenant_id");
+
+                        b1.HasKey("CalendarId", "LineNo");
+
+                        b1.HasIndex("CalendarId");
+
+                        b1.HasIndex("TenantId", "LegalEntityId");
+
+                        b1.ToTable("fiscal_calendar_periods");
+
+                        b1.WithOwner()
+                            .HasForeignKey("CalendarId");
+                    });
+
+                b.Navigation("Periods");
             });
 
         modelBuilder.Entity("Erp.Api.GarnishmentOrder", b =>

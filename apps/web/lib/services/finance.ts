@@ -38,7 +38,128 @@ export type DimensionValue = {
 
 export type NumberSeriesRow = { prefix: string; lastValue: number | null; lastNumber: string; voidedCount: number };
 
+// FINANCE-deep P1 (004/062/063): fiscal calendars, period status board, close checklists
+export type CalendarPeriod = { name: string; startDate: string; endDate: string; isAdjustment: boolean };
+
+export type FiscalCalendar = {
+  id: string;
+  name: string;
+  year: number;
+  pattern: string;
+  startDate: string;
+  endDate: string;
+  activated: boolean;
+  activatedBy: string | null;
+  activatedAt: string | null;
+  periods: CalendarPeriod[];
+};
+
+export type FiscalPeriodRow = {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  status: string;
+  closedBy: string | null;
+  closedAt: string | null;
+  reopenReason: string | null;
+  isAdjustment: boolean;
+};
+
+export type CloseTaskRow = {
+  id: string;
+  periodId: string;
+  title: string;
+  mandatory: boolean;
+  status: string;
+  dueDate: string | null;
+  dependsOnTaskId: string | null;
+  evidenceRef: string | null;
+  waiverReason: string | null;
+  naReason: string | null;
+  completedBy: string | null;
+  completedAt: string | null;
+};
+
+export type CloseTaskInput = { title: string; mandatory: boolean; dueDate?: string; dependsOnTaskId?: string };
+
 // --- Endpoint helpers ---------------------------------------------------------
+
+export function fetchFiscalPeriods(token: string, status?: string) {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+  return apiFetch<FiscalPeriodRow[]>(`/api/v1/fiscal-periods${qs}`, { token });
+}
+
+export function fetchFiscalCalendars(token: string) {
+  return apiFetch<FiscalCalendar[]>("/api/v1/fiscal-calendars", { token });
+}
+
+export function createFiscalCalendar(
+  token: string,
+  body: { name: string; year: number; pattern: string; startDate: string },
+) {
+  return apiFetch<FiscalCalendar>("/api/v1/fiscal-calendars", { method: "POST", body, token });
+}
+
+export function activateFiscalCalendar(token: string, id: string) {
+  return apiFetch<FiscalCalendar>(`/api/v1/fiscal-calendars/${encodeURIComponent(id)}/activations`, {
+    method: "POST",
+    body: {},
+    token,
+  });
+}
+
+export function closeFiscalPeriod(token: string, id: string, body: { reason?: string; waiveBlockers?: boolean }) {
+  return apiFetch<FiscalPeriodRow>(`/api/v1/fiscal-periods/${encodeURIComponent(id)}/close`, {
+    method: "POST",
+    body,
+    token,
+  });
+}
+
+export function reopenFiscalPeriod(token: string, id: string, body: { reason: string }) {
+  return apiFetch<FiscalPeriodRow>(`/api/v1/fiscal-periods/${encodeURIComponent(id)}/reopen`, {
+    method: "POST",
+    body,
+    token,
+  });
+}
+
+export function fetchCloseChecklists(token: string, periodId?: string) {
+  const qs = periodId ? `?periodId=${encodeURIComponent(periodId)}` : "";
+  return apiFetch<CloseTaskRow[]>(`/api/v1/close-checklists${qs}`, { token });
+}
+
+export function createCloseChecklist(token: string, body: { periodId: string; tasks: CloseTaskInput[] }) {
+  return apiFetch<CloseTaskRow[]>("/api/v1/close-checklists", { method: "POST", body, token });
+}
+
+export function addCloseTask(token: string, periodId: string, body: CloseTaskInput) {
+  return apiFetch<CloseTaskRow>(`/api/v1/close-checklists/${encodeURIComponent(periodId)}/tasks`, {
+    method: "POST",
+    body,
+    token,
+  });
+}
+
+export function completeCloseTask(
+  token: string,
+  periodId: string,
+  taskId: string,
+  body: { evidenceRef?: string; waiverReason?: string },
+) {
+  return apiFetch<CloseTaskRow>(
+    `/api/v1/close-checklists/${encodeURIComponent(periodId)}/tasks/${encodeURIComponent(taskId)}/completions`,
+    { method: "POST", body, token },
+  );
+}
+
+export function naCloseTask(token: string, periodId: string, taskId: string, body: { reason: string }) {
+  return apiFetch<CloseTaskRow>(
+    `/api/v1/close-checklists/${encodeURIComponent(periodId)}/tasks/${encodeURIComponent(taskId)}/na`,
+    { method: "POST", body, token },
+  );
+}
 
 export function fetchCurrencies(token: string) {
   return apiFetch<Currency[]>("/api/v1/currencies", { token });
